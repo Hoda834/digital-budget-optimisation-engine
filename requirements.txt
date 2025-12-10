@@ -1,0 +1,6 @@
+streamlit==1.32.0
+pulp==2.7.0
+pandas==2.2.1
+numpy==1.26.4
+matplotlib==3.8.3
+reportlab==4.1.0
