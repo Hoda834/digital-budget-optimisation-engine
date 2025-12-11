@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set
 
-from core.wizard_state import WizardState, ALLOWED_PLATFORMS
+# Import WizardState and ALLOWED_PLATFORMS from the root-level wizard_state module.
+# The original import expected a ``core`` package which is not present in this repository.
+from wizard_state import WizardState, ALLOWED_PLATFORMS
 
 
 # ============================================
