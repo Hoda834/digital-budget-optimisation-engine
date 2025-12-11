@@ -9,7 +9,7 @@ and integrates with WizardState to store the results.
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from wizard_state import WizardState, GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG
+from core.wizard_state import WizardState, GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG
 
 
 # ============================================
@@ -310,3 +310,4 @@ if __name__ == "__main__":
         run_module3(s)
     except RuntimeError as e:
         print(f"Error: {e}")
+
