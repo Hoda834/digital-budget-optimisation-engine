@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from wizard_state import WizardState
+from core.wizard_state import WizardState
 from module5 import Module5LPResult
 
 
@@ -284,3 +284,4 @@ if __name__ == "__main__":
                 "ratio:", row.ratio_kpi_per_budget,
                 "predicted:", row.predicted_kpi,
             )
+
