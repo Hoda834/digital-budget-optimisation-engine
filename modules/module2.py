@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set
 
-from wizard_state import WizardState, ALLOWED_PLATFORMS
+from core.wizard_state import WizardState, ALLOWED_PLATFORMS
 
 
 # ============================================
@@ -380,3 +380,4 @@ def run_module2(
     )
 
     return state
+
