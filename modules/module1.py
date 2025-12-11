@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Set
 import math
 
-from wizard_state import WizardState, GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG
+from core.wizard_state import WizardState, GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG
 
 
 # ============================================
@@ -392,3 +392,4 @@ def _present_module_1_cli() -> None:
 
 if __name__ == "__main__":
     _present_module_1_cli()
+
