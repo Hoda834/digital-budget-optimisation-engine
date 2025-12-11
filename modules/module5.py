@@ -3,7 +3,9 @@ from typing import Any, Dict, List
 
 import pulp
 
-from core.wizard_state import WizardState, FlowStateError
+# Import WizardState and FlowStateError from the root-level wizard_state module.
+# The previous import assumed a ``core`` package which is absent in this repository.
+from wizard_state import WizardState, FlowStateError
 from module3 import KPI_CONFIG
 
 
