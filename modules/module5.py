@@ -3,7 +3,7 @@ from typing import Any, Dict, List
 
 import pulp
 
-from wizard_state import WizardState, FlowStateError
+from core.wizard_state import WizardState, FlowStateError
 from module3 import KPI_CONFIG
 
 
@@ -281,3 +281,4 @@ def run_module5(state: WizardState) -> WizardState:
     state.complete_module5_and_advance(module5_result=lp_result)
 
     return state
+
