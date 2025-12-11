@@ -67,18 +67,22 @@ def safe_rerun() -> None:
     # If neither exists just do nothing
     return
 
-from wizard_state import (
+import streamlit as st
+from typing import Any
+
+from core.wizard_state import (
     WizardState,
     GOAL_AW,
     GOAL_EN,
     GOAL_WT,
     GOAL_LG,
 )
-from module2 import run_module2
-from module3 import KPI_CONFIG
-from module4 import run_module4, Module4Result
-from module5 import run_module5
-from module6 import run_module6
+
+from modules.module2 import run_module2
+from modules.module3 import KPI_CONFIG
+from modules.module4 import run_module4, Module4Result
+from modules.module5 import run_module5
+from modules.module6 import run_module6
 
 import io  # for PDF generation
 import matplotlib.pyplot as plt  # for charts
