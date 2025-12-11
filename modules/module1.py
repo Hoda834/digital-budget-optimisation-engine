@@ -2,7 +2,10 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Set
 import math
 
-from core.wizard_state import WizardState, GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG
+# Import WizardState and goal codes from the root-level wizard_state module.
+# The previous import referenced a non-existent ``core`` package which caused
+# a ModuleNotFoundError. Importing from ``wizard_state`` fixes this.
+from wizard_state import WizardState, GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG
 
 
 # ============================================
