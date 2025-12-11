@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Any, Dict, List, Set
 
-from wizard_state import WizardState, FlowStateError
+from core.wizard_state import WizardState, FlowStateError
 
 
 # ============================================
@@ -168,3 +168,4 @@ def run_module4(
     state.complete_module4_and_advance(module4_result=result)
 
     return result
+
