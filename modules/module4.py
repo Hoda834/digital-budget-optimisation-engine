@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 from typing import Any, Dict, List, Set
 
-from core.wizard_state import WizardState, FlowStateError
+# Import WizardState and FlowStateError from the root-level wizard_state module.
+# The original code referenced a ``core`` package which does not exist.
+from wizard_state import WizardState, FlowStateError
 
 
 # ============================================
