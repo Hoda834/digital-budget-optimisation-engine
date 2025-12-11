@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from core.wizard_state import WizardState
+# Import WizardState from the root-level wizard_state module. The original import
+# referenced a ``core`` package which is not present.
+from wizard_state import WizardState
 from module5 import Module5LPResult
 
 
