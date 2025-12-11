@@ -1,54 +1,8 @@
-"""
-Streamlit application for the OR wizard
---------------------------------------
-
-This simple Streamlit application exposes a web‐based user interface around the
-OR wizard you've been building. It guides the user through each of the
-underlying modules (goal selection, platform selection and prioritisation,
-budget/KPI entry, and optimisation) and displays the final forecast.
-
-The UI maintains a single WizardState instance in the Streamlit session and
-updates it as the user progresses through the steps. Once all inputs are
-provided, the app automatically runs modules 4–6 and displays the
-optimisation results and predicted KPIs.
-
-To run this app locally install Streamlit (e.g. via ``pip install streamlit``)
-and run:
-
-```
-streamlit run app.py
-```
-
-Navigate to the provided local URL to access the wizard UI.
-
-Note: this is a basic example intended to demonstrate how to wire your
-existing wizard modules into a Streamlit front end. You can extend or
-customise the interface as required.
-"""
-
 import streamlit as st
 from typing import Any
 
-# -----------------------------------------------------------------------------
-# Streamlit rerun helper
-#
-# As of Streamlit 1.52 the legacy ``st.experimental_rerun`` has been removed in
-# favour of ``st.rerun``【318775988308065†L166-L181】. To maintain backwards
-# compatibility with older versions and avoid runtime errors like
-# ``AttributeError: module 'streamlit' has no attribute 'experimental_rerun'``
-# (which users reported after upgrading), define a helper function that calls
-# the correct API depending on the installed Streamlit version. Use this helper
-# instead of direct calls to ``st.experimental_rerun()``.
-
 def safe_rerun() -> None:
-    """Trigger a rerun of the Streamlit app using the appropriate API.
-
-    In Streamlit ≥1.52 ``st.rerun()`` replaces the legacy
-    ``st.experimental_rerun()`` which has been removed【318775988308065†L166-L181】. Older
-    versions still expose ``st.experimental_rerun()``. This helper checks which
-    attribute is available and calls it, ensuring compatibility across
-    Streamlit releases.
-    """
+    
     # New API (Streamlit ≥1.52): st.rerun()
     if hasattr(st, "rerun"):
         try:
@@ -67,10 +21,7 @@ def safe_rerun() -> None:
     # If neither exists just do nothing
     return
 
-import streamlit as st
-from typing import Any
-
-from core.wizard_state import (
+from wizard_state import (
     WizardState,
     GOAL_AW,
     GOAL_EN,
@@ -78,11 +29,11 @@ from core.wizard_state import (
     GOAL_LG,
 )
 
-from modules.module2 import run_module2
-from modules.module3 import KPI_CONFIG
-from modules.module4 import run_module4, Module4Result
-from modules.module5 import run_module5
-from modules.module6 import run_module6
+from module2 import run_module2
+from module3 import KPI_CONFIG
+from module4 import run_module4, Module4Result
+from module5 import run_module5
+from module6 import run_module6
 
 import io  # for PDF generation
 import matplotlib.pyplot as plt  # for charts
@@ -235,33 +186,44 @@ def module3_ui(state: WizardState) -> None:
         platform_budgets[platform] = budget
         platform_kpis[platform] = kpi_values
     if st.button("Run optimisation", disabled=any(not d["time_window"] or d["budget"] <= 1 for d in m3_data.values())):
-        # Compute kpi ratios
+        # Compute KPI ratios. For each KPI value entered, divide by the platform
+        # budget to obtain a historical KPI per unit of spend.
         kpi_ratios: dict[str, dict[str, float]] = {}
         for platform in m3_data:
             b = float(m3_data[platform]["budget"])
             ratios_for_p = {k: float(v) / b for k, v in m3_data[platform]["kpis"].items()}
             kpi_ratios[platform] = ratios_for_p
-        # Finalise Module 3
+        # Finalise Module 3 and advance the wizard to step 4. Downstream
+        # modules will be executed lazily in the results UI after the rerun.
         state.complete_module3_and_advance(
             module3_data=m3_data,
             platform_budgets=platform_budgets,
             platform_kpis=platform_kpis,
             kpi_ratios=kpi_ratios,
         )
-        # Automatically run modules 4, 5 and 6
-        # Module 4
-        run_module4(state, KPI_CONFIG)
-        # Module 5
-        run_module5(state)
-        # Prepare for Module 6
-        state.current_step = 6
-        run_module6(state)
+        # Trigger a rerun to refresh the UI. The results page will handle
+        # execution of modules 4–6.
         safe_rerun()
 
 
 def results_ui(state: WizardState) -> None:
     """Display results after Module 6."""
     st.header("📊 Results")
+
+    # --------------------------------------------------------------------
+    # Auto-run Modules 4–6 if they haven't been executed yet. When the user
+    # completes Module 3 the wizard moves to step 4 but modules 4, 5 and 6
+    # aren't invoked immediately. Executing them here avoids flow errors
+    # caused by calling downstream modules in the same Streamlit run cycle.
+    if not state.module4_finalised and state.module3_finalised:
+        run_module4(state, KPI_CONFIG)
+    if not state.module5_finalised and state.module4_finalised:
+        run_module5(state)
+    if not state.module6_finalised and state.module5_finalised:
+        # Keep the wizard on step 6 after Module 6 completes so that
+        # results are still shown in this page.
+        run_module6(state, next_step=6)
+
     # Display optimisation output
     if state.module5_result:
         # -----------------------------------------
