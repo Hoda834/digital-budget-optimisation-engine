@@ -1,6 +1,7 @@
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Dict, List, Sequence, Set
 import math
+import re
 
 # Import WizardState and goal codes from the root-level wizard_state module.
 # The previous import referenced a non-existent ``core`` package which caused
@@ -12,26 +13,28 @@ from wizard_state import WizardState, GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG
 # 1. Canonical goal codes and definitions
 # ============================================
 
-ALLOWED_OBJECTIVES: Set[str] = {GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG}
+# Ensure allowed objective codes are compared in a normalised form
+_GOAL_CONSTANTS = (GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG)
+ALLOWED_OBJECTIVES: Set[str] = {str(g).strip().lower() for g in _GOAL_CONSTANTS}
 
 OBJECTIVE_DEFINITIONS: List[Dict[str, str]] = [
     {
-        "code": GOAL_AW,
+        "code": str(GOAL_AW).strip().lower(),
         "label": "Awareness",
         "description": "Reach more people and increase brand visibility.",
     },
     {
-        "code": GOAL_EN,
+        "code": str(GOAL_EN).strip().lower(),
         "label": "Engagement",
         "description": "Encourage interactions such as likes, comments, and shares.",
     },
     {
-        "code": GOAL_WT,
+        "code": str(GOAL_WT).strip().lower(),
         "label": "Website Traffic",
         "description": "Drive more visitors to your website or landing page.",
     },
     {
-        "code": GOAL_LG,
+        "code": str(GOAL_LG).strip().lower(),
         "label": "Lead Generation",
         "description": "Collect contact details or sign ups from potential customers.",
     },
@@ -135,14 +138,11 @@ def _parse_budget(raw_budget: Any) -> float:
     Convert a raw budget value into a float.
 
     Accepts:
-    - string values such as '1200', '£1,200.50', ' 1500 '
+    - string values such as '1200', '£1,200.50', ' 1500 ', 'USD 1,200', '1 200'
     - numeric values (int or float)
 
-    Steps for string input:
-    - strip whitespace
-    - remove common leading currency symbols (£, $, €)
-    - remove thousand separators (commas)
-    - convert to float
+    The string parsing removes most non-numeric characters (except '.' and '-')
+    to tolerate leading/trailing currency symbols and textual labels.
 
     Raises Module1ValidationError if the value cannot be parsed
     as a valid monetary amount.
@@ -165,17 +165,25 @@ def _parse_budget(raw_budget: Any) -> float:
                 "(for example: 1200 or £1,200.50)."
             )
 
-        # Remove common leading currency symbols
-        for symbol in ("£", "$", "€"):
-            if value.startswith(symbol):
-                value = value[len(symbol):].strip()
-                break
+        # Remove any characters except digits, '.' and '-' to tolerate
+        # currency symbols and textual labels like 'USD' or 'GBP'.
+        # This will remove commas and spaces used as thousand separators.
+        cleaned = re.sub(r'[^\d\.\-]', '', value)
 
-        # Remove thousand separators (commas); keep decimal point
-        value = value.replace(",", "")
+        if not cleaned or cleaned in {"-", ".", "-.", ".-"}:
+            raise Module1ValidationError(
+                "Please enter your total budget as a valid monetary amount "
+                "(for example: 1200 or £1,200.50)."
+            )
+
+        # Prevent inputs with multiple decimal points which would raise a generic ValueError
+        if cleaned.count('.') > 1:
+            raise Module1ValidationError(
+                "Please enter your total budget using a single decimal separator (for example: 1200.50)."
+            )
 
         try:
-            numeric_budget = float(value)
+            numeric_budget = float(cleaned)
         except ValueError:
             raise Module1ValidationError(
                 "Please enter your total budget as a valid monetary amount "
@@ -213,37 +221,6 @@ def run_module_1(
 ) -> Module1Result:
     """
     Core logic of Module 1 (pure function, no state).
-
-    Parameters
-    ----------
-    raw_objectives : Sequence[str]
-        Objective codes chosen by the user. In a real UI this would come
-        from tick boxes with the four available options:
-            - 'aw' (Awareness)
-            - 'en' (Engagement)
-            - 'wt' (Website Traffic)
-            - 'lg' (Lead Generation)
-
-        The sequence may contain mixed case or whitespace. It will be
-        normalised internally and duplicates will be removed.
-
-    raw_budget :
-        The budget entered by the user. Can be:
-            - a string (for example: '1200', '£1,200', '1500.50')
-            - an int or float
-
-    Returns
-    -------
-    Module1Result
-        An object containing:
-            - selected_objectives: list of normalised objective codes
-            - total_budget: float > 1
-
-    Raises
-    ------
-    Module1ValidationError
-        If any validation fails (no objectives, invalid objectives,
-        budget not valid or not greater than 1).
     """
     # 1) Normalise and validate objectives
     normalised_objectives = _normalise_objectives(raw_objectives)
@@ -273,42 +250,18 @@ def complete_module1_and_advance(
     Run Module 1, store a final snapshot in the global wizard state,
     and advance the flow to Module 2.
 
-    Rules enforced:
-    1. Saves the state (valid_goals, total_budget) as the final snapshot.
-    2. Sets module1_finalised = True.
-    3. Sets current_step = 2.
-    4. Disallows running Module 1 again after finalisation
-       except via a full reset of the process.
-    5. Requires that the current_step is 1 when Module 1 runs.
-
-    Parameters
-    ----------
-    state : WizardState
-        The current global flow state. It will be mutated in place.
-    raw_objectives : Sequence[str]
-        Raw objective codes coming from the UI.
-    raw_budget :
-        Raw budget value coming from the UI.
-
-    Returns
-    -------
-    WizardState
-        The updated state, now pointing at step 2.
-
-    Raises
-    ------
-    FlowStateError
-        If Module 1 has already been finalised or the step is not valid.
-    Module1ValidationError
-        If the objectives or budget fail validation.
+    This function is defensive about the shape of the state object and raises
+    FlowStateError for flow-related issues rather than allowing AttributeError.
     """
-    if state.module1_finalised:
+    # Use getattr with sensible defaults to avoid AttributeError if state shape differs
+    if getattr(state, "module1_finalised", False):
         raise FlowStateError(
             "Module 1 has already been finalised. "
             "Please reset the wizard if you need to start again."
         )
 
-    if state.current_step != 1:
+    current_step = getattr(state, "current_step", None)
+    if current_step != 1:
         raise FlowStateError(
             "Module 1 can only be completed when the wizard is at step 1."
         )
@@ -316,7 +269,7 @@ def complete_module1_and_advance(
     # Run pure Module 1 logic
     result = run_module_1(raw_objectives, raw_budget)
 
-    # Save snapshot
+    # Save snapshot (mutate state in place)
     state.valid_goals = list(result.selected_objectives)
     state.total_budget = result.total_budget
 
@@ -336,11 +289,11 @@ def example_module2_entry_guard(state: WizardState) -> None:
 
     In real code, Module 2 main function would call this at the top.
     """
-    if not state.module1_finalised:
+    if not getattr(state, "module1_finalised", False):
         raise FlowStateError(
             "You cannot enter Module 2 before completing Module 1."
         )
-    if state.current_step < 2:
+    if getattr(state, "current_step", 0) < 2:
         raise FlowStateError(
             "The current step is not set to Module 2 yet."
         )
@@ -353,11 +306,6 @@ def example_module2_entry_guard(state: WizardState) -> None:
 def _present_module_1_cli() -> None:
     """
     Temporary CLI based interface to test Module 1 plus state transition.
-
-    This is not the final UI. It is only a simple way to check that:
-    - objectives can be selected
-    - budget can be entered
-    - state is updated and Module 1 is locked afterwards
     """
     state = WizardState()
 
@@ -395,4 +343,3 @@ def _present_module_1_cli() -> None:
 
 if __name__ == "__main__":
     _present_module_1_cli()
-
