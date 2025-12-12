@@ -3,10 +3,8 @@ from typing import Any, Dict, List
 
 import pulp
 
-# Import WizardState and FlowStateError from the root-level wizard_state module.
-# The previous import assumed a ``core`` package which is absent in this repository.
-from wizard_state import WizardState, FlowStateError
-from module3 import KPI_CONFIG
+from core.wizard_state import WizardState, FlowStateError
+from core.kpi_config import KPI_CONFIG
 
 
 class Module5ValidationError(Exception):
@@ -34,12 +32,6 @@ class Module5LPResult:
 
 
 def _build_r_pg_from_state(state: WizardState) -> Dict[str, Dict[str, float]]:
-    """
-    Build productivity coefficients r_pg from WizardState.kpi_ratios.
-
-    r_pg[p][g] = average over KPI vars that belong to (p, g)
-                 of kpi_ratios[p][var].
-    """
     if not state.kpi_ratios:
         raise Module5ValidationError(
             "Module 5 cannot run, state.kpi_ratios is empty. Check Module 3."
@@ -124,7 +116,7 @@ def run_module5_lp(input_data: Module5LPInput) -> Module5LPResult:
 
     model = pulp.LpProblem(
         "Budget_Allocation_Per_Platform_And_Goal",
-        pulp.LpMaximize
+        pulp.LpMaximize,
     )
 
     x_vars: Dict[str, Dict[str, pulp.LpVariable]] = {}
@@ -133,7 +125,9 @@ def run_module5_lp(input_data: Module5LPInput) -> Module5LPResult:
         for g in input_data.valid_goals:
             var_name = f"x_{p}_{g}"
             x_vars[p][g] = pulp.LpVariable(
-                var_name, lowBound=0.0, cat="Continuous"
+                var_name,
+                lowBound=0.0,
+                cat="Continuous",
             )
 
     model += pulp.lpSum(
@@ -208,7 +202,7 @@ def _build_system_goal_weights(state: WizardState) -> Dict[str, float]:
 
 
 def _build_platform_goal_weights_from_state(
-    state: WizardState
+    state: WizardState,
 ) -> Dict[str, Dict[str, float]]:
     if not state.platform_weights:
         raise Module5ValidationError(
@@ -265,13 +259,6 @@ def build_module5_input_from_state(state: WizardState) -> Module5LPInput:
 
 
 def run_module5(state: WizardState) -> WizardState:
-    """
-    Orchestrator for Module 5 over the shared WizardState.
-
-    It does not touch current_step or flags directly, it builds the LP input,
-    solves the LP, then lets WizardState.complete_module5_and_advance
-    handle flow and locking.
-    """
     if state.module5_finalised:
         raise FlowStateError(
             "Module 5 has already been finalised. Reset the wizard to change it."
@@ -283,4 +270,3 @@ def run_module5(state: WizardState) -> WizardState:
     state.complete_module5_and_advance(module5_result=lp_result)
 
     return state
-
