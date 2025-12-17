@@ -212,7 +212,7 @@ def module3_ui(state: WizardState) -> None:
 
 
 def results_ui(state: WizardState) -> None:
-    st.header("📊 Results")
+    st.header("Results")
 
     if not state.module4_finalised and state.module3_finalised:
         run_module4(state, KPI_CONFIG)
