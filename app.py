@@ -605,15 +605,21 @@ def results_ui(state: WizardState) -> None:
         with c1:
             if not df_p.empty:
                 st.markdown("Minimum spend per platform")
-                st.dataframe(df_p, use_container_width=True, hide_index=True)
+                show = df_p.copy()
+                show["Minimum Spend"] = show["Minimum Spend"].apply(money)
+                st.dataframe(show, use_container_width=True, hide_index=True)
         with c2:
             if not df_g.empty:
                 st.markdown("Minimum budget per objective")
-                st.dataframe(df_g, use_container_width=True, hide_index=True)
+                show = df_g.copy()
+                show["Minimum Budget"] = show["Minimum Budget"].apply(money)
+                st.dataframe(show, use_container_width=True, hide_index=True)
         with c3:
             if not df_s.empty:
                 st.markdown("Scenario multipliers")
-                st.dataframe(df_s, use_container_width=True, hide_index=True)
+                show = df_s.copy()
+                show["Multiplier"] = show["Multiplier"].apply(lambda x: number(x, 2))
+                st.dataframe(show, use_container_width=True, hide_index=True)
 
     lp_by_scenario = _get_module5_scenarios(state)
     fc_by_scenario = _get_module6_scenarios(state)
@@ -643,9 +649,80 @@ def results_ui(state: WizardState) -> None:
         show_df["Objective Value"] = show_df["Objective Value"].apply(lambda x: number(x, 2))
         st.dataframe(show_df, use_container_width=True, hide_index=True)
 
+        chart_df = df_compare.copy()
+        chart_df["Scenario"] = chart_df["Scenario"].apply(_human_scenario_name)
+        st.subheader("Chart: objective value by scenario")
+        st.bar_chart(chart_df.set_index("Scenario")[["Objective Value"]])
+
+        st.subheader("Chart: total budget used by scenario")
+        st.bar_chart(chart_df.set_index("Scenario")[["Total Budget Used"]])
+
     tabs = st.tabs([_human_scenario_name(k) for k in scenario_keys])
 
     scenario_payload_for_exports: List[Tuple[str, Module5LPResult, Optional[Module6Result]]] = []
+
+    def build_budget_matrix_df(lp_res: Module5LPResult) -> pd.DataFrame:
+        df = build_budget_allocation_df(lp_res)
+        if df.empty:
+            return df
+        pivot = (
+            df.pivot_table(
+                index="Platform",
+                columns="Objective",
+                values="Allocated Budget",
+                aggfunc="sum",
+                fill_value=0.0,
+            )
+            .reset_index()
+        )
+        return pivot
+
+    def build_forecast_matrix_df(fc_res: Module6Result) -> pd.DataFrame:
+        df = build_forecast_df(fc_res)
+        if df.empty:
+            return df
+        pivot = (
+            df.pivot_table(
+                index="Platform",
+                columns="KPI",
+                values="Predicted KPI",
+                aggfunc="sum",
+                fill_value=0.0,
+            )
+            .reset_index()
+        )
+        return pivot
+
+    def rule_based_summary(lp_res: Module5LPResult, fc_res: Optional[Module6Result]) -> List[str]:
+        bullets: List[str] = []
+
+        platform_totals = build_platform_totals_df(lp_res)
+        if not platform_totals.empty:
+            top_p = platform_totals.sort_values("Total Allocated Budget", ascending=False).iloc[0]
+            bullets.append(
+                f"Highest allocated platform: {top_p['Platform']} with {money(top_p['Total Allocated Budget'])}."
+            )
+
+        alloc = build_budget_allocation_df(lp_res)
+        if not alloc.empty:
+            goal_totals = alloc.groupby("Objective", as_index=False)["Allocated Budget"].sum()
+            if not goal_totals.empty:
+                top_g = goal_totals.sort_values("Allocated Budget", ascending=False).iloc[0]
+                bullets.append(
+                    f"Highest allocated objective: {top_g['Objective']} with {money(top_g['Allocated Budget'])}."
+                )
+
+        if fc_res is not None:
+            fdf = build_forecast_df(fc_res)
+            if not fdf.empty:
+                top_kpi = fdf.sort_values("Predicted KPI", ascending=False).iloc[0]
+                kpi_name = str(top_kpi["KPI"])
+                p_name = str(top_kpi["Platform"])
+                bullets.append(
+                    f"Top predicted KPI: {kpi_name} on {p_name} at {number(top_kpi['Predicted KPI'], 2)}."
+                )
+
+        return bullets
 
     for tab, sk in zip(tabs, scenario_keys):
         lp_res = lp_by_scenario.get(sk)
@@ -662,7 +739,24 @@ def results_ui(state: WizardState) -> None:
             with c2:
                 st.metric("Objective value", number(lp_res.objective_value or 0.0, 2))
 
-            st.subheader("Budget allocation")
+            bullets = rule_based_summary(lp_res, forecast_res)
+            if bullets:
+                st.markdown("Key points")
+                for b in bullets:
+                    st.write(b)
+
+            st.subheader("Matrix: budget allocation (platform x objective)")
+            budget_matrix = build_budget_matrix_df(lp_res)
+            if budget_matrix.empty:
+                st.info("No allocation matrix available.")
+            else:
+                show = budget_matrix.copy()
+                for c in show.columns:
+                    if c != "Platform":
+                        show[c] = show[c].apply(money)
+                st.dataframe(show, use_container_width=True, hide_index=True)
+
+            st.subheader("Budget allocation table")
             budget_df = build_budget_allocation_df(lp_res)
             if budget_df.empty:
                 st.warning("No budget allocation to display.")
@@ -678,7 +772,21 @@ def results_ui(state: WizardState) -> None:
                 show_platform["Total Allocated Budget"] = show_platform["Total Allocated Budget"].apply(money)
                 st.dataframe(show_platform, use_container_width=True, hide_index=True)
 
-            st.subheader("Forecast KPIs")
+            st.subheader("Matrix: forecast KPIs (platform x KPI)")
+            if forecast_res is None:
+                st.info("Forecast is not available for this scenario.")
+            else:
+                forecast_matrix = build_forecast_matrix_df(forecast_res)
+                if forecast_matrix.empty:
+                    st.info("No forecast matrix available.")
+                else:
+                    show = forecast_matrix.copy()
+                    for c in show.columns:
+                        if c != "Platform":
+                            show[c] = show[c].apply(lambda x: number(x, 2))
+                    st.dataframe(show, use_container_width=True, hide_index=True)
+
+            st.subheader("Forecast KPIs table")
             if forecast_res is None:
                 st.info("Forecast is not available for this scenario.")
             else:
@@ -693,7 +801,6 @@ def results_ui(state: WizardState) -> None:
 
     st.subheader("Downloads")
     pdf_bytes = create_pdf_bytes(state, scenario_payload_for_exports)
-    xlsx_bytes = create_excel_bytes(scenario_payload_for_exports)
 
     st.download_button(
         label="Download PDF",
@@ -701,12 +808,23 @@ def results_ui(state: WizardState) -> None:
         file_name="results_summary.pdf",
         mime="application/pdf",
     )
-    st.download_button(
-        label="Download Excel",
-        data=xlsx_bytes,
-        file_name="results_summary.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+
+    excel_available = True
+    try:
+        import openpyxl  # type: ignore  # noqa: F401
+    except Exception:
+        excel_available = False
+
+    if excel_available:
+        xlsx_bytes = create_excel_bytes(scenario_payload_for_exports)
+        st.download_button(
+            label="Download Excel",
+            data=xlsx_bytes,
+            file_name="results_summary.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    else:
+        st.info("Excel download is unavailable because the required dependency is not installed.")
 
 
 def main() -> None:
