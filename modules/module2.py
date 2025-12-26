@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 from core.wizard_state import WizardState, ALLOWED_PLATFORMS
 
@@ -207,6 +209,70 @@ def derive_platform_goals_from_weights(state: WizardState) -> None:
     state.goals_by_platform = goals_by_platform
 
 
+def apply_default_policies(
+    state: WizardState,
+    min_platform_share: float = 0.05,
+    min_goal_pool_share: float = 0.10,
+    scenario_multipliers: Optional[Dict[str, float]] = None,
+) -> WizardState:
+    if not state.module1_finalised:
+        raise ValueError("Module 2 policies require Module 1 to be finalised.")
+    if not state.valid_goals:
+        raise ValueError("Module 2 policies require valid_goals from Module 1.")
+    if state.total_budget is None or float(state.total_budget) <= 1:
+        raise ValueError("Module 2 policies require a valid total_budget from Module 1.")
+    if not state.active_platforms:
+        raise ValueError("Module 2 policies require active_platforms to be computed first.")
+
+    total_budget = float(state.total_budget)
+    active_platforms = list(state.active_platforms)
+    valid_goals = list(state.valid_goals)
+
+    min_spend_per_platform: Dict[str, float] = {}
+    min_per_platform_value = max(0.0, total_budget * float(min_platform_share))
+    for p in active_platforms:
+        min_spend_per_platform[p] = min_per_platform_value
+
+    min_budget_per_goal: Dict[str, float] = {}
+    if len(valid_goals) > 0:
+        pool = max(0.0, total_budget * float(min_goal_pool_share))
+        per_goal = pool / float(len(valid_goals))
+        for g in valid_goals:
+            min_budget_per_goal[g] = per_goal
+
+    if scenario_multipliers is None:
+        scenario_multipliers = {"conservative": 0.85, "base": 1.0, "optimistic": 1.15}
+
+    cleaned_multipliers: Dict[str, float] = {}
+    for k, v in scenario_multipliers.items():
+        try:
+            m = float(v)
+        except Exception:
+            continue
+        if m <= 0.0:
+            continue
+        cleaned_multipliers[str(k)] = m
+    if "base" not in cleaned_multipliers:
+        cleaned_multipliers["base"] = 1.0
+
+    try:
+        state.min_spend_per_platform = min_spend_per_platform
+    except Exception:
+        setattr(state, "min_spend_per_platform", min_spend_per_platform)
+
+    try:
+        state.min_budget_per_goal = min_budget_per_goal
+    except Exception:
+        setattr(state, "min_budget_per_goal", min_budget_per_goal)
+
+    try:
+        state.scenario_multipliers = cleaned_multipliers
+    except Exception:
+        setattr(state, "scenario_multipliers", cleaned_multipliers)
+
+    return state
+
+
 def run_module2(
     state: WizardState,
     selected_platforms: List[str],
@@ -218,12 +284,17 @@ def run_module2(
     compute_platform_weights(state)
     derive_platform_goals_from_weights(state)
 
+    apply_default_policies(state)
+
     state.complete_module2_and_advance(
         active_platforms=state.active_platforms,
         goals_by_platform=state.goals_by_platform,
         priority_rank=state.priority_rank,
         platform_weights=state.platform_weights,
         platform_priorities=state.platform_priorities,
+        min_spend_per_platform=getattr(state, "min_spend_per_platform", {}),
+        min_budget_per_goal=getattr(state, "min_budget_per_goal", {}),
+        scenario_multipliers=getattr(state, "scenario_multipliers", {}),
     )
 
     return state
