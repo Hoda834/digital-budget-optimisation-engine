@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from core.wizard_state import WizardState
-from modules.module5 import Module5LPResult
+from modules.module5 import Module5LPResult, Module5ScenarioBundle
 
 
 @dataclass
@@ -44,6 +46,50 @@ class Module6Result:
         return pd.DataFrame(data)
 
 
+@dataclass
+class Module6ScenarioResult:
+    results_by_scenario: Dict[str, Module6Result] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, List[Dict[str, Any]]]:
+        out: Dict[str, List[Dict[str, Any]]] = {}
+        for name, res in self.results_by_scenario.items():
+            out[name] = res.to_dict_list()
+        return out
+
+    def to_pandas_dict(self):
+        try:
+            import pandas as pd  # type: ignore
+        except ImportError as exc:
+            raise ImportError(
+                "pandas is required to use Module6ScenarioResult.to_pandas_dict()."
+            ) from exc
+
+        out: Dict[str, Any] = {}
+        for name, res in self.results_by_scenario.items():
+            out[name] = pd.DataFrame(res.to_dict_list())
+        return out
+
+    def get_base(self) -> Module6Result:
+        if "base" in self.results_by_scenario:
+            return self.results_by_scenario["base"]
+        if self.results_by_scenario:
+            key = sorted(self.results_by_scenario.keys())[0]
+            return self.results_by_scenario[key]
+        return Module6Result(rows=[])
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        x = float(value)
+    except Exception:
+        return default
+    if x != x:
+        return default
+    if x == float("inf") or x == float("-inf"):
+        return default
+    return x
+
+
 def compute_module6_forecast(
     kpi_ratios: Dict[str, Dict[str, float]],
     module5_result: Module5LPResult,
@@ -54,8 +100,9 @@ def compute_module6_forecast(
 
     rows: List[Module6ForecastRow] = []
 
-    for platform, allocated_budget in module5_result.budget_per_platform.items():
-        if allocated_budget is None or allocated_budget < min_budget_threshold:
+    for platform, allocated_budget in (module5_result.budget_per_platform or {}).items():
+        budget_val = _safe_float(allocated_budget, 0.0)
+        if budget_val < min_budget_threshold:
             continue
 
         kpi_ratios_for_platform = kpi_ratios.get(platform, {})
@@ -63,21 +110,40 @@ def compute_module6_forecast(
             continue
 
         for kpi_name, ratio in kpi_ratios_for_platform.items():
-            if ratio is None or ratio <= 0:
+            ratio_val = _safe_float(ratio, 0.0)
+            if ratio_val <= 0.0:
                 continue
 
-            predicted_kpi = ratio * allocated_budget
+            predicted_kpi = ratio_val * budget_val
 
-            row = Module6ForecastRow(
-                platform=platform,
-                kpi_name=kpi_name,
-                ratio_kpi_per_budget=ratio,
-                allocated_budget=allocated_budget,
-                predicted_kpi=predicted_kpi,
+            rows.append(
+                Module6ForecastRow(
+                    platform=str(platform),
+                    kpi_name=str(kpi_name),
+                    ratio_kpi_per_budget=ratio_val,
+                    allocated_budget=budget_val,
+                    predicted_kpi=predicted_kpi,
+                )
             )
-            rows.append(row)
 
     return Module6Result(rows=rows)
+
+
+def compute_module6_forecast_for_scenarios(
+    kpi_ratios: Dict[str, Dict[str, float]],
+    module5_bundle: Module5ScenarioBundle,
+    min_budget_threshold: float = 1.0,
+) -> Module6ScenarioResult:
+    results_by_scenario: Dict[str, Module6Result] = {}
+
+    for scenario_name, lp_res in module5_bundle.results_by_scenario.items():
+        results_by_scenario[str(scenario_name)] = compute_module6_forecast(
+            kpi_ratios=kpi_ratios,
+            module5_result=lp_res,
+            min_budget_threshold=min_budget_threshold,
+        )
+
+    return Module6ScenarioResult(results_by_scenario=results_by_scenario)
 
 
 def run_module6(
@@ -89,18 +155,36 @@ def run_module6(
         raise ValueError("Module 6 requires Module 3 to be finalised.")
     if not state.module5_finalised:
         raise ValueError("Module 6 requires Module 5 to be finalised.")
-    if state.module5_result is None:
-        raise ValueError("Module 6 requires state.module5_result to be set.")
-    if not state.kpi_ratios:
+    if not getattr(state, "kpi_ratios", None):
         raise ValueError("Module 6 requires state.kpi_ratios to be populated from Module 3.")
 
-    forecast = compute_module6_forecast(
-        kpi_ratios=state.kpi_ratios,
-        module5_result=state.module5_result,
-        min_budget_threshold=min_budget_threshold,
-    )
+    bundle = getattr(state, "module5_scenario_bundle", None)
 
-    state.module6_result = forecast
+    if isinstance(bundle, Module5ScenarioBundle):
+        scenario_forecast = compute_module6_forecast_for_scenarios(
+            kpi_ratios=state.kpi_ratios,
+            module5_bundle=bundle,
+            min_budget_threshold=min_budget_threshold,
+        )
+        try:
+            setattr(state, "module6_scenario_result", scenario_forecast)
+        except Exception:
+            pass
+        state.module6_result = scenario_forecast.get_base()
+    else:
+        if state.module5_result is None:
+            raise ValueError("Module 6 requires state.module5_result to be set.")
+        forecast = compute_module6_forecast(
+            kpi_ratios=state.kpi_ratios,
+            module5_result=state.module5_result,
+            min_budget_threshold=min_budget_threshold,
+        )
+        state.module6_result = forecast
+        try:
+            setattr(state, "module6_scenario_result", None)
+        except Exception:
+            pass
+
     state.module6_finalised = True
 
     if next_step is not None:
@@ -133,7 +217,7 @@ if __name__ == "__main__":
         },
     }
 
-    demo_state.module5_result = Module5LPResult(
+    base_res = Module5LPResult(
         budget_per_platform_goal={
             "ig": {"aw": 1500.0, "en": 500.0},
             "fb": {"aw": 0.0, "en": 0.0},
@@ -155,6 +239,7 @@ if __name__ == "__main__":
         },
     )
 
+    demo_state.module5_result = base_res
     demo_state = run_module6(demo_state, next_step=8)
 
     if demo_state.module6_result is not None:
