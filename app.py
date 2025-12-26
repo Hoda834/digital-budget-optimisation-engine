@@ -243,6 +243,29 @@ def _policy_tables(state: WizardState) -> Tuple[pd.DataFrame, pd.DataFrame, pd.D
     return df_p, df_g, df_s
 
 
+def _scenario_goal_multiplier_table(state: WizardState) -> pd.DataFrame:
+    sgm = getattr(state, "scenario_goal_multipliers", {}) or {}
+    if not isinstance(sgm, dict) or not sgm:
+        return pd.DataFrame()
+
+    rows: List[Dict[str, Any]] = []
+    for s_name, gmap in sgm.items():
+        if not isinstance(gmap, dict):
+            continue
+        row: Dict[str, Any] = {"Scenario": _human_scenario_name(str(s_name))}
+        for g in state.valid_goals:
+            row[GOAL_NAMES.get(str(g), str(g))] = float(gmap.get(g, 1.0) or 1.0)
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    cols = ["Scenario"] + [GOAL_NAMES.get(str(g), str(g)) for g in state.valid_goals]
+    df = df[cols]
+    df = df.sort_values(["Scenario"]).reset_index(drop=True)
+    return df
+
+
 def create_excel_bytes(
     scenario_payload: List[Tuple[str, Module5LPResult, Optional[Module6Result]]],
 ) -> bytes:
@@ -252,12 +275,14 @@ def create_excel_bytes(
             suffix = scenario_name.strip().lower()
             suffix = suffix[:10] if suffix else "base"
 
-            summary_df = pd.DataFrame(
-                [
-                    {"Metric": "Total Budget Used", "Value": float(lp_res.total_budget_used or 0.0)},
-                    {"Metric": "Objective Value", "Value": float(lp_res.objective_value or 0.0)},
-                ]
-            )
+            summary_rows: List[Dict[str, Any]] = [
+                {"Metric": "Total Budget Used", "Value": float(lp_res.total_budget_used or 0.0)},
+                {"Metric": "Objective Value", "Value": float(lp_res.objective_value or 0.0)},
+            ]
+            if hasattr(lp_res, "objective_value_raw"):
+                summary_rows.append({"Metric": "Objective Value (raw)", "Value": float(getattr(lp_res, "objective_value_raw") or 0.0)})
+
+            summary_df = pd.DataFrame(summary_rows)
             budget_df = build_budget_allocation_df(lp_res)
             platform_df = build_platform_totals_df(lp_res)
 
@@ -302,6 +327,8 @@ def create_pdf_bytes(
     story: List[Any] = []
 
     story.append(Paragraph("Results Summary", styles["Title"]))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph("Optimisation method: Linear Programming (LP) to allocate budget across platform and objective.", styles["BodyText"]))
     story.append(Spacer(1, 12))
 
     df_p, df_g, df_s = _policy_tables(state)
@@ -340,8 +367,24 @@ def create_pdf_bytes(
         story.append(Spacer(1, 10))
 
     if not df_s.empty:
-        story.append(Paragraph("Scenario Multipliers", styles["Heading3"]))
+        story.append(Paragraph("Scenario Multipliers (overall)", styles["Heading3"]))
         t = Table(_df_to_table_data(df_s))
+        t.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ]
+            )
+        )
+        story.append(t)
+        story.append(Spacer(1, 10))
+
+    df_sgm = _scenario_goal_multiplier_table(state)
+    if not df_sgm.empty:
+        story.append(Paragraph("Scenario Multipliers per Objective", styles["Heading3"]))
+        t = Table(_df_to_table_data(df_sgm))
         t.setStyle(
             TableStyle(
                 [
@@ -359,12 +402,14 @@ def create_pdf_bytes(
         story.append(Paragraph(f"Scenario: {_human_scenario_name(scenario_name)}", styles["Heading2"]))
         story.append(Spacer(1, 6))
 
-        summary_df = pd.DataFrame(
-            [
-                {"Metric": "Total Budget Used", "Value": money(lp_res.total_budget_used or 0.0)},
-                {"Metric": "Objective Value", "Value": number(lp_res.objective_value or 0.0, 2)},
-            ]
-        )
+        summary_rows: List[Dict[str, Any]] = [
+            {"Metric": "Total Budget Used", "Value": money(lp_res.total_budget_used or 0.0)},
+            {"Metric": "Objective Value", "Value": number(lp_res.objective_value or 0.0, 2)},
+        ]
+        if hasattr(lp_res, "objective_value_raw"):
+            summary_rows.append({"Metric": "Objective Value (raw)", "Value": number(getattr(lp_res, "objective_value_raw") or 0.0, 6)})
+
+        summary_df = pd.DataFrame(summary_rows)
         t = Table(_df_to_table_data(summary_df))
         t.setStyle(
             TableStyle(
@@ -397,7 +442,7 @@ def create_pdf_bytes(
         if forecast_res is not None:
             forecast_df = build_forecast_df(forecast_res)
             if not forecast_df.empty:
-                story.append(Paragraph("Forecast KPIs", styles["Heading3"]))
+                story.append(Paragraph("Forecast KPIs (goal-aligned)", styles["Heading3"]))
                 t = Table(_df_to_table_data(forecast_df, money_columns=["Allocated Budget"]))
                 t.setStyle(
                     TableStyle(
@@ -666,24 +711,39 @@ def results_ui(state: WizardState) -> None:
         st.info("Results will appear after optimisation runs.")
         return
 
+    st.markdown("Optimisation method: Linear Programming (LP) to allocate budget across platform and objective.")
+
     df_p, df_g, df_s = _policy_tables(state)
-    if not df_p.empty or not df_g.empty or not df_s.empty:
+    df_sgm = _scenario_goal_multiplier_table(state)
+
+    if not df_p.empty or not df_g.empty or not df_s.empty or not df_sgm.empty:
         st.subheader("Policy summary")
-        c1, c2, c3 = st.columns(3)
-        with c1:
+        cols = st.columns(4)
+        with cols[0]:
             if not df_p.empty:
                 show = df_p.copy()
                 show["Minimum Spend"] = show["Minimum Spend"].apply(money)
+                st.markdown("Minimum spend per platform")
                 st.dataframe(show, use_container_width=True, hide_index=True)
-        with c2:
+        with cols[1]:
             if not df_g.empty:
                 show = df_g.copy()
                 show["Minimum Budget"] = show["Minimum Budget"].apply(money)
+                st.markdown("Minimum budget per objective")
                 st.dataframe(show, use_container_width=True, hide_index=True)
-        with c3:
+        with cols[2]:
             if not df_s.empty:
                 show = df_s.copy()
                 show["Multiplier"] = show["Multiplier"].apply(lambda x: number(x, 2))
+                st.markdown("Scenario multipliers (overall)")
+                st.dataframe(show, use_container_width=True, hide_index=True)
+        with cols[3]:
+            if not df_sgm.empty:
+                show = df_sgm.copy()
+                for c in show.columns:
+                    if c != "Scenario":
+                        show[c] = show[c].apply(lambda x: number(x, 2))
+                st.markdown("Scenario multipliers per objective")
                 st.dataframe(show, use_container_width=True, hide_index=True)
 
     lp_by_scenario = _get_module5_scenarios(state)
@@ -699,26 +759,32 @@ def results_ui(state: WizardState) -> None:
         lp_res = lp_by_scenario.get(sk)
         if lp_res is None:
             continue
-        comparison_rows.append(
-            {
-                "Scenario": _human_scenario_name(sk),
-                "Total Budget Used": float(lp_res.total_budget_used or 0.0),
-                "Objective Value": float(lp_res.objective_value or 0.0),
-            }
-        )
+        row: Dict[str, Any] = {
+            "Scenario": _human_scenario_name(sk),
+            "Total Budget Used": float(lp_res.total_budget_used or 0.0),
+            "Objective Value": float(lp_res.objective_value or 0.0),
+        }
+        if hasattr(lp_res, "objective_value_raw"):
+            row["Objective Value (raw)"] = float(getattr(lp_res, "objective_value_raw") or 0.0)
+        comparison_rows.append(row)
+
     df_compare = pd.DataFrame(comparison_rows)
     if not df_compare.empty:
         st.subheader("Scenario comparison")
         show_df = df_compare.copy()
         show_df["Total Budget Used"] = show_df["Total Budget Used"].apply(money)
         show_df["Objective Value"] = show_df["Objective Value"].apply(lambda x: number(x, 2))
+        if "Objective Value (raw)" in show_df.columns:
+            show_df["Objective Value (raw)"] = show_df["Objective Value (raw)"].apply(lambda x: number(x, 6))
         st.dataframe(show_df, use_container_width=True, hide_index=True)
 
         chart_df = df_compare.copy()
-        st.subheader("Objective value by scenario")
+        chart_df["Scenario"] = chart_df["Scenario"].apply(_human_scenario_name)
+
+        st.subheader("Chart: objective value by scenario")
         st.bar_chart(chart_df.set_index("Scenario")[["Objective Value"]])
 
-        st.subheader("Total budget used by scenario")
+        st.subheader("Chart: total budget used by scenario")
         st.bar_chart(chart_df.set_index("Scenario")[["Total Budget Used"]])
 
     tabs = st.tabs([_human_scenario_name(k) for k in scenario_keys])
@@ -730,26 +796,23 @@ def results_ui(state: WizardState) -> None:
         platform_totals = build_platform_totals_df(lp_res)
         if not platform_totals.empty:
             top_p = platform_totals.sort_values("Total Allocated Budget", ascending=False).iloc[0]
-            bullets.append(
-                f"Highest allocated platform: {top_p['Platform']} with {money(top_p['Total Allocated Budget'])}."
-            )
+            bullets.append(f"Highest allocated platform: {top_p['Platform']} with {money(top_p['Total Allocated Budget'])}.")
 
         alloc = build_budget_allocation_df(lp_res)
         if not alloc.empty:
             goal_totals = alloc.groupby("Objective", as_index=False)["Allocated Budget"].sum()
             if not goal_totals.empty:
                 top_g = goal_totals.sort_values("Allocated Budget", ascending=False).iloc[0]
-                bullets.append(
-                    f"Highest allocated objective: {top_g['Objective']} with {money(top_g['Allocated Budget'])}."
-                )
+                bullets.append(f"Highest allocated objective: {top_g['Objective']} with {money(top_g['Allocated Budget'])}.")
 
         if fc_res is not None:
             fdf = build_forecast_df(fc_res)
             if not fdf.empty:
                 top_kpi = fdf.sort_values("Predicted KPI", ascending=False).iloc[0]
-                bullets.append(
-                    f"Top predicted KPI: {top_kpi['KPI']} on {top_kpi['Platform']} at {number(top_kpi['Predicted KPI'], 2)}."
-                )
+                bullets.append(f"Top predicted KPI: {top_kpi['KPI']} on {top_kpi['Platform']} at {number(top_kpi['Predicted KPI'], 2)}.")
+
+        if hasattr(lp_res, "objective_value_raw"):
+            bullets.append(f"Objective (raw): {number(getattr(lp_res, 'objective_value_raw') or 0.0, 6)}.")
 
         return bullets
 
@@ -768,13 +831,16 @@ def results_ui(state: WizardState) -> None:
             with c2:
                 st.metric("Objective value", number(lp_res.objective_value or 0.0, 2))
 
+            if hasattr(lp_res, "objective_value_raw"):
+                st.caption(f"Objective value (raw): {number(getattr(lp_res, 'objective_value_raw') or 0.0, 6)}")
+
             bullets = rule_based_summary(lp_res, forecast_res)
             if bullets:
                 st.markdown("Key points")
                 for b in bullets:
                     st.write(b)
 
-            st.subheader("Matrix: budget allocation")
+            st.subheader("Matrix: budget allocation (platform x objective)")
             budget_matrix = build_budget_matrix_df(lp_res)
             if budget_matrix.empty:
                 st.info("No allocation matrix available.")
@@ -785,14 +851,23 @@ def results_ui(state: WizardState) -> None:
                         show[c] = show[c].apply(money)
                 st.dataframe(show, use_container_width=True, hide_index=True)
 
+            st.subheader("Budget allocation table")
+            budget_df = build_budget_allocation_df(lp_res)
+            if budget_df.empty:
+                st.warning("No budget allocation to display.")
+            else:
+                show_budget = budget_df.copy()
+                show_budget["Allocated Budget"] = show_budget["Allocated Budget"].apply(money)
+                st.dataframe(show_budget, use_container_width=True, hide_index=True)
+
             st.subheader("Platform totals")
             platform_df = build_platform_totals_df(lp_res)
             if not platform_df.empty:
-                show = platform_df.copy()
-                show["Total Allocated Budget"] = show["Total Allocated Budget"].apply(money)
-                st.dataframe(show, use_container_width=True, hide_index=True)
+                show_platform = platform_df.copy()
+                show_platform["Total Allocated Budget"] = show_platform["Total Allocated Budget"].apply(money)
+                st.dataframe(show_platform, use_container_width=True, hide_index=True)
 
-            st.subheader("Matrix: forecast KPIs")
+            st.subheader("Matrix: forecast KPIs (platform x KPI)")
             if forecast_res is None:
                 st.info("Forecast is not available for this scenario.")
             else:
@@ -806,7 +881,7 @@ def results_ui(state: WizardState) -> None:
                             show[c] = show[c].apply(lambda x: number(x, 2))
                     st.dataframe(show, use_container_width=True, hide_index=True)
 
-            st.subheader("Forecast table")
+            st.subheader("Forecast KPIs table")
             if forecast_res is None:
                 st.info("Forecast is not available for this scenario.")
             else:
