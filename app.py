@@ -414,9 +414,14 @@ def module2_ui(state: WizardState) -> None:
     )
 
     priorities_input: Dict[str, Dict[str, Optional[str]]] = {}
+    is_valid = True
+
     for p in selected_platforms:
         platform_name = PLATFORM_NAMES.get(p, p)
         st.subheader(platform_name)
+
+        p1_key = f"{p}_p1"
+        p2_key = f"{p}_p2"
 
         p1 = st.selectbox(
             f"Priority 1 objective for {platform_name}",
@@ -428,12 +433,19 @@ def module2_ui(state: WizardState) -> None:
                 GOAL_WT: "Website Traffic",
                 GOAL_LG: "Lead Generation",
             }.get(x, str(x)),
-            key=f"{p}_p1",
+            key=p1_key,
         )
+
+        allowed_p2_options = [None] + [g for g in state.valid_goals if g != p1]
+
+        current_p2 = st.session_state.get(p2_key, None)
+        if current_p2 == p1 and current_p2 is not None:
+            st.session_state[p2_key] = None
+            current_p2 = None
 
         p2 = st.selectbox(
             f"Priority 2 objective for {platform_name}",
-            options=[None] + list(state.valid_goals),
+            options=allowed_p2_options,
             format_func=lambda x: {
                 None: "(none)",
                 GOAL_AW: "Awareness",
@@ -441,14 +453,29 @@ def module2_ui(state: WizardState) -> None:
                 GOAL_WT: "Website Traffic",
                 GOAL_LG: "Lead Generation",
             }.get(x, str(x)),
-            key=f"{p}_p2",
+            key=p2_key,
         )
+
+        if p2 is not None and p1 is None:
+            is_valid = False
+            st.error("Priority 2 cannot be set without Priority 1.")
+
+        if p1 is not None and p2 is not None and p1 == p2:
+            is_valid = False
+            st.error("Priority 1 and Priority 2 must be different.")
+
+        if len(state.valid_goals) == 1 and p2 is not None:
+            is_valid = False
+            st.error("Priority 2 cannot be set when there is only one selected objective.")
 
         priorities_input[p] = {"priority_1": p1, "priority_2": p2}
 
-    if st.button("Continue", disabled=not selected_platforms):
-        run_module2(state, selected_platforms, priorities_input)
-        safe_rerun()
+    if st.button("Continue", disabled=(not selected_platforms) or (not is_valid)):
+        try:
+            run_module2(state, selected_platforms, priorities_input)
+            safe_rerun()
+        except Exception:
+            st.error("Please review your selections and try again.")
 
 
 def module3_ui(state: WizardState) -> None:
