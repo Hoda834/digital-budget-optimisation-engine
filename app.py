@@ -377,7 +377,7 @@ def create_pdf_bytes(
 
 
 def module1_ui(state: WizardState) -> None:
-    st.header("Module 1: Objectives and total budget")
+    st.header("Objectives and total budget")
 
     goals = st.multiselect(
         "Choose one or more marketing objectives:",
@@ -404,7 +404,7 @@ def module1_ui(state: WizardState) -> None:
 
 
 def module2_ui(state: WizardState) -> None:
-    st.header("Module 2: Platforms and priorities")
+    st.header("Platforms and priorities")
 
     platforms = ["fb", "ig", "li", "yt"]
     selected_platforms = st.multiselect(
@@ -446,13 +446,13 @@ def module2_ui(state: WizardState) -> None:
 
         priorities_input[p] = {"priority_1": p1, "priority_2": p2}
 
-    if st.button("Continue to Module 3", disabled=not selected_platforms):
+    if st.button("Continue", disabled=not selected_platforms):
         run_module2(state, selected_platforms, priorities_input)
         safe_rerun()
 
 
 def module3_ui(state: WizardState) -> None:
-    st.header("Module 3: Historical data")
+    st.header("Historical data")
 
     m3_data: Dict[str, Dict[str, Any]] = {}
     platform_budgets: Dict[str, float] = {}
