@@ -10,6 +10,7 @@ from modules.module5 import Module5LPResult, Module5ScenarioBundle
 @dataclass
 class Module6ForecastRow:
     platform: str
+    objective: str
     kpi_name: str
     ratio_kpi_per_budget: float
     allocated_budget: float
@@ -26,6 +27,7 @@ class Module6Result:
             result.append(
                 {
                     "platform": row.platform,
+                    "objective": row.objective,
                     "kpi_name": row.kpi_name,
                     "ratio_kpi_per_budget": row.ratio_kpi_per_budget,
                     "allocated_budget": row.allocated_budget,
@@ -38,12 +40,8 @@ class Module6Result:
         try:
             import pandas as pd  # type: ignore
         except ImportError as exc:
-            raise ImportError(
-                "pandas is required to use Module6Result.to_pandas()."
-            ) from exc
-
-        data = self.to_dict_list()
-        return pd.DataFrame(data)
+            raise ImportError("pandas is required to use Module6Result.to_pandas().") from exc
+        return pd.DataFrame(self.to_dict_list())
 
 
 @dataclass
@@ -53,20 +51,18 @@ class Module6ScenarioResult:
     def to_dict(self) -> Dict[str, List[Dict[str, Any]]]:
         out: Dict[str, List[Dict[str, Any]]] = {}
         for name, res in self.results_by_scenario.items():
-            out[name] = res.to_dict_list()
+            out[str(name)] = res.to_dict_list()
         return out
 
     def to_pandas_dict(self):
         try:
             import pandas as pd  # type: ignore
         except ImportError as exc:
-            raise ImportError(
-                "pandas is required to use Module6ScenarioResult.to_pandas_dict()."
-            ) from exc
+            raise ImportError("pandas is required to use Module6ScenarioResult.to_pandas_dict().") from exc
 
         out: Dict[str, Any] = {}
         for name, res in self.results_by_scenario.items():
-            out[name] = pd.DataFrame(res.to_dict_list())
+            out[str(name)] = pd.DataFrame(res.to_dict_list())
         return out
 
     def get_base(self) -> Module6Result:
@@ -91,7 +87,7 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def compute_module6_forecast(
-    kpi_ratios: Dict[str, Dict[str, float]],
+    kpi_ratios: Dict[str, Dict[str, Dict[str, float]]],
     module5_result: Module5LPResult,
     min_budget_threshold: float = 1.0,
 ) -> Module6Result:
@@ -100,37 +96,44 @@ def compute_module6_forecast(
 
     rows: List[Module6ForecastRow] = []
 
-    for platform, allocated_budget in (module5_result.budget_per_platform or {}).items():
-        budget_val = _safe_float(allocated_budget, 0.0)
-        if budget_val < min_budget_threshold:
+    allocation_pg = module5_result.budget_per_platform_goal or {}
+
+    for platform, goals_map in allocation_pg.items():
+        if not goals_map:
             continue
 
-        kpi_ratios_for_platform = kpi_ratios.get(platform, {})
-        if not kpi_ratios_for_platform:
-            continue
-
-        for kpi_name, ratio in kpi_ratios_for_platform.items():
-            ratio_val = _safe_float(ratio, 0.0)
-            if ratio_val <= 0.0:
+        for goal, allocated_budget in goals_map.items():
+            budget_val = _safe_float(allocated_budget, 0.0)
+            if budget_val < min_budget_threshold:
                 continue
 
-            predicted_kpi = ratio_val * budget_val
+            ratios_for_goal = kpi_ratios.get(platform, {}).get(goal, {})
+            if not ratios_for_goal:
+                continue
 
-            rows.append(
-                Module6ForecastRow(
-                    platform=str(platform),
-                    kpi_name=str(kpi_name),
-                    ratio_kpi_per_budget=ratio_val,
-                    allocated_budget=budget_val,
-                    predicted_kpi=predicted_kpi,
+            for kpi_name, ratio in ratios_for_goal.items():
+                ratio_val = _safe_float(ratio, 0.0)
+                if ratio_val <= 0.0:
+                    continue
+
+                predicted_kpi = ratio_val * budget_val
+
+                rows.append(
+                    Module6ForecastRow(
+                        platform=str(platform),
+                        objective=str(goal),
+                        kpi_name=str(kpi_name),
+                        ratio_kpi_per_budget=ratio_val,
+                        allocated_budget=budget_val,
+                        predicted_kpi=predicted_kpi,
+                    )
                 )
-            )
 
     return Module6Result(rows=rows)
 
 
 def compute_module6_forecast_for_scenarios(
-    kpi_ratios: Dict[str, Dict[str, float]],
+    kpi_ratios: Dict[str, Dict[str, Dict[str, float]]],
     module5_bundle: Module5ScenarioBundle,
     min_budget_threshold: float = 1.0,
 ) -> Module6ScenarioResult:
@@ -209,11 +212,12 @@ if __name__ == "__main__":
 
     demo_state.kpi_ratios = {
         "ig": {
-            "IG_AW_REACH": 120.0,
-            "IG_EN_ENGRATERATE": 3.5,
+            "aw": {"IG_AW_REACH": 120.0},
+            "en": {"IG_EN_ENGRATERATE": 3.5},
         },
         "fb": {
-            "FB_AW_REACH": 80.0,
+            "aw": {"FB_AW_REACH": 80.0},
+            "en": {"FB_EN_ENGAGEMENT": 3.75},
         },
     }
 
@@ -246,6 +250,7 @@ if __name__ == "__main__":
         for row in demo_state.module6_result.rows:
             print(
                 row.platform,
+                row.objective,
                 row.kpi_name,
                 "budget:", row.allocated_budget,
                 "ratio:", row.ratio_kpi_per_budget,
