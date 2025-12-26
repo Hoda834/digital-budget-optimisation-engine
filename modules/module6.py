@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.wizard_state import WizardState
 from modules.module5 import Module5LPResult, Module5ScenarioBundle
@@ -18,8 +18,19 @@ class Module6ForecastRow:
 
 
 @dataclass
+class Module6Diagnostics:
+    total_rows: int = 0
+    skipped_zero_or_small_budget_pg: int = 0
+    skipped_missing_ratios_pg: int = 0
+    skipped_invalid_ratio_items: int = 0
+    covered_platform_goal_pairs: int = 0
+    total_platform_goal_pairs_with_budget: int = 0
+
+
+@dataclass
 class Module6Result:
     rows: List[Module6ForecastRow] = field(default_factory=list)
+    diagnostics: Module6Diagnostics = field(default_factory=Module6Diagnostics)
 
     def to_dict_list(self) -> List[Dict[str, Any]]:
         result: List[Dict[str, Any]] = []
@@ -42,6 +53,17 @@ class Module6Result:
         except ImportError as exc:
             raise ImportError("pandas is required to use Module6Result.to_pandas().") from exc
         return pd.DataFrame(self.to_dict_list())
+
+    def summary(self) -> Dict[str, Any]:
+        d = self.diagnostics
+        return {
+            "total_rows": int(d.total_rows),
+            "total_platform_goal_pairs_with_budget": int(d.total_platform_goal_pairs_with_budget),
+            "covered_platform_goal_pairs": int(d.covered_platform_goal_pairs),
+            "skipped_zero_or_small_budget_pg": int(d.skipped_zero_or_small_budget_pg),
+            "skipped_missing_ratios_pg": int(d.skipped_missing_ratios_pg),
+            "skipped_invalid_ratio_items": int(d.skipped_invalid_ratio_items),
+        }
 
 
 @dataclass
@@ -86,6 +108,39 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     return x
 
 
+def _normalise_keys_pg(
+    allocation_pg: Dict[Any, Dict[Any, Any]]
+) -> Dict[str, Dict[str, float]]:
+    out: Dict[str, Dict[str, float]] = {}
+    for p, gmap in (allocation_pg or {}).items():
+        p_key = str(p)
+        if not isinstance(gmap, dict) or not gmap:
+            continue
+        out[p_key] = {}
+        for g, v in gmap.items():
+            out[p_key][str(g)] = _safe_float(v, 0.0)
+    return out
+
+
+def _normalise_ratios_pgv(
+    kpi_ratios: Dict[Any, Dict[Any, Dict[Any, Any]]]
+) -> Dict[str, Dict[str, Dict[str, float]]]:
+    out: Dict[str, Dict[str, Dict[str, float]]] = {}
+    for p, gmap in (kpi_ratios or {}).items():
+        if not isinstance(gmap, dict) or not gmap:
+            continue
+        p_key = str(p)
+        out[p_key] = {}
+        for g, vmap in gmap.items():
+            if not isinstance(vmap, dict) or not vmap:
+                continue
+            g_key = str(g)
+            out[p_key][g_key] = {}
+            for var, val in vmap.items():
+                out[p_key][g_key][str(var)] = _safe_float(val, 0.0)
+    return out
+
+
 def compute_module6_forecast(
     kpi_ratios: Dict[str, Dict[str, Dict[str, float]]],
     module5_result: Module5LPResult,
@@ -94,42 +149,59 @@ def compute_module6_forecast(
     if min_budget_threshold <= 0:
         raise ValueError("min_budget_threshold must be greater than 0.")
 
+    diagnostics = Module6Diagnostics()
     rows: List[Module6ForecastRow] = []
 
-    allocation_pg = module5_result.budget_per_platform_goal or {}
+    allocation_pg = _normalise_keys_pg(module5_result.budget_per_platform_goal or {})
+    ratios_pgv = _normalise_ratios_pgv(kpi_ratios)
 
-    for platform, goals_map in allocation_pg.items():
-        if not goals_map:
+    pg_with_budget: List[Tuple[str, str, float]] = []
+    for p, gmap in allocation_pg.items():
+        for g, b in gmap.items():
+            if b >= min_budget_threshold:
+                pg_with_budget.append((p, g, b))
+    diagnostics.total_platform_goal_pairs_with_budget = len(pg_with_budget)
+
+    covered_pairs = 0
+
+    for platform, goal, budget_val in pg_with_budget:
+        ratios_for_goal = ratios_pgv.get(platform, {}).get(goal, {})
+        if not ratios_for_goal:
+            diagnostics.skipped_missing_ratios_pg += 1
             continue
 
-        for goal, allocated_budget in goals_map.items():
-            budget_val = _safe_float(allocated_budget, 0.0)
-            if budget_val < min_budget_threshold:
+        valid_item_found = False
+        for kpi_name, ratio in ratios_for_goal.items():
+            ratio_val = _safe_float(ratio, 0.0)
+            if ratio_val <= 0.0:
+                diagnostics.skipped_invalid_ratio_items += 1
                 continue
 
-            ratios_for_goal = kpi_ratios.get(platform, {}).get(goal, {})
-            if not ratios_for_goal:
+            predicted_kpi = ratio_val * budget_val
+            if predicted_kpi <= 0.0:
+                diagnostics.skipped_invalid_ratio_items += 1
                 continue
 
-            for kpi_name, ratio in ratios_for_goal.items():
-                ratio_val = _safe_float(ratio, 0.0)
-                if ratio_val <= 0.0:
-                    continue
-
-                predicted_kpi = ratio_val * budget_val
-
-                rows.append(
-                    Module6ForecastRow(
-                        platform=str(platform),
-                        objective=str(goal),
-                        kpi_name=str(kpi_name),
-                        ratio_kpi_per_budget=ratio_val,
-                        allocated_budget=budget_val,
-                        predicted_kpi=predicted_kpi,
-                    )
+            valid_item_found = True
+            rows.append(
+                Module6ForecastRow(
+                    platform=str(platform),
+                    objective=str(goal),
+                    kpi_name=str(kpi_name),
+                    ratio_kpi_per_budget=ratio_val,
+                    allocated_budget=budget_val,
+                    predicted_kpi=predicted_kpi,
                 )
+            )
 
-    return Module6Result(rows=rows)
+        if valid_item_found:
+            covered_pairs += 1
+
+    diagnostics.covered_platform_goal_pairs = covered_pairs
+    diagnostics.total_rows = len(rows)
+
+    rows.sort(key=lambda r: (r.platform, r.objective, r.kpi_name))
+    return Module6Result(rows=rows, diagnostics=diagnostics)
 
 
 def compute_module6_forecast_for_scenarios(
@@ -169,10 +241,7 @@ def run_module6(
             module5_bundle=bundle,
             min_budget_threshold=min_budget_threshold,
         )
-        try:
-            setattr(state, "module6_scenario_result", scenario_forecast)
-        except Exception:
-            pass
+        state.module6_scenario_result = scenario_forecast
         state.module6_result = scenario_forecast.get_base()
     else:
         if state.module5_result is None:
@@ -183,10 +252,14 @@ def run_module6(
             min_budget_threshold=min_budget_threshold,
         )
         state.module6_result = forecast
-        try:
-            setattr(state, "module6_scenario_result", None)
-        except Exception:
-            pass
+        state.module6_scenario_result = None
+
+    try:
+        state.module6_diagnostics = (
+            state.module6_result.diagnostics.summary() if state.module6_result is not None else {}
+        )
+    except Exception:
+        pass
 
     state.module6_finalised = True
 
@@ -247,6 +320,7 @@ if __name__ == "__main__":
     demo_state = run_module6(demo_state, next_step=8)
 
     if demo_state.module6_result is not None:
+        print(demo_state.module6_result.summary())
         for row in demo_state.module6_result.rows:
             print(
                 row.platform,
