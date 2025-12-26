@@ -16,12 +16,7 @@ PLATFORM_IG = "ig"
 PLATFORM_LI = "li"
 PLATFORM_YT = "yt"
 
-ALLOWED_PLATFORMS: Set[str] = {
-    PLATFORM_FB,
-    PLATFORM_IG,
-    PLATFORM_LI,
-    PLATFORM_YT,
-}
+ALLOWED_PLATFORMS: Set[str] = {PLATFORM_FB, PLATFORM_IG, PLATFORM_LI, PLATFORM_YT}
 
 
 class FlowStateError(Exception):
@@ -41,6 +36,7 @@ class WizardState:
 
     valid_goals: List[str] = field(default_factory=list)
     total_budget: Optional[float] = None
+
     system_goal_weights: Dict[str, float] = field(default_factory=dict)
 
     platform_priorities: Dict[str, Any] = field(default_factory=dict)
@@ -52,9 +48,10 @@ class WizardState:
     min_spend_per_platform: Dict[str, float] = field(default_factory=dict)
     min_budget_per_goal: Dict[str, float] = field(default_factory=dict)
     scenario_multipliers: Dict[str, float] = field(default_factory=dict)
+    scenario_goal_multipliers: Dict[str, Dict[str, float]] = field(default_factory=dict)
 
     module3_data: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    kpi_ratios: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    kpi_ratios: Dict[str, Dict[str, Dict[str, float]]] = field(default_factory=dict)
     platform_budgets: Dict[str, float] = field(default_factory=dict)
     platform_kpis: Dict[str, Dict[str, float]] = field(default_factory=dict)
 
@@ -69,39 +66,24 @@ class WizardState:
 
     def _ensure_step(self, expected_step: int) -> None:
         if self.current_step != expected_step:
-            raise FlowStateError(
-                f"Invalid flow: current_step={self.current_step}, expected={expected_step}."
-            )
+            raise FlowStateError(f"Invalid flow: current_step={self.current_step}, expected={expected_step}.")
 
-    def _ensure_no_empty_goals(self, goals: Sequence[str]) -> None:
-        if not goals:
-            raise ValueError("At least one goal must be selected in Module 1.")
-        invalid = [g for g in goals if g not in ALLOWED_OBJECTIVES]
-        if invalid:
-            raise ValueError(f"Invalid goal codes in Module 1: {invalid}")
-
-    def complete_module1_and_advance(
-        self,
-        *,
-        valid_goals: Sequence[str],
-        total_budget: float,
-        system_goal_weights: Optional[Dict[str, float]] = None,
-    ) -> None:
+    def complete_module1_and_advance(self, *, valid_goals: Sequence[str], total_budget: float) -> None:
         self._ensure_step(expected_step=1)
-        self._ensure_no_empty_goals(valid_goals)
+        if self.module1_finalised:
+            raise FlowStateError("Module 1 has already been finalised. Reset the wizard to change it.")
 
-        if total_budget is None:
-            raise ValueError("total_budget must not be None in Module 1.")
-        if float(total_budget) <= 1:
-            raise ValueError("total_budget must be greater than 1 in Module 1.")
+        goals = [str(g).strip().lower() for g in valid_goals if str(g).strip()]
+        goals = [g for g in goals if g in ALLOWED_OBJECTIVES]
+        if not goals:
+            raise ValueError("At least one valid objective must be selected in Module 1.")
 
-        self.valid_goals = list(valid_goals)
-        self.total_budget = float(total_budget)
+        b = float(total_budget)
+        if b <= 1.0:
+            raise ValueError("Total budget must be greater than 1 in Module 1.")
 
-        if system_goal_weights is not None:
-            self.system_goal_weights = dict(system_goal_weights)
-        else:
-            self.system_goal_weights = {}
+        self.valid_goals = list(dict.fromkeys(goals))
+        self.total_budget = b
 
         self.module1_finalised = True
         self.current_step = 2
@@ -117,44 +99,28 @@ class WizardState:
         min_spend_per_platform: Optional[Dict[str, float]] = None,
         min_budget_per_goal: Optional[Dict[str, float]] = None,
         scenario_multipliers: Optional[Dict[str, float]] = None,
+        scenario_goal_multipliers: Optional[Dict[str, Dict[str, float]]] = None,
     ) -> None:
         self._ensure_step(expected_step=2)
         if not self.module1_finalised:
             raise FlowStateError("Module 1 must be finalised before Module 2.")
+        if not self.valid_goals:
+            raise FlowStateError("valid_goals must be set in Module 1 before Module 2.")
 
-        if not active_platforms:
-            raise ValueError("At least one platform must be selected in Module 2.")
+        platforms = [str(p).strip().lower() for p in active_platforms if str(p).strip()]
+        platforms = [p for p in platforms if p in ALLOWED_PLATFORMS]
+        if not platforms:
+            raise ValueError("At least one valid platform must be selected in Module 2.")
 
-        for p in active_platforms:
-            if p not in ALLOWED_PLATFORMS:
-                raise ValueError(f"Invalid platform code in Module 2: {p}")
-            goals_for_p = goals_by_platform.get(p, [])
-            if not goals_for_p:
+        for p in platforms:
+            gs = goals_by_platform.get(p, [])
+            if not gs:
                 raise ValueError(f"Platform {p} must have at least one goal in Module 2.")
-            invalid_goals = [g for g in goals_for_p if g not in self.valid_goals]
-            if invalid_goals:
-                raise ValueError(
-                    f"Platform {p} has goals not selected in Module 1: {invalid_goals}"
-                )
+            invalid = [g for g in gs if g not in self.valid_goals]
+            if invalid:
+                raise ValueError(f"Platform {p} has goals not selected in Module 1: {invalid}")
 
-        for p in active_platforms:
-            rank_map = priority_rank.get(p, {})
-            weight_map = platform_weights.get(p, {})
-            p_goals = goals_by_platform[p]
-
-            missing_rank = [g for g in p_goals if g not in rank_map]
-            missing_weight = [g for g in p_goals if g not in weight_map]
-
-            if missing_rank:
-                raise ValueError(
-                    f"Module 2 priority_rank is missing goals for platform {p}: {missing_rank}"
-                )
-            if missing_weight:
-                raise ValueError(
-                    f"Module 2 platform_weights is missing goals for platform {p}: {missing_weight}"
-                )
-
-        self.active_platforms = list(active_platforms)
+        self.active_platforms = list(platforms)
         self.goals_by_platform = {p: list(gs) for p, gs in goals_by_platform.items()}
         self.priority_rank = {p: dict(ranks) for p, ranks in priority_rank.items()}
         self.platform_weights = {p: dict(ws) for p, ws in platform_weights.items()}
@@ -162,7 +128,49 @@ class WizardState:
 
         self.min_spend_per_platform = dict(min_spend_per_platform) if min_spend_per_platform else {}
         self.min_budget_per_goal = dict(min_budget_per_goal) if min_budget_per_goal else {}
-        self.scenario_multipliers = dict(scenario_multipliers) if scenario_multipliers else {}
+
+        self.scenario_multipliers = dict(scenario_multipliers) if scenario_multipliers else {
+            "conservative": 0.85,
+            "base": 1.0,
+            "optimistic": 1.15,
+        }
+
+        if scenario_goal_multipliers:
+            cleaned: Dict[str, Dict[str, float]] = {}
+            for s_name, gmap in scenario_goal_multipliers.items():
+                if not isinstance(gmap, dict):
+                    continue
+                cleaned[str(s_name)] = {}
+                for g in self.valid_goals:
+                    v = gmap.get(g, 1.0)
+                    try:
+                        fv = float(v)
+                    except Exception:
+                        fv = 1.0
+                    if fv <= 0.0:
+                        fv = 1.0
+                    cleaned[str(s_name)][g] = fv
+            self.scenario_goal_multipliers = cleaned
+        else:
+            base_map = {g: 1.0 for g in self.valid_goals}
+            conservative_map = {g: 1.0 for g in self.valid_goals}
+            optimistic_map = {g: 1.0 for g in self.valid_goals}
+
+            if GOAL_AW in self.valid_goals:
+                conservative_map[GOAL_AW] = 1.1
+                optimistic_map[GOAL_AW] = 0.9
+            if GOAL_LG in self.valid_goals:
+                conservative_map[GOAL_LG] = 0.9
+                optimistic_map[GOAL_LG] = 1.1
+            if GOAL_WT in self.valid_goals:
+                conservative_map[GOAL_WT] = 0.95
+                optimistic_map[GOAL_WT] = 1.05
+
+            self.scenario_goal_multipliers = {
+                "base": base_map,
+                "conservative": conservative_map,
+                "optimistic": optimistic_map,
+            }
 
         self.module2_finalised = True
         self.current_step = 3
@@ -178,44 +186,39 @@ class WizardState:
         self._ensure_step(expected_step=3)
         if not self.module2_finalised:
             raise FlowStateError("Module 2 must be finalised before Module 3.")
-    
         if not module3_data:
             raise ValueError("module3_data must not be empty in Module 3.")
-    
+
         for p in self.active_platforms:
             if p not in platform_budgets:
                 raise ValueError(f"Missing budget for platform {p} in Module 3.")
-            budget = float(platform_budgets[p])
-            if budget <= 1:
+            b = float(platform_budgets[p])
+            if b <= 1.0:
                 raise ValueError(f"Budget for platform {p} must be greater than 1 in Module 3.")
-    
+
         self.module3_data = {p: dict(d) for p, d in module3_data.items()}
         self.platform_budgets = {p: float(b) for p, b in platform_budgets.items()}
         self.platform_kpis = {
             p: {k: float(v) for k, v in (kpis or {}).items()}
             for p, kpis in (platform_kpis or {}).items()
         }
-    
+
         cleaned: Dict[str, Dict[str, Dict[str, float]]] = {}
         for p, goals_map in (kpi_ratios or {}).items():
             if not isinstance(goals_map, dict):
                 continue
-            cleaned[p] = {}
+            cleaned[str(p)] = {}
             for g, ratios_map in goals_map.items():
                 if not isinstance(ratios_map, dict):
                     continue
-                cleaned[p][g] = {k: float(v) for k, v in ratios_map.items()}
-    
+                cleaned[str(p)][str(g)] = {str(k): float(v) for k, v in ratios_map.items()}
+
         self.kpi_ratios = cleaned
-    
+
         self.module3_finalised = True
         self.current_step = 4
 
-    def complete_module4_and_advance(
-        self,
-        *,
-        module4_result: "Module4Result",
-    ) -> None:
+    def complete_module4_and_advance(self, *, module4_result: "Module4Result") -> None:
         self._ensure_step(expected_step=4)
         if not self.module3_finalised:
             raise FlowStateError("Module 3 must be finalised before Module 4.")
@@ -248,13 +251,11 @@ class WizardState:
         module6_result: "Module6Result",
         module6_scenario_result: Optional["Module6ScenarioResult"] = None,
     ) -> None:
-        self._ensure_step(expected_step=6)
         if not self.module5_finalised:
             raise FlowStateError("Module 5 must be finalised before Module 6.")
 
         self.module6_result = module6_result
         self.module6_scenario_result = module6_scenario_result
-        self.module6_finalised = True
 
-    def reset(self) -> None:
-        self.__init__()
+        self.module6_finalised = True
+        self.current_step = max(self.current_step, 7)
