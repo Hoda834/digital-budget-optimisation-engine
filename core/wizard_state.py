@@ -173,31 +173,41 @@ class WizardState:
         module3_data: Dict[str, Dict[str, Any]],
         platform_budgets: Dict[str, float],
         platform_kpis: Dict[str, Dict[str, float]],
-        kpi_ratios: Dict[str, Dict[str, float]],
+        kpi_ratios: Dict[str, Dict[str, Dict[str, float]]],
     ) -> None:
         self._ensure_step(expected_step=3)
         if not self.module2_finalised:
             raise FlowStateError("Module 2 must be finalised before Module 3.")
-
+    
         if not module3_data:
             raise ValueError("module3_data must not be empty in Module 3.")
-
+    
         for p in self.active_platforms:
             if p not in platform_budgets:
                 raise ValueError(f"Missing budget for platform {p} in Module 3.")
             budget = float(platform_budgets[p])
             if budget <= 1:
                 raise ValueError(f"Budget for platform {p} must be greater than 1 in Module 3.")
-
+    
         self.module3_data = {p: dict(d) for p, d in module3_data.items()}
         self.platform_budgets = {p: float(b) for p, b in platform_budgets.items()}
         self.platform_kpis = {
-            p: {k: float(v) for k, v in kpis.items()} for p, kpis in platform_kpis.items()
+            p: {k: float(v) for k, v in (kpis or {}).items()}
+            for p, kpis in (platform_kpis or {}).items()
         }
-        self.kpi_ratios = {
-            p: {k: float(v) for k, v in ratios.items()} for p, ratios in kpi_ratios.items()
-        }
-
+    
+        cleaned: Dict[str, Dict[str, Dict[str, float]]] = {}
+        for p, goals_map in (kpi_ratios or {}).items():
+            if not isinstance(goals_map, dict):
+                continue
+            cleaned[p] = {}
+            for g, ratios_map in goals_map.items():
+                if not isinstance(ratios_map, dict):
+                    continue
+                cleaned[p][g] = {k: float(v) for k, v in ratios_map.items()}
+    
+        self.kpi_ratios = cleaned
+    
         self.module3_finalised = True
         self.current_step = 4
 
