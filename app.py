@@ -496,7 +496,7 @@ def module3_ui(state: WizardState) -> None:
 
         budget = st.number_input(
             f"Total historical budget on {platform_name} (must be greater than 1)",
-            min_value=1.0,
+            min_value=1.01,
             value=1000.0,
             step=100.0,
             key=f"budget_{platform}",
@@ -518,8 +518,8 @@ def module3_ui(state: WizardState) -> None:
 
             val = st.number_input(
                 descriptive_label,
-                min_value=1.0,
-                value=1.0,
+                min_value=1.01,
+                value=1.01,
                 step=0.1,
                 key=f"{platform}_{var}",
             )
@@ -530,20 +530,51 @@ def module3_ui(state: WizardState) -> None:
         platform_kpis[platform] = kpi_values
 
     can_run = True
-    for d in m3_data.values():
+    for platform, d in m3_data.items():
         if not d.get("time_window"):
             can_run = False
+            break
         if float(d.get("budget", 0.0)) <= 1.0:
             can_run = False
+            break
+        for _, kpi_val in (d.get("kpis", {}) or {}).items():
+            if float(kpi_val) <= 1.0:
+                can_run = False
+                break
+        if not can_run:
+            break
 
     if st.button("Run optimisation", disabled=not can_run):
-        kpi_ratios: Dict[str, Dict[str, float]] = {}
+        kpi_ratios: Dict[str, Dict[str, Dict[str, float]]] = {}
+
         for platform in m3_data:
             b = float(m3_data[platform]["budget"])
-            ratios_for_p: Dict[str, float] = {}
-            for k, v in m3_data[platform]["kpis"].items():
-                ratios_for_p[str(k)] = float(v) / b
-            kpi_ratios[platform] = ratios_for_p
+            goals_for_platform = state.goals_by_platform.get(platform, [])
+
+            kpi_ratios[platform] = {}
+
+            for g in goals_for_platform:
+                kpi_ratios[platform][g] = {}
+
+            for row in KPI_CONFIG:
+                p = row["platform"]
+                g = row["goal"]
+                var = row["var"]
+
+                if p != platform:
+                    continue
+                if g not in goals_for_platform:
+                    continue
+
+                val = float(m3_data[platform]["kpis"].get(var, 0.0))
+                if val <= 0.0:
+                    continue
+                if b <= 0.0:
+                    continue
+
+                kpi_ratios[platform][g][var] = val / b
+
+            kpi_ratios[platform] = {g: d for g, d in kpi_ratios[platform].items() if d}
 
         state.complete_module3_and_advance(
             module3_data=m3_data,
@@ -677,21 +708,39 @@ def results_ui(state: WizardState) -> None:
         )
         return pivot
 
-    def build_forecast_matrix_df(fc_res: Module6Result) -> pd.DataFrame:
-        df = build_forecast_df(fc_res)
-        if df.empty:
-            return df
-        pivot = (
-            df.pivot_table(
-                index="Platform",
-                columns="KPI",
-                values="Predicted KPI",
-                aggfunc="sum",
-                fill_value=0.0,
-            )
-            .reset_index()
+   def build_forecast_df(module6_res: Module6Result) -> pd.DataFrame:
+    kpi_meta = build_kpi_meta()
+    rows: List[Dict[str, Any]] = []
+
+    for r in (module6_res.rows or []):
+        var = str(r.kpi_name)
+        meta = kpi_meta.get(var, {})
+
+        platform_code = str(r.platform).lower()
+        platform_name = PLATFORM_NAMES.get(platform_code, str(r.platform))
+
+        g_code = str(r.objective)
+        objective_name = GOAL_NAMES.get(g_code, g_code) if g_code else ""
+
+        kpi_label = str(meta.get("kpi_label", "")).strip()
+        if not kpi_label:
+            kpi_label = "KPI"
+
+        rows.append(
+            {
+                "Platform": platform_name,
+                "Objective": objective_name,
+                "KPI": kpi_label,
+                "Allocated Budget": float(r.allocated_budget or 0.0),
+                "Predicted KPI": float(r.predicted_kpi or 0.0),
+            }
         )
-        return pivot
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values(["Platform", "Objective", "KPI"]).reset_index(drop=True)
+    return df
+
 
     def rule_based_summary(lp_res: Module5LPResult, fc_res: Optional[Module6Result]) -> List[str]:
         bullets: List[str] = []
