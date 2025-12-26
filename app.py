@@ -17,6 +17,8 @@ from modules.module4 import run_module4
 from modules.module5 import Module5LPResult, Module5ScenarioBundle, run_module5
 from modules.module6 import Module6Result, Module6ScenarioResult, run_module6
 
+from modules.module7 import Module7BundleInsight, run_module7
+
 
 PLATFORM_NAMES: Dict[str, str] = {
     "fb": "Facebook",
@@ -320,6 +322,7 @@ def _df_to_table_data(df: pd.DataFrame, money_columns: Optional[List[str]] = Non
 def create_pdf_bytes(
     state: WizardState,
     scenario_payload: List[Tuple[str, Module5LPResult, Optional[Module6Result]]],
+    module7_bundle: Optional[Module7BundleInsight] = None,
 ) -> bytes:
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
@@ -397,10 +400,39 @@ def create_pdf_bytes(
         story.append(t)
         story.append(Spacer(1, 10))
 
+    if module7_bundle is not None and module7_bundle.scenario_insights:
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("Decision Insights (Interpretation Layer)", styles["Heading2"]))
+        story.append(Spacer(1, 6))
+        if module7_bundle.global_stability_explanation:
+            story.append(Paragraph(module7_bundle.global_stability_explanation, styles["BodyText"]))
+            story.append(Spacer(1, 10))
+
     for scenario_name, lp_res, forecast_res in scenario_payload:
         story.append(Spacer(1, 10))
         story.append(Paragraph(f"Scenario: {_human_scenario_name(scenario_name)}", styles["Heading2"]))
         story.append(Spacer(1, 6))
+
+        ins = None
+        if module7_bundle is not None and module7_bundle.scenario_insights:
+            ins = module7_bundle.scenario_insights.get(scenario_name)
+
+        if ins is not None:
+            story.append(Paragraph("Executive insight summary", styles["Heading3"]))
+            story.append(Paragraph(ins.executive_summary, styles["BodyText"]))
+            story.append(Spacer(1, 6))
+
+            if ins.risks:
+                story.append(Paragraph("Risks", styles["Heading3"]))
+                for r in ins.risks:
+                    story.append(Paragraph(f"- {r}", styles["BodyText"]))
+                story.append(Spacer(1, 6))
+
+            if ins.recommendations:
+                story.append(Paragraph("Recommendations", styles["Heading3"]))
+                for r in ins.recommendations:
+                    story.append(Paragraph(f"- {r}", styles["BodyText"]))
+                story.append(Spacer(1, 10))
 
         summary_rows: List[Dict[str, Any]] = [
             {"Metric": "Total Budget Used", "Value": money(lp_res.total_budget_used or 0.0)},
@@ -754,6 +786,14 @@ def results_ui(state: WizardState) -> None:
         st.error("No results available.")
         return
 
+    module7_bundle: Optional[Module7BundleInsight] = None
+    bundle = getattr(state, "module5_scenario_bundle", None)
+    if isinstance(bundle, Module5ScenarioBundle):
+        try:
+            module7_bundle = run_module7(state, bundle, fc_by_scenario)
+        except Exception:
+            module7_bundle = None
+
     comparison_rows: List[Dict[str, Any]] = []
     for sk in scenario_keys:
         lp_res = lp_by_scenario.get(sk)
@@ -786,6 +826,30 @@ def results_ui(state: WizardState) -> None:
 
         st.subheader("Chart: total budget used by scenario")
         st.bar_chart(chart_df.set_index("Scenario")[["Total Budget Used"]])
+
+    if module7_bundle is not None and module7_bundle.scenario_insights:
+        st.subheader("Decision insights")
+        if module7_bundle.global_stability_explanation:
+            st.caption(module7_bundle.global_stability_explanation)
+
+        for sk in scenario_keys:
+            ins = module7_bundle.scenario_insights.get(sk)
+            if ins is None:
+                continue
+            st.markdown(f"**{_human_scenario_name(sk)}**")
+            st.write(ins.executive_summary)
+
+            if ins.risks:
+                st.markdown("Risks")
+                for r in ins.risks:
+                    st.write(f"- {r}")
+
+            if ins.recommendations:
+                st.markdown("Recommendations")
+                for r in ins.recommendations:
+                    st.write(f"- {r}")
+
+            st.markdown("---")
 
     tabs = st.tabs([_human_scenario_name(k) for k in scenario_keys])
     scenario_payload_for_exports: List[Tuple[str, Module5LPResult, Optional[Module6Result]]] = []
@@ -895,7 +959,7 @@ def results_ui(state: WizardState) -> None:
                     st.dataframe(show_forecast, use_container_width=True, hide_index=True)
 
     st.subheader("Downloads")
-    pdf_bytes = create_pdf_bytes(state, scenario_payload_for_exports)
+    pdf_bytes = create_pdf_bytes(state, scenario_payload_for_exports, module7_bundle=module7_bundle)
 
     st.download_button(
         label="Download PDF",
