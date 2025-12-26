@@ -130,14 +130,19 @@ def build_platform_totals_df(lp_res: Module5LPResult) -> pd.DataFrame:
 def build_forecast_df(module6_res: Module6Result) -> pd.DataFrame:
     kpi_meta = build_kpi_meta()
     rows: List[Dict[str, Any]] = []
+
     for r in (module6_res.rows or []):
         var = str(r.kpi_name)
         meta = kpi_meta.get(var, {})
-        p_code = str(meta.get("platform", r.platform)).lower()
-        g_code = str(meta.get("goal", ""))
-        kpi_label = str(meta.get("kpi_label", "")) or "KPI"
-        platform_name = PLATFORM_NAMES.get(p_code, PLATFORM_NAMES.get(str(r.platform).lower(), str(r.platform)))
-        objective_name = GOAL_NAMES.get(g_code, g_code) if g_code else ""
+
+        platform_code = str(r.platform).lower()
+        platform_name = PLATFORM_NAMES.get(platform_code, str(r.platform))
+
+        objective_code = str(getattr(r, "objective", "") or "")
+        objective_name = GOAL_NAMES.get(objective_code, objective_code) if objective_code else ""
+
+        kpi_label = str(meta.get("kpi_label", "")).strip() or "KPI"
+
         rows.append(
             {
                 "Platform": platform_name,
@@ -147,10 +152,45 @@ def build_forecast_df(module6_res: Module6Result) -> pd.DataFrame:
                 "Predicted KPI": float(r.predicted_kpi or 0.0),
             }
         )
+
     df = pd.DataFrame(rows)
     if not df.empty:
         df = df.sort_values(["Platform", "Objective", "KPI"]).reset_index(drop=True)
     return df
+
+
+def build_budget_matrix_df(lp_res: Module5LPResult) -> pd.DataFrame:
+    df = build_budget_allocation_df(lp_res)
+    if df.empty:
+        return df
+    pivot = (
+        df.pivot_table(
+            index="Platform",
+            columns="Objective",
+            values="Allocated Budget",
+            aggfunc="sum",
+            fill_value=0.0,
+        )
+        .reset_index()
+    )
+    return pivot
+
+
+def build_forecast_matrix_df(fc_res: Module6Result) -> pd.DataFrame:
+    df = build_forecast_df(fc_res)
+    if df.empty:
+        return df
+    pivot = (
+        df.pivot_table(
+            index="Platform",
+            columns="KPI",
+            values="Predicted KPI",
+            aggfunc="sum",
+            fill_value=0.0,
+        )
+        .reset_index()
+    )
+    return pivot
 
 
 def _get_scenario_key_order(keys: List[str]) -> List[str]:
@@ -398,7 +438,7 @@ def module1_ui(state: WizardState) -> None:
         step=100.0,
     )
 
-    if st.button("Continue to Module 2", disabled=not goal_codes or total_budget <= 1):
+    if st.button("Continue", disabled=not goal_codes or total_budget <= 1):
         state.complete_module1_and_advance(valid_goals=goal_codes, total_budget=total_budget)
         safe_rerun()
 
@@ -530,7 +570,7 @@ def module3_ui(state: WizardState) -> None:
         platform_kpis[platform] = kpi_values
 
     can_run = True
-    for platform, d in m3_data.items():
+    for _, d in m3_data.items():
         if not d.get("time_window"):
             can_run = False
             break
@@ -552,7 +592,6 @@ def module3_ui(state: WizardState) -> None:
             goals_for_platform = state.goals_by_platform.get(platform, [])
 
             kpi_ratios[platform] = {}
-
             for g in goals_for_platform:
                 kpi_ratios[platform][g] = {}
 
@@ -567,9 +606,7 @@ def module3_ui(state: WizardState) -> None:
                     continue
 
                 val = float(m3_data[platform]["kpis"].get(var, 0.0))
-                if val <= 0.0:
-                    continue
-                if b <= 0.0:
+                if val <= 0.0 or b <= 0.0:
                     continue
 
                 kpi_ratios[platform][g][var] = val / b
@@ -635,27 +672,24 @@ def results_ui(state: WizardState) -> None:
         c1, c2, c3 = st.columns(3)
         with c1:
             if not df_p.empty:
-                st.markdown("Minimum spend per platform")
                 show = df_p.copy()
                 show["Minimum Spend"] = show["Minimum Spend"].apply(money)
                 st.dataframe(show, use_container_width=True, hide_index=True)
         with c2:
             if not df_g.empty:
-                st.markdown("Minimum budget per objective")
                 show = df_g.copy()
                 show["Minimum Budget"] = show["Minimum Budget"].apply(money)
                 st.dataframe(show, use_container_width=True, hide_index=True)
         with c3:
             if not df_s.empty:
-                st.markdown("Scenario multipliers")
                 show = df_s.copy()
                 show["Multiplier"] = show["Multiplier"].apply(lambda x: number(x, 2))
                 st.dataframe(show, use_container_width=True, hide_index=True)
 
     lp_by_scenario = _get_module5_scenarios(state)
     fc_by_scenario = _get_module6_scenarios(state)
-
     scenario_keys = _get_scenario_key_order(list(lp_by_scenario.keys()))
+
     if not scenario_keys:
         st.error("No results available.")
         return
@@ -681,65 +715,14 @@ def results_ui(state: WizardState) -> None:
         st.dataframe(show_df, use_container_width=True, hide_index=True)
 
         chart_df = df_compare.copy()
-        chart_df["Scenario"] = chart_df["Scenario"].apply(_human_scenario_name)
-        st.subheader("Chart: objective value by scenario")
+        st.subheader("Objective value by scenario")
         st.bar_chart(chart_df.set_index("Scenario")[["Objective Value"]])
 
-        st.subheader("Chart: total budget used by scenario")
+        st.subheader("Total budget used by scenario")
         st.bar_chart(chart_df.set_index("Scenario")[["Total Budget Used"]])
 
     tabs = st.tabs([_human_scenario_name(k) for k in scenario_keys])
-
     scenario_payload_for_exports: List[Tuple[str, Module5LPResult, Optional[Module6Result]]] = []
-
-    def build_budget_matrix_df(lp_res: Module5LPResult) -> pd.DataFrame:
-        df = build_budget_allocation_df(lp_res)
-        if df.empty:
-            return df
-        pivot = (
-            df.pivot_table(
-                index="Platform",
-                columns="Objective",
-                values="Allocated Budget",
-                aggfunc="sum",
-                fill_value=0.0,
-            )
-            .reset_index()
-        )
-        return pivot
-
-    def build_forecast_df(module6_res: Module6Result) -> pd.DataFrame:
-        kpi_meta = build_kpi_meta()
-        rows: List[Dict[str, Any]] = []
-
-        for r in (module6_res.rows or []):
-            var = str(r.kpi_name)
-            meta = kpi_meta.get(var, {})
-
-            p_code = str(meta.get("platform", r.platform)).lower()
-            g_code = str(meta.get("goal", ""))
-
-            platform_name = PLATFORM_NAMES.get(
-                p_code,
-                PLATFORM_NAMES.get(str(r.platform).lower(), str(r.platform)),
-            )
-            objective_name = GOAL_NAMES.get(g_code, g_code) if g_code else ""
-            kpi_label = str(meta.get("kpi_label", "")) or "KPI"
-
-            rows.append(
-                {
-                    "Platform": platform_name,
-                    "Objective": objective_name,
-                    "KPI": kpi_label,
-                    "Allocated Budget": float(r.allocated_budget or 0.0),
-                    "Predicted KPI": float(r.predicted_kpi or 0.0),
-                }
-            )
-
-        df = pd.DataFrame(rows)
-        if not df.empty:
-            df = df.sort_values(["Platform", "Objective", "KPI"]).reset_index(drop=True)
-        return df
 
     def rule_based_summary(lp_res: Module5LPResult, fc_res: Optional[Module6Result]) -> List[str]:
         bullets: List[str] = []
@@ -764,10 +747,8 @@ def results_ui(state: WizardState) -> None:
             fdf = build_forecast_df(fc_res)
             if not fdf.empty:
                 top_kpi = fdf.sort_values("Predicted KPI", ascending=False).iloc[0]
-                kpi_name = str(top_kpi["KPI"])
-                p_name = str(top_kpi["Platform"])
                 bullets.append(
-                    f"Top predicted KPI: {kpi_name} on {p_name} at {number(top_kpi['Predicted KPI'], 2)}."
+                    f"Top predicted KPI: {top_kpi['KPI']} on {top_kpi['Platform']} at {number(top_kpi['Predicted KPI'], 2)}."
                 )
 
         return bullets
@@ -793,7 +774,7 @@ def results_ui(state: WizardState) -> None:
                 for b in bullets:
                     st.write(b)
 
-            st.subheader("Matrix: budget allocation (platform x objective)")
+            st.subheader("Matrix: budget allocation")
             budget_matrix = build_budget_matrix_df(lp_res)
             if budget_matrix.empty:
                 st.info("No allocation matrix available.")
@@ -804,23 +785,14 @@ def results_ui(state: WizardState) -> None:
                         show[c] = show[c].apply(money)
                 st.dataframe(show, use_container_width=True, hide_index=True)
 
-            st.subheader("Budget allocation table")
-            budget_df = build_budget_allocation_df(lp_res)
-            if budget_df.empty:
-                st.warning("No budget allocation to display.")
-            else:
-                show_budget = budget_df.copy()
-                show_budget["Allocated Budget"] = show_budget["Allocated Budget"].apply(money)
-                st.dataframe(show_budget, use_container_width=True, hide_index=True)
-
             st.subheader("Platform totals")
             platform_df = build_platform_totals_df(lp_res)
             if not platform_df.empty:
-                show_platform = platform_df.copy()
-                show_platform["Total Allocated Budget"] = show_platform["Total Allocated Budget"].apply(money)
-                st.dataframe(show_platform, use_container_width=True, hide_index=True)
+                show = platform_df.copy()
+                show["Total Allocated Budget"] = show["Total Allocated Budget"].apply(money)
+                st.dataframe(show, use_container_width=True, hide_index=True)
 
-            st.subheader("Matrix: forecast KPIs (platform x KPI)")
+            st.subheader("Matrix: forecast KPIs")
             if forecast_res is None:
                 st.info("Forecast is not available for this scenario.")
             else:
@@ -834,7 +806,7 @@ def results_ui(state: WizardState) -> None:
                             show[c] = show[c].apply(lambda x: number(x, 2))
                     st.dataframe(show, use_container_width=True, hide_index=True)
 
-            st.subheader("Forecast KPIs table")
+            st.subheader("Forecast table")
             if forecast_res is None:
                 st.info("Forecast is not available for this scenario.")
             else:
@@ -872,7 +844,10 @@ def results_ui(state: WizardState) -> None:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
     else:
-        st.info("Excel download is unavailable because the required dependency is not installed.")
+        st.info("Excel export is unavailable because the required dependency is not installed.")
+
+    if st.button("Start over"):
+        reset_state()
 
 
 def main() -> None:
