@@ -708,39 +708,38 @@ def results_ui(state: WizardState) -> None:
         )
         return pivot
 
-   def build_forecast_df(module6_res: Module6Result) -> pd.DataFrame:
-     kpi_meta = build_kpi_meta()
-     rows: List[Dict[str, Any]] = []
+    def build_forecast_df(module6_res: Module6Result) -> pd.DataFrame:
+        kpi_meta = build_kpi_meta()
+        rows: List[Dict[str, Any]] = []
 
-     for r in (module6_res.rows or []):
-         var = str(r.kpi_name)
-         meta = kpi_meta.get(var, {})
+        for r in (module6_res.rows or []):
+            var = str(r.kpi_name)
+            meta = kpi_meta.get(var, {})
 
-         p_code = str(meta.get("platform", r.platform)).lower()
-         g_code = str(meta.get("goal", ""))
+            p_code = str(meta.get("platform", r.platform)).lower()
+            g_code = str(meta.get("goal", ""))
 
-         platform_name = PLATFORM_NAMES.get(
-             p_code,
-             PLATFORM_NAMES.get(str(r.platform).lower(), str(r.platform)),
-         )
-         objective_name = GOAL_NAMES.get(g_code, g_code) if g_code else ""
-         kpi_label = str(meta.get("kpi_label", "")) or "KPI"
+            platform_name = PLATFORM_NAMES.get(
+                p_code,
+                PLATFORM_NAMES.get(str(r.platform).lower(), str(r.platform)),
+            )
+            objective_name = GOAL_NAMES.get(g_code, g_code) if g_code else ""
+            kpi_label = str(meta.get("kpi_label", "")) or "KPI"
 
-         rows.append(
-             {
-                 "Platform": platform_name,
-                 "Objective": objective_name,
-                 "KPI": kpi_label,
-                 "Allocated Budget": float(r.allocated_budget or 0.0),
-                 "Predicted KPI": float(r.predicted_kpi or 0.0),
-             }
-         )
+            rows.append(
+                {
+                    "Platform": platform_name,
+                    "Objective": objective_name,
+                    "KPI": kpi_label,
+                    "Allocated Budget": float(r.allocated_budget or 0.0),
+                    "Predicted KPI": float(r.predicted_kpi or 0.0),
+                }
+            )
 
-     df = pd.DataFrame(rows)
-     if not df.empty:
-         df = df.sort_values(["Platform", "Objective", "KPI"]).reset_index(drop=True)
-     return df
-
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            df = df.sort_values(["Platform", "Objective", "KPI"]).reset_index(drop=True)
+        return df
 
     def rule_based_summary(lp_res: Module5LPResult, fc_res: Optional[Module6Result]) -> List[str]:
         bullets: List[str] = []
