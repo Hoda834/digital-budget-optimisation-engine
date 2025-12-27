@@ -297,6 +297,7 @@ def _solve_single_lp(
     r_pg: Dict[str, Dict[str, float]],
     min_spend_per_platform: Dict[str, float],
     min_budget_per_goal: Dict[str, float],
+    max_platform_share: Optional[float] = None,
 ) -> Module5LPResult:
     if not valid_goals:
         raise Module5ValidationError("Module 5 LP, valid_goals is empty.")
@@ -335,6 +336,13 @@ def _solve_single_lp(
     )
 
     model += pulp.lpSum(x_vars[p][g] for p in platforms for g in valid_goals) <= total_budget
+
+    if max_platform_share is not None:
+        mps = _safe_float(max_platform_share, 0.0)
+        if mps > 0.0 and mps < 1.0:
+            cap = mps * total_budget
+            for p in platforms:
+                model += pulp.lpSum(x_vars[p][g] for g in valid_goals) <= cap
 
     for p in platforms:
         min_p = _safe_float(min_spend_per_platform.get(p, 0.0), 0.0)
@@ -451,6 +459,47 @@ def run_module5_lp_scenarios(input_data: Module5LPInput) -> Module5ScenarioBundl
         scenario_goal_multipliers=dict(input_data.scenario_goal_multipliers),
     )
 
+def run_module5_lp_scenarios_with_policy(input_data: Module5LPInput, *, max_platform_share: Optional[float] = None) -> Module5ScenarioBundle:
+    if not input_data.scenario_multipliers:
+        raise Module5ValidationError("scenario_multipliers is empty.")
+
+    results: Dict[str, Module5LPResult] = {}
+
+    base_goal_map = input_data.scenario_goal_multipliers.get("base", {}) if input_data.scenario_goal_multipliers else {}
+    for g in input_data.valid_goals:
+        base_goal_map.setdefault(g, 1.0)
+
+    for scenario_name, scalar_multiplier in input_data.scenario_multipliers.items():
+        scalar_m = _safe_float(scalar_multiplier, 1.0)
+        if scalar_m <= 0.0:
+            continue
+
+        goal_multipliers = input_data.scenario_goal_multipliers.get(scenario_name, {})
+        if not isinstance(goal_multipliers, dict) or not goal_multipliers:
+            goal_multipliers = base_goal_map
+
+        adjusted_r_pg: Dict[str, Dict[str, float]] = {}
+        for p, gdict in input_data.r_pg.items():
+            adjusted_r_pg[p] = {}
+            for g, r in gdict.items():
+                val = _safe_float(r, 0.0)
+                gm = _safe_float(goal_multipliers.get(g, 1.0), 1.0)
+                if gm <= 0.0:
+                    gm = 1.0
+                adjusted_r_pg[p][g] = max(0.0, val * scalar_m * gm)
+
+        results[scenario_name] = _solve_single_lp(
+            valid_goals=input_data.valid_goals,
+            total_budget=input_data.total_budget,
+            system_goal_weights=input_data.system_goal_weights,
+            platform_goal_weights=input_data.platform_goal_weights,
+            r_pg=adjusted_r_pg,
+            min_spend_per_platform=input_data.min_spend_per_platform,
+            min_budget_per_goal=input_data.min_budget_per_goal,
+            max_platform_share=max_platform_share,
+        )
+
+    return Module5ScenarioBundle(results_by_scenario=results)
 
 def run_module5(state: WizardState) -> WizardState:
     if state.module5_finalised:
