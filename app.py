@@ -16,7 +16,6 @@ from modules.module2 import run_module2
 from modules.module4 import run_module4
 from modules.module5 import Module5LPResult, Module5ScenarioBundle, run_module5
 from modules.module6 import Module6Result, Module6ScenarioResult, run_module6
-
 from modules.module7 import Module7BundleInsight, run_module7
 
 
@@ -282,12 +281,7 @@ def create_excel_bytes(
                 {"Metric": "Objective Value", "Value": float(lp_res.objective_value or 0.0)},
             ]
             if hasattr(lp_res, "objective_value_raw"):
-                summary_rows.append(
-                    {
-                        "Metric": "Objective Value (raw)",
-                        "Value": float(getattr(lp_res, "objective_value_raw") or 0.0),
-                    }
-                )
+                summary_rows.append({"Metric": "Objective Value (raw)", "Value": float(getattr(lp_res, "objective_value_raw") or 0.0)})
 
             summary_df = pd.DataFrame(summary_rows)
             budget_df = build_budget_allocation_df(lp_res)
@@ -341,6 +335,24 @@ def _allocation_to_plan_rows(allocation: Optional[Dict[str, Dict[str, float]]]) 
     return df
 
 
+def _confidence_breakdown_df(breakdown: Optional[Dict[str, int]]) -> pd.DataFrame:
+    if not breakdown:
+        return pd.DataFrame()
+    rows = [{"Component": k, "Score": int(v)} for k, v in breakdown.items()]
+    df = pd.DataFrame(rows)
+    df = df.sort_values(["Component"]).reset_index(drop=True)
+    return df
+
+
+def _data_quality_df(rows: Optional[List[Dict[str, Any]]], limit: int = 12) -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows[:limit])
+    keep = [c for c in ["Platform", "Objective", "KPI", "Allocated Budget", "Predicted KPI", "KPI per Budget", "Flag"] if c in df.columns]
+    df = df[keep]
+    return df
+
+
 def create_pdf_bytes(
     state: WizardState,
     scenario_payload: List[Tuple[str, Module5LPResult, Optional[Module6Result]]],
@@ -353,12 +365,7 @@ def create_pdf_bytes(
 
     story.append(Paragraph("Results Summary", styles["Title"]))
     story.append(Spacer(1, 6))
-    story.append(
-        Paragraph(
-            "Optimisation method: Linear Programming (LP) to allocate budget across platform and objective.",
-            styles["BodyText"],
-        )
-    )
+    story.append(Paragraph("Optimisation method: Linear Programming (LP) to allocate budget across platform and objective.", styles["BodyText"]))
     story.append(Spacer(1, 12))
 
     df_p, df_g, df_s = _policy_tables(state)
@@ -369,45 +376,21 @@ def create_pdf_bytes(
     if not df_p.empty:
         story.append(Paragraph("Minimum Spend per Platform", styles["Heading3"]))
         t = Table(_df_to_table_data(df_p, money_columns=["Minimum Spend"]))
-        t.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ]
-            )
-        )
+        t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey), ("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold")]))
         story.append(t)
         story.append(Spacer(1, 10))
 
     if not df_g.empty:
         story.append(Paragraph("Minimum Budget per Objective", styles["Heading3"]))
         t = Table(_df_to_table_data(df_g, money_columns=["Minimum Budget"]))
-        t.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ]
-            )
-        )
+        t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey), ("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold")]))
         story.append(t)
         story.append(Spacer(1, 10))
 
     if not df_s.empty:
         story.append(Paragraph("Scenario Multipliers (overall)", styles["Heading3"]))
         t = Table(_df_to_table_data(df_s))
-        t.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ]
-            )
-        )
+        t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey), ("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold")]))
         story.append(t)
         story.append(Spacer(1, 10))
 
@@ -415,15 +398,7 @@ def create_pdf_bytes(
     if not df_sgm.empty:
         story.append(Paragraph("Scenario Multipliers per Objective", styles["Heading3"]))
         t = Table(_df_to_table_data(df_sgm))
-        t.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ]
-            )
-        )
+        t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey), ("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold")]))
         story.append(t)
         story.append(Spacer(1, 10))
 
@@ -452,90 +427,65 @@ def create_pdf_bytes(
             story.append(Paragraph(ins.executive_summary, styles["BodyText"]))
             story.append(Spacer(1, 6))
 
-            if getattr(ins, "classification", None) is not None and getattr(ins, "confidence_score", None) is not None:
-                story.append(
-                    Paragraph(
-                        f"Classification: {ins.classification} | Confidence: {int(ins.confidence_score)}/100",
-                        styles["BodyText"],
-                    )
-                )
+            story.append(Paragraph(f"Classification: {ins.classification} | Confidence: {int(ins.confidence_score)}/100", styles["BodyText"]))
+            if getattr(ins, "dominance_gap_percent", None) is not None:
+                story.append(Paragraph(f"Dominance gap: {number(ins.dominance_gap_percent, 0)}%", styles["BodyText"]))
+            story.append(Spacer(1, 6))
+
+            cb_df = _confidence_breakdown_df(getattr(ins, "confidence_breakdown", None))
+            if not cb_df.empty:
+                tcb = Table(_df_to_table_data(cb_df))
+                tcb.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey), ("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold")]))
+                story.append(tcb)
                 story.append(Spacer(1, 6))
 
             if getattr(ins, "data_quality_note", None):
                 story.append(Paragraph(f"Data quality note: {ins.data_quality_note}", styles["BodyText"]))
                 story.append(Spacer(1, 6))
 
-            if getattr(ins, "plan_a", None) is not None:
-                pa = ins.plan_a
-                story.append(Paragraph("Plan A (Performance first)", styles["Heading3"]))
-                pa_rows = [
-                    {"Metric": "Objective value (estimate)", "Value": number(getattr(pa, "objective_value_estimate", 0.0), 2)},
-                    {"Metric": "Primary focus", "Value": str(getattr(pa, "kpi_focus", ""))},
-                ]
-                tpa = Table(_df_to_table_data(pd.DataFrame(pa_rows)))
-                tpa.setStyle(
-                    TableStyle(
-                        [
-                            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                        ]
-                    )
-                )
-                story.append(tpa)
-                story.append(Spacer(1, 6))
+            dq_df = _data_quality_df(getattr(ins, "data_quality_table", None), limit=10)
+            if not dq_df.empty:
+                tdq = Table(_df_to_table_data(dq_df, money_columns=["Allocated Budget"]))
+                tdq.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey), ("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold")]))
+                story.append(tdq)
+                story.append(Spacer(1, 8))
 
-                pa_alloc_df = _allocation_to_plan_rows(getattr(pa, "allocation", None))
-                if not pa_alloc_df.empty:
-                    tpa2 = Table(_df_to_table_data(pa_alloc_df, money_columns=["Allocated Budget"]))
-                    tpa2.setStyle(
-                        TableStyle(
-                            [
-                                ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                            ]
-                        )
-                    )
-                    story.append(tpa2)
-                    story.append(Spacer(1, 6))
+            story.append(Paragraph("Plan A (Performance first)", styles["Heading3"]))
+            pa_rows = [
+                {"Metric": "Objective value", "Value": number(ins.plan_a.objective_value, 2)},
+                {"Metric": "Objective value (raw)", "Value": number(ins.plan_a.objective_value_raw, 6)},
+            ]
+            tpa = Table(_df_to_table_data(pd.DataFrame(pa_rows)))
+            tpa.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey), ("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold")]))
+            story.append(tpa)
+            story.append(Spacer(1, 6))
+
+            pa_alloc_df = _allocation_to_plan_rows(getattr(ins.plan_a, "allocation", None))
+            if not pa_alloc_df.empty:
+                tpa2 = Table(_df_to_table_data(pa_alloc_df, money_columns=["Allocated Budget"]))
+                tpa2.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey), ("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold")]))
+                story.append(tpa2)
+                story.append(Spacer(1, 6))
 
             if getattr(ins, "plan_b", None) is not None:
                 pb = ins.plan_b
                 story.append(Paragraph("Plan B (Risk managed)", styles["Heading3"]))
                 pb_rows = [
-                    {"Metric": "Objective value (estimate)", "Value": number(getattr(pb, "objective_value_estimate", 0.0), 2)},
-                    {"Metric": "Primary focus", "Value": str(getattr(pb, "kpi_focus", ""))},
+                    {"Metric": "Objective value", "Value": number(getattr(pb, "objective_value", 0.0), 2)},
+                    {"Metric": "Objective value (raw)", "Value": number(getattr(pb, "objective_value_raw", 0.0), 6)},
                 ]
                 trade = getattr(pb, "tradeoff_percent", None)
                 if trade is not None:
                     pb_rows.append({"Metric": "Trade off", "Value": f"{number(trade, 1)}%"})
-
                 tpb = Table(_df_to_table_data(pd.DataFrame(pb_rows)))
-                tpb.setStyle(
-                    TableStyle(
-                        [
-                            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                        ]
-                    )
-                )
+                tpb.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey), ("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold")]))
                 story.append(tpb)
                 story.append(Spacer(1, 6))
 
                 pb_alloc_df = _allocation_to_plan_rows(getattr(pb, "allocation", None))
                 if not pb_alloc_df.empty:
                     tpb2 = Table(_df_to_table_data(pb_alloc_df, money_columns=["Allocated Budget"]))
-                    tpb2.setStyle(
-                        TableStyle(
-                            [
-                                ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                            ]
-                        )
-                    )
+                    tpb2.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey), ("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold")]))
                     story.append(tpb2)
                     story.append(Spacer(1, 6))
 
@@ -562,21 +512,11 @@ def create_pdf_bytes(
             {"Metric": "Objective Value", "Value": number(lp_res.objective_value or 0.0, 2)},
         ]
         if hasattr(lp_res, "objective_value_raw"):
-            summary_rows.append(
-                {"Metric": "Objective Value (raw)", "Value": number(getattr(lp_res, "objective_value_raw") or 0.0, 6)}
-            )
+            summary_rows.append({"Metric": "Objective Value (raw)", "Value": number(getattr(lp_res, "objective_value_raw") or 0.0, 6)})
 
         summary_df = pd.DataFrame(summary_rows)
         t = Table(_df_to_table_data(summary_df))
-        t.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ]
-            )
-        )
+        t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey), ("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold")]))
         story.append(t)
         story.append(Spacer(1, 10))
 
@@ -584,15 +524,7 @@ def create_pdf_bytes(
         if not budget_df.empty:
             story.append(Paragraph("Budget Allocation", styles["Heading3"]))
             t = Table(_df_to_table_data(budget_df, money_columns=["Allocated Budget"]))
-            t.setStyle(
-                TableStyle(
-                    [
-                        ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ]
-                )
-            )
+            t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey), ("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold")]))
             story.append(t)
             story.append(Spacer(1, 10))
 
@@ -601,15 +533,7 @@ def create_pdf_bytes(
             if not forecast_df.empty:
                 story.append(Paragraph("Forecast KPIs (goal-aligned)", styles["Heading3"]))
                 t = Table(_df_to_table_data(forecast_df, money_columns=["Allocated Budget"]))
-                t.setStyle(
-                    TableStyle(
-                        [
-                            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                        ]
-                    )
-                )
+                t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey), ("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold")]))
                 story.append(t)
                 story.append(Spacer(1, 10))
 
@@ -745,7 +669,9 @@ def module3_ui(state: WizardState) -> None:
         )
 
         kpi_defs = [
-            row for row in KPI_CONFIG if row["platform"] == platform and row["goal"] in state.goals_by_platform.get(platform, [])
+            row
+            for row in KPI_CONFIG
+            if row["platform"] == platform and row["goal"] in state.goals_by_platform.get(platform, [])
         ]
 
         kpi_values: Dict[str, float] = {}
@@ -909,11 +835,7 @@ def results_ui(state: WizardState) -> None:
         st.error("No results available.")
         return
 
-    decision_mode = st.selectbox(
-        "Decision mode",
-        options=["Performance first", "Risk managed", "Exploration"],
-        index=0,
-    )
+    decision_mode = st.selectbox("Decision mode", options=["Performance first", "Risk managed", "Exploration"], index=0)
 
     module7_bundle: Optional[Module7BundleInsight] = None
     bundle = getattr(state, "module5_scenario_bundle", None)
@@ -969,20 +891,38 @@ def results_ui(state: WizardState) -> None:
                 continue
 
             st.markdown(f"**{_human_scenario_name(sk)}**")
+            st.caption(f"Classification: {ins.classification} | Confidence: {int(ins.confidence_score)}/100")
+            if getattr(ins, "dominance_gap_percent", None) is not None:
+                st.caption(f"Dominance gap: {number(ins.dominance_gap_percent, 0)}%")
 
-            if getattr(ins, "classification", None) is not None and getattr(ins, "confidence_score", None) is not None:
-                st.caption(f"Classification: {ins.classification} | Confidence: {int(ins.confidence_score)}/100")
+            cb_df = _confidence_breakdown_df(getattr(ins, "confidence_breakdown", None))
+            if not cb_df.empty:
+                st.dataframe(cb_df, use_container_width=True, hide_index=True)
 
             if getattr(ins, "data_quality_note", None):
                 st.warning(ins.data_quality_note)
 
+            dq_df = _data_quality_df(getattr(ins, "data_quality_table", None), limit=12)
+            if not dq_df.empty:
+                show = dq_df.copy()
+                if "Allocated Budget" in show.columns:
+                    show["Allocated Budget"] = show["Allocated Budget"].apply(money)
+                st.dataframe(show, use_container_width=True, hide_index=True)
+
             st.write(ins.executive_summary)
 
-            if getattr(ins, "plan_b", None) is not None:
-                pb = ins.plan_b
-                trade = getattr(pb, "tradeoff_percent", None)
-                if trade is not None:
-                    st.caption(f"Plan B trade off: {number(trade, 1)}%")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.metric("Plan A objective value", number(ins.plan_a.objective_value, 2))
+            with c2:
+                if getattr(ins, "plan_b", None) is not None:
+                    pb = ins.plan_b
+                    st.metric("Plan B objective value", number(getattr(pb, "objective_value", 0.0), 2))
+                    trade = getattr(pb, "tradeoff_percent", None)
+                    if trade is not None:
+                        st.caption(f"Plan B trade off: {number(trade, 1)}%")
+                else:
+                    st.metric("Plan B objective value", "Not available")
 
             if ins.risks:
                 st.markdown("Risks")
@@ -1132,108 +1072,6 @@ def results_ui(state: WizardState) -> None:
 
     if st.button("Start over"):
         reset_state()
-
-
-def module1_ui(state: WizardState) -> None:
-    st.header("Objectives and total budget")
-
-    goals = st.multiselect(
-        "Choose one or more marketing objectives:",
-        options=[
-            (GOAL_AW, "Awareness"),
-            (GOAL_EN, "Engagement"),
-            (GOAL_WT, "Website Traffic"),
-            (GOAL_LG, "Lead Generation"),
-        ],
-        format_func=lambda x: x[1],
-    )
-    goal_codes = [code for code, _ in goals]
-
-    total_budget = st.number_input(
-        "Enter your total budget (must be greater than 1)",
-        min_value=1.0,
-        value=1000.0,
-        step=100.0,
-    )
-
-    if st.button("Continue", disabled=not goal_codes or total_budget <= 1):
-        state.complete_module1_and_advance(valid_goals=goal_codes, total_budget=total_budget)
-        safe_rerun()
-
-
-def module2_ui(state: WizardState) -> None:
-    st.header("Platforms and priorities")
-
-    platforms = ["fb", "ig", "li", "yt"]
-    selected_platforms = st.multiselect(
-        "Choose one or more platforms:",
-        options=platforms,
-        format_func=lambda p: PLATFORM_NAMES.get(str(p).lower(), str(p)),
-    )
-
-    priorities_input: Dict[str, Dict[str, Optional[str]]] = {}
-    is_valid = True
-
-    for p in selected_platforms:
-        platform_name = PLATFORM_NAMES.get(p, p)
-        st.subheader(platform_name)
-
-        p1_key = f"{p}_p1"
-        p2_key = f"{p}_p2"
-
-        p1 = st.selectbox(
-            f"Priority 1 objective for {platform_name}",
-            options=[None] + list(state.valid_goals),
-            format_func=lambda x: {
-                None: "(none)",
-                GOAL_AW: "Awareness",
-                GOAL_EN: "Engagement",
-                GOAL_WT: "Website Traffic",
-                GOAL_LG: "Lead Generation",
-            }.get(x, str(x)),
-            key=p1_key,
-        )
-
-        allowed_p2_options = [None] + [g for g in state.valid_goals if g != p1]
-
-        current_p2 = st.session_state.get(p2_key, None)
-        if current_p2 == p1 and current_p2 is not None:
-            st.session_state[p2_key] = None
-            current_p2 = None
-
-        p2 = st.selectbox(
-            f"Priority 2 objective for {platform_name}",
-            options=allowed_p2_options,
-            format_func=lambda x: {
-                None: "(none)",
-                GOAL_AW: "Awareness",
-                GOAL_EN: "Engagement",
-                GOAL_WT: "Website Traffic",
-                GOAL_LG: "Lead Generation",
-            }.get(x, str(x)),
-            key=p2_key,
-        )
-
-        if p2 is not None and p1 is None:
-            is_valid = False
-            st.error("Priority 2 cannot be set without Priority 1.")
-
-        if p1 is not None and p2 is not None and p1 == p2:
-            is_valid = False
-            st.error("Priority 1 and Priority 2 must be different.")
-
-        if len(state.valid_goals) == 1 and p2 is not None:
-            is_valid = False
-            st.error("Priority 2 cannot be set when there is only one selected objective.")
-
-        priorities_input[p] = {"priority_1": p1, "priority_2": p2}
-
-    if st.button("Continue", disabled=(not selected_platforms) or (not is_valid)):
-        try:
-            run_module2(state, selected_platforms, priorities_input)
-            safe_rerun()
-        except Exception:
-            st.error("Please review your selections and try again.")
 
 
 def main() -> None:
