@@ -194,9 +194,6 @@ python tests/smoke_test.py
 
 > NOTE: The Python files in this template are thin wrappers. Replace the placeholders with your existing logic from your local project.
 
-
----
-
 ## Documentation
 
 Detailed explanations of system behaviour and modelling choices are provided in the `docs/` directory:
@@ -207,7 +204,7 @@ Detailed explanations of system behaviour and modelling choices are provided in 
 
 These documents expand on the architectural and decision principles outlined above.
 
----
+
 
 ## Intended Use
 
@@ -220,7 +217,6 @@ This framework is intended for:
 
 The system supports decisions; it does not automate them.
 
----
 
 ## Feedback
 
