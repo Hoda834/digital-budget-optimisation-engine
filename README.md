@@ -192,6 +192,7 @@ python tests/smoke_test.py
 ├── requirements.txt
 └── README.md
 
+```
 
 ## Documentation
 
