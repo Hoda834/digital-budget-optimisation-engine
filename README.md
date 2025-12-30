@@ -1,18 +1,18 @@
 ---
 
-Marketing Budget Optimisation & Decision Support Framework
+# Marketing Budget Optimisation & Decision Support Framework
 
-Overview
+## Overview
 
-This project provides a complete decision support system that helps decision-makers distribute a limited marketing budget across different platforms and goals, taking real-world limits into account.
+This project provides a complete decision support system that helps decision-makers allocate a limited marketing budget across platforms and objectives, accounting for real-world constraints.
 
-Instead of looking at channels separately, the system treats marketing as a constrained optimisation problem. It brings together past performance data, business goals, and uncertainty to create clear, structured recommendations.
+Instead of looking at channels separately, the system treats marketing as a constrained optimisation problem. It integrates past performance data, business goals, and uncertainty to generate clear, structured recommendations.
 
 The framework is designed to help managers make better decisions, not just to automate processes.
 
 ---
 
-What Problem Does This Solve?
+## What Problem Does This Solve?
 
 In practice, marketing decisions rarely fail because of a lack of data. They fail because:
 
@@ -26,9 +26,9 @@ This project fills these gaps by dividing decision design, optimisation, and int
 
 ---
 
-Core Capabilities
+## Core Capabilities
 
-1. Structured Decision Design (Wizard-Based)
+### 1. Structured Decision Design (Wizard-Based)
 
 The system guides users through a structured decision flow:
 
@@ -42,7 +42,7 @@ This approach makes sure the optimisation is based on clear assumptions, not on 
 
 ---
 
-2. Linear Programming Optimisation Engine
+### 2. Linear Programming Optimisation Engine
 
 At its core, the framework uses Linear Programming (LP) to optimise budget allocation across platform-objective combinations.
 
@@ -53,11 +53,11 @@ The LP model:
 * Produces transparent, reproducible allocations
 * Supports multi-scenario evaluation without rewriting the model
 
-This method matches how optimisation is actually used in real business and strategy situations.
+This method aligns with how optimisation is actually used in real-world business and strategic situations.
 
 ---
 
-3. KPI Forecasting Layer
+### 3. KPI Forecasting Layer
 
 Using historical performance ratios, the system forecasts expected KPI outcomes for each scenario:
 
@@ -65,11 +65,11 @@ Using historical performance ratios, the system forecasts expected KPI outcomes 
 * Outputs are tied directly to allocated budgets
 * Results are aggregated by platform and KPI for clarity
 
-The forecasting layer is kept simple and easy to understand, avoiding complex models so results are clear.
+The forecasting layer is kept simple and easy to understand, avoiding complex models, so results are precise.
 
 ---
 
-4. Scenario Comparison
+### 4. Scenario Comparison
 
 All scenarios are evaluated side-by-side, allowing decision-makers to assess:
 
@@ -77,27 +77,27 @@ All scenarios are evaluated side-by-side, allowing decision-makers to assess:
 * Sensitivity of outcomes to scenario assumptions
 * Stability of allocations across uncertainty levels
 
-This helps decision-makers use their judgement, instead of relying on a single number.
+This helps decision-makers exercise their judgement rather than relying on a single metric.
 
 ---
 
-5. Decision Interpretation Layer (Module 7)
+### 5. Decision Interpretation Layer (Module 7)
 
 A dedicated interpretation layer translates numerical results into decision-ready insights.
 
 For each scenario, the system generates:
 
 * An executive summary explaining the allocation logic
-* Identified risks (for example over-concentration or volatility)
+* Identified risks (for example, over-concentration or volatility)
 * Practical recommendations to support action
 
-A global stability explanation points out patterns that stay the same across scenarios, helping decision-makers find strong strategies.
+A global stability explanation identifies patterns that persist across scenarios, helping decision-makers identify robust strategies.
 
 This layer uses clear rules and is easy to review, which builds trust.
 
 ---
 
-6. Exportable Decision Artefacts
+### 6. Exportable Decision Artefacts
 
 The system produces professional outputs suitable for stakeholders:
 
@@ -109,7 +109,7 @@ These outputs are made to help with accountability, review, and oversight.
 
 ---
 
-Technical Architecture
+## Technical Architecture
 
 * Language: Python
 * UI: Streamlit
@@ -121,7 +121,7 @@ The system is built to be modular and easy to expand, with each decision layer w
 
 ---
 
-Why This Project Matters
+## Why This Project Matters
 
 This project demonstrates applied expertise in:
 
@@ -135,7 +135,7 @@ It shows real-world analytical thinking, not just academic or simple examples.
 
 ---
 
-Intended Use
+## Intended Use
 
 This framework is intended for:
 
@@ -146,7 +146,7 @@ This framework is intended for:
 
 ---
 
-Feedback and Review
+## Feedback and Review
 
 This project is shared openly to welcome technical review and honest feedback.
 
@@ -158,6 +158,8 @@ Comments, issues, and discussion contributions are welcome, particularly on:
 * Decision-making usefulness in practice
 
 ## Running the app
+
+This section is provided for reviewers who wish to explore the system locally
 
 ```bash
 pip install -r requirements.txt
