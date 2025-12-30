@@ -172,27 +172,26 @@ streamlit run app.py
 python tests/smoke_test.py
 ```
 
-## Project structure
+## Project Structure
 
 ```text
 .
-├── app.py # UI orchestration and workflow control
+├── app.py                  # UI orchestration and workflow control
 ├── core/
-│ ├── wizard_state.py # State management and step gating
-│ └── kpi_config.py # KPI definitions and mappings
+│   ├── wizard_state.py     # State management and step gating
+│   └── kpi_config.py       # KPI definitions and mappings
 ├── modules/
-│ ├── module1.py # Objective selection and budget setup
-│ ├── module2.py # Platform selection and weighting
-│ ├── module3.py # Historical data ingestion
-│ ├── module4.py # Constraint preparation
-│ ├── module5.py # LP-based optimisation
-│ ├── module6.py # KPI forecasting and validation
-│ └── module7.py # Decision insight and interpretation
-├── docs/ # Detailed design and modelling documentation
+│   ├── module1.py          # Objective selection and budget setup
+│   ├── module2.py          # Platform selection and weighting
+│   ├── module3.py          # Historical data ingestion
+│   ├── module4.py          # Constraint preparation
+│   ├── module5.py          # LP-based optimisation
+│   ├── module6.py          # KPI forecasting and validation
+│   └── module7.py          # Decision insight and interpretation
+├── docs/                   # Detailed design and modelling documentation
 ├── requirements.txt
 └── README.md
 
-> NOTE: The Python files in this template are thin wrappers. Replace the placeholders with your existing logic from your local project.
 
 ## Documentation
 
@@ -203,8 +202,6 @@ Detailed explanations of system behaviour and modelling choices are provided in 
 - **decision_logic.md** – optimisation assumptions and modelling rationale  
 
 These documents expand on the architectural and decision principles outlined above.
-
-
 
 ## Intended Use
 
@@ -226,12 +223,14 @@ The project is shared openly to invite technical review and constructive feedbac
 - Scenario design and robustness  
 - Decision interpretability and usefulness  
 
-Issues and discussions are welcome.
+I want you to know that issues and discussions are welcome.
 
 
 ## Author
 
 Created by **Hoda Rezvanjoo**  
 Insight Analyst & Optimisation Model Developer  
-Portfolio: https://hodarezvanjoo.com
+https://hodarezvanjoo.com
+
+
 
