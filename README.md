@@ -1,35 +1,161 @@
-# digital-budget-optimisation-engine
-A full end-to-end optimisation wizard using Streamlit, Python LP modelling and KPI forecasting to intelligently allocate marketing budget across platforms.
-A multi-stage optimisation wizard for intelligent digital budget planning.
+---
 
-This project implements a full analytical pipeline to optimise multi-platform marketing budgets using:
+Marketing Budget Optimisation & Decision Support Framework
 
-- Linear Programming (LP)
-- KPI ratio modelling
-- Cross-platform goal prioritisation
-- Forecasting & automated insight generation
-- Streamlit UI for interactive exploration
-- Automated PDF report generation (with charts)
+Overview
 
-## Features
+This project provides a complete decision support system that helps decision-makers distribute a limited marketing budget across different platforms and goals, taking real-world limits into account.
 
-### Module 1 – Goal Selection & Budget Setup
-Users select strategic objectives and specify overall budget (must be > 1).
+Instead of looking at channels separately, the system treats marketing as a constrained optimisation problem. It brings together past performance data, business goals, and uncertainty to create clear, structured recommendations.
 
-### Module 2 – Platform Selection & Priority Weighting
-Each platform (Facebook, Instagram, LinkedIn, YouTube) receives goal weights based on business priorities.
+The framework is designed to help managers make better decisions, not just to automate processes.
 
-### Module 3 – Historical Data Collection
-Collects historical KPI values per platform–goal and computes KPI-per-budget ratios.
+---
 
-### Module 4 – Data Transformation Layer
-Builds a unified table and cost-per-unit per platform–goal–KPI to feed the optimisation model.
+What Problem Does This Solve?
 
-### Module 5 – Linear Programming Optimisation
-Solves a continuous LP model to maximise weighted KPI output under a total budget constraint.
+In practice, marketing decisions rarely fail because of a lack of data. They fail because:
 
-### Module 6 – Forecasting Engine
-Predicts KPI outcomes based on optimal allocation, generates narrative insights, and exports a PDF report.
+* Budgets are limited and must satisfy competing objectives
+* Platform performance is interdependent, not independent
+* Business constraints are applied informally or too late
+* Scenario uncertainty is ignored or oversimplified
+* Outputs lack interpretation, making decisions hard to justify
+
+This project fills these gaps by dividing decision design, optimisation, and interpretation into clear, reviewable steps.
+
+---
+
+Core Capabilities
+
+1. Structured Decision Design (Wizard-Based)
+
+The system guides users through a structured decision flow:
+
+* Selection of marketing objectives (Awareness, Engagement, Website Traffic, Lead Generation)
+* Definition of total budget and validation rules
+* Platform selection with priority ranking per objective
+* Constraint definition (minimum spend per platform, minimum budget per objective)
+* Scenario configuration (conservative, base, optimistic)
+
+This approach makes sure the optimisation is based on clear assumptions, not on hidden settings.
+
+---
+
+2. Linear Programming Optimisation Engine
+
+At its core, the framework uses Linear Programming (LP) to optimise budget allocation across platform-objective combinations.
+
+The LP model:
+
+* Maximises a weighted objective function derived from business priorities
+* Respects all budgetary and policy constraints
+* Produces transparent, reproducible allocations
+* Supports multi-scenario evaluation without rewriting the model
+
+This method matches how optimisation is actually used in real business and strategy situations.
+
+---
+
+3. KPI Forecasting Layer
+
+Using historical performance ratios, the system forecasts expected KPI outcomes for each scenario:
+
+* Forecasts are goal-aligned, not generic
+* Outputs are tied directly to allocated budgets
+* Results are aggregated by platform and KPI for clarity
+
+The forecasting layer is kept simple and easy to understand, avoiding complex models so results are clear.
+
+---
+
+4. Scenario Comparison
+
+All scenarios are evaluated side-by-side, allowing decision-makers to assess:
+
+* Trade-offs between risk and return
+* Sensitivity of outcomes to scenario assumptions
+* Stability of allocations across uncertainty levels
+
+This helps decision-makers use their judgement, instead of relying on a single number.
+
+---
+
+5. Decision Interpretation Layer (Module 7)
+
+A dedicated interpretation layer translates numerical results into decision-ready insights.
+
+For each scenario, the system generates:
+
+* An executive summary explaining the allocation logic
+* Identified risks (for example over-concentration or volatility)
+* Practical recommendations to support action
+
+A global stability explanation points out patterns that stay the same across scenarios, helping decision-makers find strong strategies.
+
+This layer uses clear rules and is easy to review, which builds trust.
+
+---
+
+6. Exportable Decision Artefacts
+
+The system produces professional outputs suitable for stakeholders:
+
+* PDF decision reports with structured summaries and tables
+* Excel files containing all allocation and forecast data
+* Clear separation between inputs, assumptions, and results
+
+These outputs are made to help with accountability, review, and oversight.
+
+---
+
+Technical Architecture
+
+* Language: Python
+* UI: Streamlit
+* Optimisation: Linear Programming
+* State Management: Wizard-based state controller
+* Reporting: PDF (ReportLab), Excel (OpenPyXL)
+
+The system is built to be modular and easy to expand, with each decision layer working as its own module.
+
+---
+
+Why This Project Matters
+
+This project demonstrates applied expertise in:
+
+* Decision Support Systems
+* Constrained optimisation
+* Data-driven strategy under uncertainty
+* Translating analytics into managerial insight
+* Responsible and explainable decision design
+
+It shows real-world analytical thinking, not just academic or simple examples.
+
+---
+
+Intended Use
+
+This framework is intended for:
+
+* Marketing and growth teams
+* Strategy and analytics professionals
+* SMEs and decision-makers working with limited resources
+* Anyone who needs clear, structured optimisation instead of automated results that are hard to explain
+
+---
+
+Feedback and Review
+
+This project is shared openly to welcome technical review and honest feedback.
+
+Comments, issues, and discussion contributions are welcome, particularly on:
+
+* Optimisation logic
+* Scenario design
+* Interpretation quality
+* Decision-making usefulness in practice
 
 ## Running the app
 
@@ -47,35 +173,63 @@ python tests/smoke_test.py
 ## Project structure
 
 ```text
-marketing-allocation-optimizer/
-├── app.py
-├── requirements.txt
-├── README.md
-├── .gitignore
-├── modules/
-│   ├── module1.py
-│   ├── module2.py
-│   ├── module3.py
-│   ├── module4.py
-│   ├── module5.py
-│   └── module6.py
+.
+├── app.py # UI orchestration and workflow control
 ├── core/
-│   ├── wizard_state.py
-│   ├── kpi_config.py
-│   └── utils.py
-├── reports/
-│   └── samples/
-│       └── example-output.pdf
-├── screenshots/
-│   ├── module1.png
-│   ├── module2.png
-│   ├── results.png
-│   └── pdf_sample.png
-└── tests/
-    └── smoke_test.py
-```
+│ ├── wizard_state.py # State management and step gating
+│ └── kpi_config.py # KPI definitions and mappings
+├── modules/
+│ ├── module1.py # Objective selection and budget setup
+│ ├── module2.py # Platform selection and weighting
+│ ├── module3.py # Historical data ingestion
+│ ├── module4.py # Constraint preparation
+│ ├── module5.py # LP-based optimisation
+│ ├── module6.py # KPI forecasting and validation
+│ └── module7.py # Decision insight and interpretation
+├── docs/ # Detailed design and modelling documentation
+├── requirements.txt
+└── README.md
 
 > NOTE: The Python files in this template are thin wrappers. Replace the placeholders with your existing logic from your local project.
+
+
+---
+
+## Documentation
+
+Detailed explanations of system behaviour and modelling choices are provided in the `docs/` directory:
+
+- **modules.md** – role and responsibility of each module  
+- **scenarios.md** – scenario design and interpretation logic  
+- **decision_logic.md** – optimisation assumptions and modelling rationale  
+
+These documents expand on the architectural and decision principles outlined above.
+
+---
+
+## Intended Use
+
+This framework is intended for:
+
+- Marketing and growth decision-makers  
+- Analytics and strategy professionals  
+- SMEs operating under constrained budgets  
+- Reviewers interested in applied decision support systems  
+
+The system supports decisions; it does not automate them.
+
+---
+
+## Feedback
+
+The project is shared openly to invite technical review and constructive feedback, particularly on:
+
+- Optimisation logic and constraints  
+- Scenario design and robustness  
+- Decision interpretability and usefulness  
+
+Issues and discussions are welcome.
+
 
 ## Author
 
