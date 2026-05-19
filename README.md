@@ -1,6 +1,4 @@
----
-
-# Marketing Budget Optimisation & Decision Support Framework
+# Marketing Budget Optimisation and Decision Support Framework
 
 ## Overview
 
@@ -88,8 +86,11 @@ A dedicated interpretation layer translates numerical results into decision-read
 For each scenario, the system generates:
 
 * An executive summary explaining the allocation logic
-* Identified risks (for example, over-concentration or volatility)
-* Practical recommendations to support action
+* A classification of the decision as corner-dominant, balanced, or scenario-sensitive
+* A confidence score on a 0 to 100 scale
+* Identification of binding and non-binding policy constraints
+* Two contrasting plans: a performance-first allocation and a risk-managed alternative with an explicit efficiency trade-off
+* Identified risks and practical recommendations
 
 A global stability explanation identifies patterns that persist across scenarios, helping decision-makers identify robust strategies.
 
@@ -111,9 +112,9 @@ These outputs are made to help with accountability, review, and oversight.
 
 ## Technical Architecture
 
-* Language: Python
+* Language: Python 3.11
 * UI: Streamlit
-* Optimisation: Linear Programming
+* Optimisation: Linear Programming (PuLP with CBC solver)
 * State Management: Wizard-based state controller
 * Reporting: PDF (ReportLab), Excel (OpenPyXL)
 
@@ -121,56 +122,29 @@ The system is built to be modular and easy to expand, with each decision layer w
 
 ---
 
-## Why This Project Matters
-
-This project demonstrates applied expertise in:
-
-* Decision Support Systems
-* Constrained optimisation
-* Data-driven strategy under uncertainty
-* Translating analytics into managerial insight
-* Responsible and explainable decision design
-
-It shows real-world analytical thinking, not just academic or simple examples.
-
----
-
-## Intended Use
-
-This framework is intended for:
-
-* Marketing and growth teams
-* Strategy and analytics professionals
-* SMEs and decision-makers working with limited resources
-* Anyone who needs clear, structured optimisation instead of automated results that are hard to explain
-
----
-
-## Feedback and Review
-
-This project is shared openly to welcome technical review and honest feedback.
-
-Comments, issues, and discussion contributions are welcome, particularly on:
-
-* Optimisation logic
-* Scenario design
-* Interpretation quality
-* Decision-making usefulness in practice
-
-## Running the app
-
-This section is provided for reviewers who wish to explore the system locally
+## Running the App
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
+The application opens in your browser at `http://localhost:8501`.
+
+---
+
 ## Tests
 
+The test suite uses pytest:
+
 ```bash
-python tests/smoke_test.py
+pip install pytest
+pytest -q
 ```
+
+The same command runs automatically on every push and pull request via GitHub Actions.
+
+---
 
 ## Project Structure
 
@@ -189,49 +163,81 @@ python tests/smoke_test.py
 │   ├── module6.py          # KPI forecasting and validation
 │   └── module7.py          # Decision insight and interpretation
 ├── docs/                   # Detailed design and modelling documentation
+├── tests/                  # Test suite
+├── LICENSE                 # MIT License
+├── CITATION.cff            # Citation metadata
 ├── requirements.txt
 └── README.md
-
 ```
+
+---
 
 ## Documentation
 
 Detailed explanations of system behaviour and modelling choices are provided in the `docs/` directory:
 
-- **modules.md** – role and responsibility of each module  
-- **scenarios.md** – scenario design and interpretation logic  
-- **decision_logic.md** – optimisation assumptions and modelling rationale  
+* **modules.md** – role and responsibility of each module
+* **scenarios.md** – scenario design and interpretation logic
+* **decision_logic.md** – optimisation assumptions and modelling rationale
 
 These documents expand on the architectural and decision principles outlined above.
+
+---
 
 ## Intended Use
 
 This framework is intended for:
 
-- Marketing and growth decision-makers  
-- Analytics and strategy professionals  
-- SMEs operating under constrained budgets  
-- Reviewers interested in applied decision support systems  
+* Marketing and growth decision-makers
+* Analytics and strategy professionals
+* SMEs operating under constrained budgets
+* Researchers working on decision support systems and explainable optimisation
 
 The system supports decisions; it does not automate them.
 
+---
+
+## Why This Project Matters
+
+This project demonstrates applied expertise in:
+
+* Decision Support Systems
+* Constrained optimisation
+* Data-driven strategy under uncertainty
+* Translating analytics into managerial insight
+* Responsible and explainable decision design
+
+---
+
+## Citation
+
+If you use this software in academic work, please cite it using the metadata in `CITATION.cff`, or as follows:
+
+> Rezvanjoo, H. (2026). *Marketing Budget Optimisation and Decision Support Framework* (Version 0.1.0) [Computer software]. https://github.com/Hoda834/REPO-NAME-HERE
+
+---
 
 ## Feedback
 
 The project is shared openly to invite technical review and constructive feedback, particularly on:
 
-- Optimisation logic and constraints  
-- Scenario design and robustness  
-- Decision interpretability and usefulness  
+* Optimisation logic and constraints
+* Scenario design and robustness
+* Decision interpretability and usefulness
 
-I want you to know that issues and discussions are welcome.
+Issues and discussions are welcome.
 
+---
+
+## License
+
+This project is released under the MIT License. See [LICENSE](LICENSE) for details.
+
+---
 
 ## Author
 
-Created by **Hoda Rezvanjoo**  
-Insight Analyst & Optimisation Model Developer  
-https://hodarezvanjoo.com
-
-
-
+**Hoda Rezvanjoo**
+Independent Researcher
+ORCID: [0009-0006-3882-2669](https://orcid.org/0009-0006-3882-2669)
+Website: [hodarezvanjoo.com](https://hodarezvanjoo.com)
