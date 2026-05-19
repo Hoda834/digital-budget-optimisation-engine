@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Marketing Budget Optimisation and Decision Support Framework"
+abstract: "An open source decision support pipeline for constrained marketing budget allocation across digital platforms and competing business objectives. Integrates Linear Programming optimisation, policy constraints, multi-scenario evaluation, goal-aligned KPI forecasting, and a rule-based decision interpretation layer."
+authors:
+  - family-names: "Rezvanjoo"
+    given-names: "Hoda"
+    orcid: "https://orcid.org/0009-0006-3882-2669"
+version: 0.1.0
+date-released: 2026-05-19
+license: MIT
+repository-code: "https://github.com/Hoda834/REPO-NAME-HERE"
+url: "https://hodarezvanjoo.com"
+keywords:
+  - linear programming
+  - decision support systems
+  - marketing budget allocation
+  - constrained optimisation
+  - scenario analysis
+  - explainable decision making
+  - operations research
+  - python
