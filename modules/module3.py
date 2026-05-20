@@ -1,26 +1,10 @@
+from __future__ import annotations
+
+import math
 from typing import Any, Dict, List
 
 from core.wizard_state import WizardState, GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG
-
-
-KPI_CONFIG: List[Dict[str, Any]] = [
-    {"platform": "fb", "goal": GOAL_AW, "var": "FB_AW_REACH",      "kpi_label": "Reach"},
-    {"platform": "fb", "goal": GOAL_AW, "var": "FB_AW_IMPRESSION", "kpi_label": "Impression"},
-    {"platform": "fb", "goal": GOAL_EN, "var": "FB_EN_ENGAGEMENT", "kpi_label": "Engagement"},
-    {"platform": "fb", "goal": GOAL_WT, "var": "FB_WT_CLICKS",     "kpi_label": "Link Clicks"},
-    {"platform": "fb", "goal": GOAL_LG, "var": "FB_LG_LEADS",      "kpi_label": "Leads"},
-    {"platform": "ig", "goal": GOAL_AW, "var": "IG_AW_REACH",       "kpi_label": "Reach"},
-    {"platform": "ig", "goal": GOAL_EN, "var": "IG_EN_ENGRATERATE", "kpi_label": "Engagement Rate"},
-    {"platform": "ig", "goal": GOAL_WT, "var": "IG_WT_CLICKS",      "kpi_label": "Link Clicks"},
-    {"platform": "ig", "goal": GOAL_LG, "var": "IG_LG_LEADS",       "kpi_label": "Leads"},
-    {"platform": "li", "goal": GOAL_AW, "var": "LI_AW_REACH",       "kpi_label": "Reach"},
-    {"platform": "li", "goal": GOAL_EN, "var": "LI_EN_ENGRATERATE", "kpi_label": "Engagement Rate"},
-    {"platform": "li", "goal": GOAL_LG, "var": "LI_LG_LEADS",       "kpi_label": "Leads"},
-    {"platform": "yt", "goal": GOAL_AW, "var": "YT_AW_VIEWS",       "kpi_label": "Views"},
-    {"platform": "yt", "goal": GOAL_EN, "var": "YT_EN_ENGRATERATE", "kpi_label": "Engagement Rate"},
-    {"platform": "yt", "goal": GOAL_WT, "var": "YT_WT_CLICKS",      "kpi_label": "Link Clicks"},
-    {"platform": "yt", "goal": GOAL_LG, "var": "YT_LG_LEADS",       "kpi_label": "Leads"},
-]
+from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE, get_kpi_rows
 
 
 def get_platform_kpis(platform: str, active_goals_for_platform: List[str]) -> List[Dict[str, Any]]:
@@ -34,6 +18,12 @@ def get_platform_kpis(platform: str, active_goals_for_platform: List[str]) -> Li
 def reset_wizard(state: WizardState) -> WizardState:
     state.reset()
     return state
+
+
+def _validate_finite(value: float, label: str) -> float:
+    if math.isnan(value) or math.isinf(value):
+        raise ValueError(f"{label} must be a finite number.")
+    return value
 
 
 def ask_required_string(prompt: str) -> str:
@@ -55,13 +45,16 @@ def ask_required_budget_gt1(prompt: str) -> float:
         except ValueError:
             print("Please enter a valid number.")
             continue
+        if math.isnan(value) or math.isinf(value):
+            print("Please enter a finite number.")
+            continue
         if value <= 1:
             print("Value must be greater than 1.")
             continue
         return value
 
 
-def ask_required_kpi_gt1(prompt: str) -> float:
+def ask_required_kpi_count(prompt: str) -> float:
     while True:
         text = input(prompt).strip()
         if not text:
@@ -72,10 +65,71 @@ def ask_required_kpi_gt1(prompt: str) -> float:
         except ValueError:
             print("Please enter a valid numeric value.")
             continue
-        if value <= 1:
-            print("Value must be greater than 1.")
+        if math.isnan(value) or math.isinf(value):
+            print("Please enter a finite number.")
+            continue
+        if value <= 0:
+            print("Count KPIs must be greater than zero.")
             continue
         return value
+
+
+def ask_required_kpi_rate(prompt: str) -> float:
+    while True:
+        text = input(prompt).strip()
+        if not text:
+            print("This field is required. Please enter a value.")
+            continue
+        try:
+            value = float(text)
+        except ValueError:
+            print("Please enter a valid numeric value.")
+            continue
+        if math.isnan(value) or math.isinf(value):
+            print("Please enter a finite number.")
+            continue
+        # Accept either fractional form (0.04) or percent form (4 → 0.04)
+        if value > 1.0:
+            if value <= 100.0:
+                value = value / 100.0
+            else:
+                print("Rate must be a fraction in [0, 1] or a percentage in [0, 100].")
+                continue
+        if value <= 0.0:
+            print("Rate must be greater than zero.")
+            continue
+        return value
+
+
+def _compute_kpi_ratios_for_platform(
+    platform: str,
+    budget: float,
+    kpi_values: Dict[str, float],
+) -> Dict[str, Dict[str, float]]:
+    """Return kpi_ratios[goal][var] = productivity for one platform.
+
+    For count KPIs the productivity is value / budget (units per money).
+    For rate KPIs the productivity is the rate itself (already dimensionless;
+    dividing by budget would be meaningless).
+    """
+    out: Dict[str, Dict[str, float]] = {}
+    for row in KPI_CONFIG:
+        if row["platform"] != platform:
+            continue
+        var = row["var"]
+        if var not in kpi_values:
+            continue
+        goal = row["goal"]
+        kind = row.get("kind", KIND_COUNT)
+        value = float(kpi_values[var])
+        if kind == KIND_RATE:
+            productivity = value
+        else:
+            if budget <= 0:
+                continue
+            productivity = value / budget
+        out.setdefault(goal, {})[var] = productivity
+    return out
 
 
 def run_module3(state: WizardState) -> WizardState:
@@ -93,7 +147,12 @@ def run_module3(state: WizardState) -> WizardState:
 
     temp_module3_data: Dict[str, Dict[str, Any]] = {}
 
+    currency = getattr(state, "currency", "GBP")
+    duration_hint = getattr(state, "campaign_duration_days", None)
+
     print("\n=== MODULE 3: Historical budget and KPI data collection ===\n")
+    if duration_hint:
+        print(f"(Use a comparable window to your planned {duration_hint}-day campaign.)\n")
 
     for platform in state.active_platforms:
         print("\n------------------------------------------")
@@ -106,14 +165,14 @@ def run_module3(state: WizardState) -> WizardState:
         )
 
         budget = ask_required_budget_gt1(
-            f"Enter the total budget spent on {platform} in this period (numeric > 1): "
+            f"Enter the historical budget spent on {platform} "
+            f"in this period in {currency} (numeric > 1): "
         )
 
         active_goals = state.goals_by_platform.get(platform, [])
-        if not active_goals:
-            platform_kpis: List[Dict[str, Any]] = []
-        else:
-            platform_kpis = get_platform_kpis(platform, active_goals)
+        platform_kpis: List[Dict[str, Any]] = (
+            get_platform_kpis(platform, active_goals) if active_goals else []
+        )
 
         kpi_values: Dict[str, float] = {}
 
@@ -121,11 +180,20 @@ def run_module3(state: WizardState) -> WizardState:
             var = kpi_def["var"]
             label = kpi_def["kpi_label"]
             goal = kpi_def["goal"]
-            prompt = (
-                f"{platform} | Goal: {goal} | KPI: {label} "
-                f"({var}) value (> 1): "
-            )
-            value = ask_required_kpi_gt1(prompt)
+            kind = kpi_def.get("kind", KIND_COUNT)
+
+            if kind == KIND_RATE:
+                prompt = (
+                    f"{platform} | Goal: {goal} | KPI: {label} ({var}) "
+                    f"rate (0-1 or 0-100%): "
+                )
+                value = ask_required_kpi_rate(prompt)
+            else:
+                prompt = (
+                    f"{platform} | Goal: {goal} | KPI: {label} ({var}) "
+                    f"count (> 0): "
+                )
+                value = ask_required_kpi_count(prompt)
             kpi_values[var] = value
 
         temp_module3_data[platform] = {
@@ -141,33 +209,96 @@ def run_module3(state: WizardState) -> WizardState:
             return reset_wizard(state)
 
         if choice == "submit":
-            platform_budgets: Dict[str, float] = {}
-            platform_kpis: Dict[str, Dict[str, float]] = {}
-            kpi_ratios: Dict[str, Dict[str, float]] = {}
-
-            for platform, pdata in temp_module3_data.items():
-                budget = float(pdata["budget"])
-                kpis: Dict[str, float] = pdata["kpis"]
-
-                platform_budgets[platform] = budget
-                platform_kpis[platform] = dict(kpis)
-
-                ratios_for_p: Dict[str, float] = {}
-                if budget > 0:
-                    for kpi_var, value in kpis.items():
-                        ratios_for_p[kpi_var] = float(value) / budget
-                kpi_ratios[platform] = ratios_for_p
-
-            state.complete_module3_and_advance(
-                module3_data=temp_module3_data,
-                platform_budgets=platform_budgets,
-                platform_kpis=platform_kpis,
-                kpi_ratios=kpi_ratios,
-            )
-
-            return state
+            return _finalise_module3(state, temp_module3_data)
 
         print("Invalid choice. Please type exactly 'submit' or 'reset'.")
+
+
+def _finalise_module3(
+    state: WizardState,
+    temp_module3_data: Dict[str, Dict[str, Any]],
+) -> WizardState:
+    platform_budgets: Dict[str, float] = {}
+    platform_kpis: Dict[str, Dict[str, float]] = {}
+    kpi_ratios: Dict[str, Dict[str, Dict[str, float]]] = {}
+
+    for platform, pdata in temp_module3_data.items():
+        budget = float(pdata["budget"])
+        kpis: Dict[str, float] = pdata["kpis"]
+
+        platform_budgets[platform] = budget
+        platform_kpis[platform] = dict(kpis)
+        kpi_ratios[platform] = _compute_kpi_ratios_for_platform(platform, budget, kpis)
+
+    state.complete_module3_and_advance(
+        module3_data=temp_module3_data,
+        platform_budgets=platform_budgets,
+        platform_kpis=platform_kpis,
+        kpi_ratios=kpi_ratios,
+    )
+
+    return state
+
+
+def finalise_module3_from_inputs(
+    state: WizardState,
+    platform_inputs: Dict[str, Dict[str, Any]],
+) -> WizardState:
+    """Non-interactive entry point. ``platform_inputs[platform]`` must contain
+    ``time_window``, ``budget`` and ``kpis`` keys, matching the shape produced by
+    ``run_module3``."""
+    if state.module3_finalised:
+        raise RuntimeError("Module 3 has already been finalised. Reset to run again.")
+    if not state.module2_finalised:
+        raise RuntimeError("Module 2 must be finalised before running Module 3.")
+    if not state.active_platforms:
+        raise RuntimeError("No active platforms found. Nothing to do in Module 3.")
+
+    cleaned: Dict[str, Dict[str, Any]] = {}
+    for platform in state.active_platforms:
+        if platform not in platform_inputs:
+            raise ValueError(f"Module 3 inputs missing for platform {platform!r}.")
+        pin = platform_inputs[platform]
+        try:
+            budget = _validate_finite(float(pin["budget"]), f"budget for {platform}")
+        except (KeyError, TypeError, ValueError) as e:
+            raise ValueError(f"Module 3 inputs invalid for platform {platform!r}: {e}") from e
+        if budget <= 1.0:
+            raise ValueError(f"Historical budget for {platform!r} must be greater than 1.")
+        time_window = str(pin.get("time_window", "")).strip()
+        if not time_window:
+            raise ValueError(f"Module 3 inputs for {platform!r} need a non-empty time_window.")
+
+        raw_kpis = pin.get("kpis", {})
+        if not isinstance(raw_kpis, dict):
+            raise ValueError(f"Module 3 inputs for {platform!r}: kpis must be a dict.")
+
+        validated_kpis: Dict[str, float] = {}
+        active_goals = state.goals_by_platform.get(platform, [])
+        allowed_vars = {row["var"] for row in KPI_CONFIG
+                        if row["platform"] == platform and row["goal"] in active_goals}
+        for var, raw_value in raw_kpis.items():
+            if var not in allowed_vars:
+                continue
+            v = _validate_finite(float(raw_value), f"KPI {var}")
+            kind = next((r.get("kind", KIND_COUNT) for r in KPI_CONFIG
+                         if r["platform"] == platform and r["var"] == var), KIND_COUNT)
+            if kind == KIND_RATE:
+                if v > 1.0:
+                    if v <= 100.0:
+                        v = v / 100.0
+                    else:
+                        raise ValueError(f"Rate KPI {var} must be in [0,1] or [0,100], got {raw_value}.")
+                if v <= 0.0:
+                    raise ValueError(f"Rate KPI {var} must be greater than zero.")
+            else:
+                if v <= 0:
+                    raise ValueError(f"Count KPI {var} must be greater than zero.")
+            validated_kpis[var] = v
+
+        cleaned[platform] = {"time_window": time_window, "budget": budget, "kpis": validated_kpis}
+
+    return _finalise_module3(state, cleaned)
 
 
 if __name__ == "__main__":
@@ -179,8 +310,8 @@ if __name__ == "__main__":
         valid_goals=[GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG],
         active_platforms=["fb", "ig"],
         goals_by_platform={
-            "fb": [GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG],
-            "ig": [GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG],
+            "fb": [GOAL_AW, GOAL_EN],
+            "ig": [GOAL_AW, GOAL_LG],
         },
     )
     try:
