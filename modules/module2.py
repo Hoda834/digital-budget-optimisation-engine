@@ -93,9 +93,10 @@ def validate_module2(state: WizardState) -> None:
         p1 = prio.priority_1
         p2 = prio.priority_2
 
-        if p1 is None and p2 is not None:
+        if p1 is None:
             raise ValueError(
-                f"On platform '{p}', you cannot set Priority 2 without Priority 1."
+                f"On platform '{p}', you must set Priority 1 "
+                f"(at least one goal must be prioritised on every selected platform)."
             )
 
         if p1 is not None and p2 is not None and p1 == p2:
@@ -122,6 +123,10 @@ def validate_module2(state: WizardState) -> None:
             )
 
 
+RANK_NOT_PRIORITISED = 0  # internal sentinel: goal is not a priority on the platform
+PRIORITY_SCORE = {1: 2.0, 2: 1.0}  # rank-1 gets twice the weight of rank-2
+
+
 def compute_priority_ranks(state: WizardState) -> None:
     if not state.valid_goals:
         raise ValueError("Cannot compute ranks, no valid goals in state.")
@@ -139,18 +144,16 @@ def compute_priority_ranks(state: WizardState) -> None:
         p2 = prio.priority_2
 
         ranks_for_p: Dict[str, int] = {}
-
-        if p1 is None and p2 is None:
-            for g in valid_goals:
+        for g in valid_goals:
+            if g == p1:
                 ranks_for_p[g] = 1
-        else:
-            for g in valid_goals:
-                if g == p1:
-                    ranks_for_p[g] = 1
-                elif p2 is not None and g == p2:
-                    ranks_for_p[g] = 2
-                else:
-                    ranks_for_p[g] = 3
+            elif p2 is not None and g == p2:
+                ranks_for_p[g] = 2
+            else:
+                # Not chosen as a priority on this platform.
+                # We deliberately omit it from goals_by_platform downstream,
+                # so it does not enter the LP for this platform.
+                ranks_for_p[g] = RANK_NOT_PRIORITISED
 
         state.priority_rank[p] = ranks_for_p
 
@@ -172,20 +175,16 @@ def compute_platform_weights(state: WizardState) -> None:
 
         scores: Dict[str, float] = {}
         for g in valid_goals:
-            rank = ranks_for_p.get(g)
-            if rank is None:
-                raise ValueError(
-                    f"Missing rank for goal '{g}' on platform '{p}'. "
-                    f"Check rank computation."
-                )
-            scores[g] = float(4 - rank)
+            rank = ranks_for_p.get(g, RANK_NOT_PRIORITISED)
+            scores[g] = PRIORITY_SCORE.get(rank, 0.0)
 
         total_score = sum(scores.values())
         if total_score <= 0:
-            raise ValueError(
-                f"Total score is non positive for platform '{p}'. "
-                f"This indicates an internal logic error."
-            )
+            # No priorities set on this selected platform — leave weights empty.
+            # validate_module2 should have already required at least priority_1,
+            # so reaching this branch means the platform contributes nothing.
+            state.platform_weights[p] = {}
+            continue
 
         weights_for_p: Dict[str, float] = {g: scores[g] / total_score for g in valid_goals}
 
@@ -255,20 +254,22 @@ def apply_default_policies(
     if "base" not in cleaned_multipliers:
         cleaned_multipliers["base"] = 1.0
 
-    try:
-        state.min_spend_per_platform = min_spend_per_platform
-    except Exception:
-        setattr(state, "min_spend_per_platform", min_spend_per_platform)
+    total_min_platform = sum(min_spend_per_platform.values())
+    total_min_goal = sum(min_budget_per_goal.values())
+    # The two floor sets bind simultaneously, so we check against the max — that's the
+    # actual lower bound on total spend. We keep a 10% headroom for the optimiser.
+    binding_floor = max(total_min_platform, total_min_goal)
+    if binding_floor > total_budget * 0.9:
+        raise ValueError(
+            f"Module 2 default policies require {binding_floor:.2f} as a minimum spend "
+            f"but the total budget is {total_budget:.2f}. Reduce min_platform_share "
+            f"(currently {min_platform_share}) or min_goal_pool_share "
+            f"(currently {min_goal_pool_share})."
+        )
 
-    try:
-        state.min_budget_per_goal = min_budget_per_goal
-    except Exception:
-        setattr(state, "min_budget_per_goal", min_budget_per_goal)
-
-    try:
-        state.scenario_multipliers = cleaned_multipliers
-    except Exception:
-        setattr(state, "scenario_multipliers", cleaned_multipliers)
+    state.min_spend_per_platform = min_spend_per_platform
+    state.min_budget_per_goal = min_budget_per_goal
+    state.scenario_multipliers = cleaned_multipliers
 
     return state
 
