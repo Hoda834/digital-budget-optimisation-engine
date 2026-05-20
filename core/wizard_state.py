@@ -18,6 +18,9 @@ PLATFORM_YT = "yt"
 
 ALLOWED_PLATFORMS: Set[str] = {PLATFORM_FB, PLATFORM_IG, PLATFORM_LI, PLATFORM_YT}
 
+ALLOWED_CURRENCIES: Set[str] = {"GBP", "USD", "EUR"}
+DEFAULT_CURRENCY = "GBP"
+
 
 class FlowStateError(Exception):
     pass
@@ -36,6 +39,8 @@ class WizardState:
 
     valid_goals: List[str] = field(default_factory=list)
     total_budget: Optional[float] = None
+    currency: str = DEFAULT_CURRENCY
+    campaign_duration_days: Optional[int] = None
 
     system_goal_weights: Dict[str, float] = field(default_factory=dict)
 
@@ -68,7 +73,19 @@ class WizardState:
         if self.current_step != expected_step:
             raise FlowStateError(f"Invalid flow: current_step={self.current_step}, expected={expected_step}.")
 
-    def complete_module1_and_advance(self, *, valid_goals: Sequence[str], total_budget: float) -> None:
+    def reset(self) -> None:
+        fresh = WizardState()
+        for f in fresh.__dataclass_fields__:
+            setattr(self, f, getattr(fresh, f))
+
+    def complete_module1_and_advance(
+        self,
+        *,
+        valid_goals: Sequence[str],
+        total_budget: float,
+        currency: str = DEFAULT_CURRENCY,
+        campaign_duration_days: Optional[int] = None,
+    ) -> None:
         self._ensure_step(expected_step=1)
         if self.module1_finalised:
             raise FlowStateError("Module 1 has already been finalised. Reset the wizard to change it.")
@@ -82,8 +99,19 @@ class WizardState:
         if b <= 1.0:
             raise ValueError("Total budget must be greater than 1 in Module 1.")
 
+        cur = str(currency).strip().upper()
+        if cur not in ALLOWED_CURRENCIES:
+            raise ValueError(f"Currency {cur!r} is not supported. Allowed: {sorted(ALLOWED_CURRENCIES)}.")
+
+        if campaign_duration_days is not None:
+            d = int(campaign_duration_days)
+            if d <= 0:
+                raise ValueError("campaign_duration_days must be a positive integer.")
+            self.campaign_duration_days = d
+
         self.valid_goals = list(dict.fromkeys(goals))
         self.total_budget = b
+        self.currency = cur
 
         self.module1_finalised = True
         self.current_step = 2
@@ -152,19 +180,26 @@ class WizardState:
                     cleaned[str(s_name)][g] = fv
             self.scenario_goal_multipliers = cleaned
         else:
+            # Convention: multiplier > 1 means the scenario expects the goal to outperform
+            # its base productivity; < 1 means it underperforms. Optimistic raises
+            # downstream/conversion goals (LG, WT); conservative raises upper-funnel
+            # goals (AW, EN) since reach is more predictable than conversion.
             base_map = {g: 1.0 for g in self.valid_goals}
             conservative_map = {g: 1.0 for g in self.valid_goals}
             optimistic_map = {g: 1.0 for g in self.valid_goals}
 
             if GOAL_AW in self.valid_goals:
-                conservative_map[GOAL_AW] = 1.1
-                optimistic_map[GOAL_AW] = 0.9
-            if GOAL_LG in self.valid_goals:
-                conservative_map[GOAL_LG] = 0.9
-                optimistic_map[GOAL_LG] = 1.1
+                conservative_map[GOAL_AW] = 1.05
+                optimistic_map[GOAL_AW] = 0.95
+            if GOAL_EN in self.valid_goals:
+                conservative_map[GOAL_EN] = 1.05
+                optimistic_map[GOAL_EN] = 0.95
             if GOAL_WT in self.valid_goals:
                 conservative_map[GOAL_WT] = 0.95
-                optimistic_map[GOAL_WT] = 1.05
+                optimistic_map[GOAL_WT] = 1.10
+            if GOAL_LG in self.valid_goals:
+                conservative_map[GOAL_LG] = 0.85
+                optimistic_map[GOAL_LG] = 1.20
 
             self.scenario_goal_multipliers = {
                 "base": base_map,

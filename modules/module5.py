@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+import math
+
 import pulp
 
 from core.wizard_state import WizardState, FlowStateError
-from core.kpi_config import KPI_CONFIG
+from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE
 
 
 class Module5ValidationError(Exception):
@@ -14,6 +16,16 @@ class Module5ValidationError(Exception):
 
 
 OBJECTIVE_SCALE = 1000.0
+
+# Three diminishing-returns brackets per (platform, goal) cell.
+# Each tuple is (cap_fraction_of_total_budget, yield_multiplier).
+# The LP can pour budget into bracket b only after bracket b-1 is full,
+# at a yield = base_r_pg × yield_multiplier for that bracket.
+YIELD_BRACKETS: Tuple[Tuple[float, float], ...] = (
+    (0.25, 1.00),
+    (0.35, 0.65),
+    (0.40, 0.35),
+)
 
 
 @dataclass
@@ -23,6 +35,7 @@ class Module5LPInput:
     system_goal_weights: Dict[str, float]
     platform_goal_weights: Dict[str, Dict[str, float]]
     r_pg: Dict[str, Dict[str, float]]
+    goals_by_platform: Dict[str, List[str]]
     min_spend_per_platform: Dict[str, float]
     min_budget_per_goal: Dict[str, float]
     scenario_multipliers: Dict[str, float]
@@ -39,6 +52,7 @@ class Module5LPResult:
     combined_weight_pg: Dict[str, Dict[str, float]]
     estimated_kpi_per_platform_goal: Dict[str, Dict[str, float]]
     objective_value_raw: float = 0.0
+    effective_budget_cap: float = 0.0
 
 
 @dataclass
@@ -56,14 +70,23 @@ class Module5ScenarioBundle:
         raise Module5ValidationError("No scenario results available.")
 
 
-def _safe_float(value: Any, default: float = 0.0) -> float:
+def _to_finite_float(value: Any, *, label: str) -> float:
     try:
         x = float(value)
-    except Exception:
+    except (TypeError, ValueError) as e:
+        raise Module5ValidationError(f"{label} must be numeric, got {value!r}.") from e
+    if math.isnan(x) or math.isinf(x):
+        raise Module5ValidationError(f"{label} must be finite, got {value!r}.")
+    return x
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    # Lenient coercion used for optional inputs only. Bad data still raises elsewhere.
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
         return default
-    if x != x:
-        return default
-    if x == float("inf") or x == float("-inf"):
+    if math.isnan(x) or math.isinf(x):
         return default
     return x
 
@@ -82,23 +105,32 @@ def _nonneg_dict(d: Optional[Dict[str, Any]]) -> Dict[str, float]:
 
 def _build_r_pg_from_state(state: WizardState) -> Dict[str, Dict[str, float]]:
     if not getattr(state, "kpi_ratios", None):
-        raise Module5ValidationError("Module 5 cannot run, state.kpi_ratios is empty. Check Module 3.")
+        raise Module5ValidationError(
+            "Module 5 cannot run, state.kpi_ratios is empty. Check Module 3."
+        )
+    if not any(state.kpi_ratios.values()):
+        raise Module5ValidationError(
+            "Module 5 cannot run, state.kpi_ratios has no per-platform data. "
+            "Check Module 3 (shape mismatch or no KPI values collected)."
+        )
 
     if not getattr(state, "active_platforms", None):
-        raise Module5ValidationError("Module 5 cannot run, state.active_platforms is empty. Check Module 2.")
+        raise Module5ValidationError(
+            "Module 5 cannot run, state.active_platforms is empty. Check Module 2."
+        )
 
-    vars_by_platform_goal: Dict[str, Dict[str, List[str]]] = {}
-    for row in KPI_CONFIG:
-        p = str(row["platform"])
-        g = str(row["goal"])
-        var = str(row["var"])
-        vars_by_platform_goal.setdefault(p, {}).setdefault(g, []).append(var)
+    # Look up KPI kind per (platform, var) so we know whether to treat r as rate or per-money.
+    kind_lookup: Dict[Tuple[str, str], str] = {
+        (row["platform"], row["var"]): row.get("kind", KIND_COUNT)
+        for row in KPI_CONFIG
+    }
 
     r_pg: Dict[str, Dict[str, float]] = {}
+    populated_cells = 0
 
     for p in state.active_platforms:
         ratios_for_p = state.kpi_ratios.get(p, {})
-        if not isinstance(ratios_for_p, dict):
+        if not isinstance(ratios_for_p, dict) or not ratios_for_p:
             continue
 
         r_pg[p] = {}
@@ -107,32 +139,51 @@ def _build_r_pg_from_state(state: WizardState) -> Dict[str, Dict[str, float]]:
             if not isinstance(ratios_for_pg, dict):
                 ratios_for_pg = {}
 
-            kpi_vars = vars_by_platform_goal.get(p, {}).get(g, [])
-            productivities: List[float] = []
-
-            for var in kpi_vars:
-                if var not in ratios_for_pg:
+            # Separate counts (per-money productivity) from rates (dimensionless).
+            count_vals: List[float] = []
+            rate_vals: List[float] = []
+            for var, raw_val in ratios_for_pg.items():
+                kind = kind_lookup.get((p, var), KIND_COUNT)
+                val = _safe_float(raw_val, 0.0)
+                if val <= 0.0:
                     continue
-                val = _safe_float(ratios_for_pg.get(var, 0.0), 0.0)
-                if val > 0.0:
-                    productivities.append(val)
+                if kind == KIND_RATE:
+                    rate_vals.append(val)
+                else:
+                    count_vals.append(val)
 
-            if productivities:
-                r_pg[p][g] = sum(productivities) / float(len(productivities))
+            # When both kinds are present, the count productivity is the LP-meaningful
+            # signal (currency-scaled). The rate becomes a soft multiplicative boost so
+            # that, say, "engagement rate" still tilts the optimiser without distorting
+            # units. When only rates exist (LI/IG/YT engagement), we use the rate itself.
+            if count_vals:
+                productivity = sum(count_vals) / float(len(count_vals))
+                if rate_vals:
+                    rate_mean = sum(rate_vals) / float(len(rate_vals))
+                    productivity *= (1.0 + rate_mean)
+            elif rate_vals:
+                productivity = sum(rate_vals) / float(len(rate_vals))
             else:
-                r_pg[p][g] = 0.0
+                productivity = 0.0
 
-    r_pg = {p: gdict for p, gdict in r_pg.items() if gdict}
+            r_pg[p][g] = productivity
+            if productivity > 0.0:
+                populated_cells += 1
 
-    if not r_pg:
+    r_pg = {p: gdict for p, gdict in r_pg.items() if any(v > 0 for v in gdict.values())}
+
+    if populated_cells == 0 or not r_pg:
         raise Module5ValidationError(
-            "Module 5 r_pg construction produced an empty dictionary. Check KPI_CONFIG, kpi_ratios, active_platforms and valid_goals."
+            "Module 5 r_pg construction produced no positive productivities. "
+            "Check that Module 3 KPI values align with KPI_CONFIG (variable names match) "
+            "and that goals_by_platform from Module 2 covers at least one KPI per cell."
         )
 
     return r_pg
 
 
 def _build_system_goal_weights(state: WizardState) -> Dict[str, float]:
+    # 1) honour any caller-set weights
     if getattr(state, "system_goal_weights", None):
         raw = {
             g: max(0.0, _safe_float(w, 0.0))
@@ -146,6 +197,27 @@ def _build_system_goal_weights(state: WizardState) -> Dict[str, float]:
     if not getattr(state, "valid_goals", None):
         raise Module5ValidationError("Cannot build system_goal_weights because valid_goals is empty.")
 
+    # 2) derive from Module 2 platform priorities: each platform contributes
+    #    rank-1 -> 2, rank-2 -> 1 to its respective goal. This makes the system-level
+    #    weight a frequency-weighted preference instead of inert uniformity.
+    derived: Dict[str, float] = {g: 0.0 for g in state.valid_goals}
+    priority_map = getattr(state, "priority_rank", {}) or {}
+    for p, ranks in priority_map.items():
+        if not isinstance(ranks, dict):
+            continue
+        for g, rank in ranks.items():
+            if g not in derived:
+                continue
+            if rank == 1:
+                derived[g] += 2.0
+            elif rank == 2:
+                derived[g] += 1.0
+
+    total = sum(derived.values())
+    if total > 0.0:
+        return {g: w / total for g, w in derived.items()}
+
+    # 3) last resort: uniform
     n = float(len(state.valid_goals))
     return {g: 1.0 / n for g in state.valid_goals}
 
@@ -173,12 +245,11 @@ def _default_scenario_multipliers() -> Dict[str, float]:
 
 
 def _default_scenario_goal_multipliers(valid_goals: List[str]) -> Dict[str, Dict[str, float]]:
-    scenarios = _default_scenario_multipliers()
-    out: Dict[str, Dict[str, float]] = {}
-    for s_name, m in scenarios.items():
-        out[s_name] = {g: float(m) for g in valid_goals}
-    if "base" not in out:
-        out["base"] = {g: 1.0 for g in valid_goals}
+    out: Dict[str, Dict[str, float]] = {
+        "base": {g: 1.0 for g in valid_goals},
+        "conservative": {g: 1.0 for g in valid_goals},
+        "optimistic": {g: 1.0 for g in valid_goals},
+    }
     return out
 
 
@@ -213,10 +284,7 @@ def _extract_policy_from_state(
                 continue
             scenario_goal_multipliers[str(scenario_name)] = {}
             for g in valid_goals:
-                if g in gmap:
-                    v = _safe_float(gmap.get(g, 1.0), 1.0)
-                else:
-                    v = 1.0
+                v = _safe_float(gmap.get(g, 1.0), 1.0) if g in gmap else 1.0
                 if v <= 0.0:
                     v = 1.0
                 scenario_goal_multipliers[str(scenario_name)][g] = float(v)
@@ -240,10 +308,13 @@ def _extract_policy_from_state(
     sum_min_platform = sum(min_spend_per_platform.values())
     sum_min_goal = sum(min_budget_per_goal.values())
 
-    if sum_min_platform > total_budget + 1e-9:
-        raise Module5ValidationError("Infeasible policy: sum of minimum platform spends exceeds total budget.")
-    if sum_min_goal > total_budget + 1e-9:
-        raise Module5ValidationError("Infeasible policy: sum of minimum goal budgets exceeds total budget.")
+    # Feasibility is checked against the *binding* floor (the larger of the two).
+    binding_floor = max(sum_min_platform, sum_min_goal)
+    if binding_floor > total_budget + 1e-9:
+        raise Module5ValidationError(
+            f"Infeasible policy: binding minimum spend {binding_floor:.2f} exceeds total "
+            f"budget {total_budget:.2f}."
+        )
 
     return min_spend_per_platform, min_budget_per_goal, sm, scenario_goal_multipliers
 
@@ -268,6 +339,11 @@ def build_module5_input_from_state(state: WizardState) -> Module5LPInput:
     r_pg = _build_r_pg_from_state(state)
 
     active_platforms = list(r_pg.keys())
+    goals_by_platform = {
+        p: list(state.goals_by_platform.get(p, []) or list(state.valid_goals))
+        for p in active_platforms
+    }
+
     min_spend_per_platform, min_budget_per_goal, scenario_multipliers, scenario_goal_multipliers = _extract_policy_from_state(
         state=state,
         valid_goals=list(state.valid_goals),
@@ -281,6 +357,7 @@ def build_module5_input_from_state(state: WizardState) -> Module5LPInput:
         system_goal_weights=system_goal_weights,
         platform_goal_weights=platform_goal_weights,
         r_pg=r_pg,
+        goals_by_platform=goals_by_platform,
         min_spend_per_platform=min_spend_per_platform,
         min_budget_per_goal=min_budget_per_goal,
         scenario_multipliers=scenario_multipliers,
@@ -295,13 +372,17 @@ def _solve_single_lp(
     system_goal_weights: Dict[str, float],
     platform_goal_weights: Dict[str, Dict[str, float]],
     r_pg: Dict[str, Dict[str, float]],
+    goals_by_platform: Dict[str, List[str]],
     min_spend_per_platform: Dict[str, float],
     min_budget_per_goal: Dict[str, float],
+    budget_cap: float,
 ) -> Module5LPResult:
     if not valid_goals:
         raise Module5ValidationError("Module 5 LP, valid_goals is empty.")
     if total_budget <= 1:
         raise Module5ValidationError("Module 5 LP, total_budget must be greater than 1.")
+    if budget_cap <= 0:
+        raise Module5ValidationError("Module 5 LP, budget_cap must be greater than zero.")
     if not system_goal_weights:
         raise Module5ValidationError("Module 5 LP, system_goal_weights is empty.")
     if not platform_goal_weights:
@@ -310,6 +391,13 @@ def _solve_single_lp(
         raise Module5ValidationError("Module 5 LP, r_pg is empty.")
 
     platforms = list(r_pg.keys())
+
+    # Effective goals per platform: only those that Module 2 prioritised AND that have a
+    # positive productivity from Module 3.
+    eff_goals: Dict[str, List[str]] = {}
+    for p in platforms:
+        allowed = set(goals_by_platform.get(p, [])) or set(valid_goals)
+        eff_goals[p] = [g for g in valid_goals if g in allowed and r_pg.get(p, {}).get(g, 0.0) > 0]
 
     combined_weight_pg: Dict[str, Dict[str, float]] = {}
     for p in platforms:
@@ -322,29 +410,69 @@ def _solve_single_lp(
 
     model = pulp.LpProblem("Budget_Allocation_Per_Platform_And_Goal", pulp.LpMaximize)
 
-    x_vars: Dict[str, Dict[str, pulp.LpVariable]] = {}
-    for p in platforms:
-        x_vars[p] = {}
-        for g in valid_goals:
-            x_vars[p][g] = pulp.LpVariable(f"x_{p}_{g}", lowBound=0.0, cat="Continuous")
+    # Per-bracket decision variables: x[p][g][b]
+    x_brackets: Dict[str, Dict[str, List[pulp.LpVariable]]] = {}
+    bracket_caps: List[float] = [frac * total_budget for frac, _yield in YIELD_BRACKETS]
+    bracket_yields: List[float] = [y for _frac, y in YIELD_BRACKETS]
 
+    for p in platforms:
+        x_brackets[p] = {}
+        for g in valid_goals:
+            if g not in eff_goals[p]:
+                # Force allocation to zero by capping each bracket at zero.
+                x_brackets[p][g] = [
+                    pulp.LpVariable(f"x_{p}_{g}_b{i}", lowBound=0.0, upBound=0.0, cat="Continuous")
+                    for i in range(len(YIELD_BRACKETS))
+                ]
+                continue
+            x_brackets[p][g] = [
+                pulp.LpVariable(
+                    f"x_{p}_{g}_b{i}",
+                    lowBound=0.0,
+                    upBound=bracket_caps[i],
+                    cat="Continuous",
+                )
+                for i in range(len(YIELD_BRACKETS))
+            ]
+
+    # Objective: Σ combined_weight × r_pg × Σ_b (yield_b × x_b)
     model += pulp.lpSum(
-        combined_weight_pg[p][g] * _safe_float(r_pg.get(p, {}).get(g, 0.0), 0.0) * x_vars[p][g]
+        combined_weight_pg[p][g]
+        * _safe_float(r_pg.get(p, {}).get(g, 0.0), 0.0)
+        * bracket_yields[b]
+        * x_brackets[p][g][b]
         for p in platforms
         for g in valid_goals
+        for b in range(len(YIELD_BRACKETS))
     )
 
-    model += pulp.lpSum(x_vars[p][g] for p in platforms for g in valid_goals) <= total_budget
+    # Total budget cap (scenario-scaled).
+    model += pulp.lpSum(
+        x_brackets[p][g][b]
+        for p in platforms
+        for g in valid_goals
+        for b in range(len(YIELD_BRACKETS))
+    ) <= budget_cap
 
+    # Per-platform minimums.
     for p in platforms:
         min_p = _safe_float(min_spend_per_platform.get(p, 0.0), 0.0)
         if min_p > 0.0:
-            model += pulp.lpSum(x_vars[p][g] for g in valid_goals) >= min_p
+            model += pulp.lpSum(
+                x_brackets[p][g][b]
+                for g in valid_goals
+                for b in range(len(YIELD_BRACKETS))
+            ) >= min_p
 
+    # Per-goal minimums.
     for g in valid_goals:
         min_g = _safe_float(min_budget_per_goal.get(g, 0.0), 0.0)
         if min_g > 0.0:
-            model += pulp.lpSum(x_vars[p][g] for p in platforms) >= min_g
+            model += pulp.lpSum(
+                x_brackets[p][g][b]
+                for p in platforms
+                for b in range(len(YIELD_BRACKETS))
+            ) >= min_g
 
     model.solve(pulp.PULP_CBC_CMD(msg=False))
 
@@ -362,19 +490,26 @@ def _solve_single_lp(
         total_p = 0.0
 
         for g in valid_goals:
-            val = _safe_float(getattr(x_vars[p][g], "varValue", 0.0), 0.0)
-            if val < 0.0:
-                val = 0.0
+            cell_total = 0.0
+            cell_yield_sum = 0.0
+            for b in range(len(YIELD_BRACKETS)):
+                v = _safe_float(getattr(x_brackets[p][g][b], "varValue", 0.0), 0.0)
+                if v < 0.0:
+                    v = 0.0
+                cell_total += v
+                cell_yield_sum += v * bracket_yields[b]
 
-            budget_per_platform_goal[p][g] = val
-            total_p += val
+            budget_per_platform_goal[p][g] = cell_total
+            total_p += cell_total
 
-            kpi_estimate = _safe_float(r_pg.get(p, {}).get(g, 0.0), 0.0) * val
-            estimated_kpi_per_platform_goal[p][g] = kpi_estimate
+            r_val = _safe_float(r_pg.get(p, {}).get(g, 0.0), 0.0)
+            estimated_kpi_per_platform_goal[p][g] = r_val * cell_yield_sum
 
         budget_per_platform[p] = total_p
 
-    total_budget_used = sum(budget_per_platform_goal[p][g] for p in platforms for g in valid_goals)
+    total_budget_used = sum(
+        budget_per_platform_goal[p][g] for p in platforms for g in valid_goals
+    )
 
     objective_value_raw = _safe_float(pulp.value(model.objective), 0.0)
     objective_value = objective_value_raw * float(OBJECTIVE_SCALE)
@@ -388,6 +523,7 @@ def _solve_single_lp(
         combined_weight_pg=combined_weight_pg,
         estimated_kpi_per_platform_goal=estimated_kpi_per_platform_goal,
         objective_value_raw=objective_value_raw,
+        effective_budget_cap=budget_cap,
     )
 
 
@@ -398,8 +534,10 @@ def run_module5_lp(input_data: Module5LPInput) -> Module5LPResult:
         system_goal_weights=input_data.system_goal_weights,
         platform_goal_weights=input_data.platform_goal_weights,
         r_pg=input_data.r_pg,
+        goals_by_platform=input_data.goals_by_platform,
         min_spend_per_platform=input_data.min_spend_per_platform,
         min_budget_per_goal=input_data.min_budget_per_goal,
+        budget_cap=input_data.total_budget,
     )
 
 
@@ -409,7 +547,11 @@ def run_module5_lp_scenarios(input_data: Module5LPInput) -> Module5ScenarioBundl
 
     results: Dict[str, Module5LPResult] = {}
 
-    base_goal_map = input_data.scenario_goal_multipliers.get("base", {}) if input_data.scenario_goal_multipliers else {}
+    base_goal_map = (
+        dict(input_data.scenario_goal_multipliers.get("base", {}))
+        if input_data.scenario_goal_multipliers
+        else {}
+    )
     for g in input_data.valid_goals:
         base_goal_map.setdefault(g, 1.0)
 
@@ -422,6 +564,7 @@ def run_module5_lp_scenarios(input_data: Module5LPInput) -> Module5ScenarioBundl
         if not isinstance(goal_multipliers, dict) or not goal_multipliers:
             goal_multipliers = base_goal_map
 
+        # Goal multipliers shift r_pg per-goal (genuine relative re-ranking of cells).
         adjusted_r_pg: Dict[str, Dict[str, float]] = {}
         for p, gdict in input_data.r_pg.items():
             adjusted_r_pg[p] = {}
@@ -430,7 +573,20 @@ def run_module5_lp_scenarios(input_data: Module5LPInput) -> Module5ScenarioBundl
                 gm = _safe_float(goal_multipliers.get(g, 1.0), 1.0)
                 if gm <= 0.0:
                     gm = 1.0
-                adjusted_r_pg[p][g] = max(0.0, val * scalar_m * gm)
+                adjusted_r_pg[p][g] = max(0.0, val * gm)
+
+        # The scalar multiplier moves to the constraint side: scenarios change capacity,
+        # not just the objective. This is what makes scenarios meaningfully differ from
+        # one another (positive scaling of a linear objective is argmax-invariant).
+        budget_cap = input_data.total_budget * scalar_m
+
+        # Re-check feasibility against the binding floor for this scenario.
+        sum_min_p = sum(input_data.min_spend_per_platform.values())
+        sum_min_g = sum(input_data.min_budget_per_goal.values())
+        binding_floor = max(sum_min_p, sum_min_g)
+        if binding_floor > budget_cap + 1e-9:
+            # Skip this scenario rather than fail outright — caller still sees others.
+            continue
 
         results[scenario_name] = _solve_single_lp(
             valid_goals=input_data.valid_goals,
@@ -438,8 +594,10 @@ def run_module5_lp_scenarios(input_data: Module5LPInput) -> Module5ScenarioBundl
             system_goal_weights=input_data.system_goal_weights,
             platform_goal_weights=input_data.platform_goal_weights,
             r_pg=adjusted_r_pg,
+            goals_by_platform=input_data.goals_by_platform,
             min_spend_per_platform=input_data.min_spend_per_platform,
             min_budget_per_goal=input_data.min_budget_per_goal,
+            budget_cap=budget_cap,
         )
 
     if not results:
@@ -460,16 +618,10 @@ def run_module5(state: WizardState) -> WizardState:
     bundle = run_module5_lp_scenarios(lp_input)
     base_result = bundle.get_base()
 
-    state.complete_module5_and_advance(module5_result=base_result)
-
-    try:
-        setattr(state, "module5_scenario_bundle", bundle)
-    except Exception:
-        pass
-
-    try:
-        setattr(state, "module5_results_by_scenario", bundle.results_by_scenario)
-    except Exception:
-        pass
+    state.complete_module5_and_advance(
+        module5_result=base_result,
+        module5_scenario_bundle=bundle,
+        module5_results_by_scenario=bundle.results_by_scenario,
+    )
 
     return state
