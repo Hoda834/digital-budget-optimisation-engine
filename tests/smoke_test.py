@@ -644,6 +644,93 @@ def test_module5_rejects_invalid_state_carveout() -> None:
         build_module5_input_from_state(state)
 
 
+def test_seasonality_shifts_allocation_toward_boosted_goal() -> None:
+    """A seasonality boost for one goal should pull more LP budget toward
+    the platform serving that goal."""
+    from modules.module2 import run_module2
+    from modules.module3 import finalise_module3_from_inputs
+    from modules.module4 import run_module4
+    from modules.module5 import run_module5
+
+    def _alloc(seasonality=None) -> dict:
+        s = WizardState()
+        complete_module1_and_advance(
+            s,
+            raw_objectives=["aw", "lg"],
+            raw_budget=10000.0,
+            raw_duration_days=30,
+            raw_seasonality_index=seasonality,
+        )
+        run_module2(
+            s,
+            selected_platforms=["fb", "li"],
+            priorities_input={
+                "fb": {"priority_1": "aw", "priority_2": None},
+                "li": {"priority_1": "lg", "priority_2": None},
+            },
+        )
+        finalise_module3_from_inputs(
+            s,
+            platform_inputs={
+                "fb": {"budget": 4000.0, "kpis": {"FB_AW_REACH": 200000.0}},
+                "li": {"budget": 3000.0, "kpis": {"LI_LG_LEADS": 80.0}},
+            },
+        )
+        run_module4(s)
+        run_module5(s)
+        return s.module5_scenario_bundle.results_by_scenario["base"].budget_per_platform_goal
+
+    flat = _alloc(seasonality=None)
+    boosted = _alloc(seasonality={"lg": 3.0, "aw": 0.5})
+
+    flat_li = sum(flat.get("li", {}).values())
+    boosted_li = sum(boosted.get("li", {}).values())
+    assert boosted_li > flat_li, (
+        f"3× boost on LG + 0.5× on AW should shift budget toward LI (the LG platform). "
+        f"Flat LI=£{flat_li:.0f}, boosted LI=£{boosted_li:.0f}."
+    )
+
+
+def test_seasonality_scales_count_kpi_forecast() -> None:
+    """A 0.4× seasonality multiplier on reach should produce a forecast
+    that is 0.4× the un-seasoned forecast for the same allocation."""
+    from modules.module6 import compute_module6_forecast
+    from modules.module5 import Module5LPResult
+
+    lp = Module5LPResult(
+        budget_per_platform_goal={"fb": {"aw": 5000.0}},
+        budget_per_platform={"fb": 5000.0},
+        total_budget_used=5000.0,
+        objective_value=1.0,
+        r_pg={"fb": {"aw": 1.0}},
+        combined_weight_pg={"fb": {"aw": 1.0}},
+        estimated_kpi_per_platform_goal={"fb": {"aw": 500000.0}},
+    )
+    kpi_ratios = {"fb": {"aw": {"FB_AW_REACH": 100.0}}}
+
+    flat = compute_module6_forecast(kpi_ratios=kpi_ratios, module5_result=lp)
+    seasoned = compute_module6_forecast(
+        kpi_ratios=kpi_ratios, module5_result=lp,
+        seasonality_index={"aw": 0.4},
+    )
+    flat_row = next(r for r in flat.rows if r.kpi_name == "FB_AW_REACH")
+    seasoned_row = next(r for r in seasoned.rows if r.kpi_name == "FB_AW_REACH")
+    assert seasoned_row.predicted_kpi == pytest.approx(0.4 * flat_row.predicted_kpi)
+
+
+def test_seasonality_rejects_implausible_multiplier() -> None:
+    """Values >10× or <0.1× should be rejected as likely typos (percentage
+    entered instead of multiplier)."""
+    from modules.module1 import Module1ValidationError
+
+    state = WizardState()
+    with pytest.raises(Module1ValidationError, match="implausible"):
+        complete_module1_and_advance(
+            state, raw_objectives=["aw"], raw_budget=10000.0,
+            raw_seasonality_index={"aw": 250.0},  # user typed "250%" expecting 2.5
+        )
+
+
 def test_module5_warns_when_platform_below_effective_minimum() -> None:
     """LinkedIn's industry-typical learning-phase exit threshold is ~£2k/month.
     When the LP allocates LI below that — even because the user floor forces

@@ -58,6 +58,15 @@ class WizardState:
     # allocate.
     test_and_learn_pct: float = 0.0
 
+    # Per-goal seasonality multipliers applied to historical productivities
+    # before the LP runs.  >1 means cheaper auctions during the campaign
+    # window than historical (e.g. reach productivity higher in January);
+    # <1 means more expensive (e.g. December CPM inflation).  Module 5
+    # multiplies r_pg[p][g] and Module 6 multiplies count-KPI forecasts by
+    # the same factor so allocation and forecast stay consistent.  Empty
+    # by default ⇒ no adjustment (historical productivities used as-is).
+    seasonality_index: Dict[str, float] = field(default_factory=dict)
+
     system_goal_weights: Dict[str, float] = field(default_factory=dict)
 
     platform_priorities: Dict[str, Any] = field(default_factory=dict)
@@ -103,6 +112,7 @@ class WizardState:
         campaign_duration_days: Optional[int] = None,
         goal_value_per_unit: Optional[Dict[str, float]] = None,
         test_and_learn_pct: Optional[float] = None,
+        seasonality_index: Optional[Dict[str, float]] = None,
     ) -> None:
         self._ensure_step(expected_step=1)
         if self.module1_finalised:
@@ -156,6 +166,31 @@ class WizardState:
                     f"Got {tl}. A 10–15% carve-out is standard practice."
                 )
             self.test_and_learn_pct = tl
+
+        if seasonality_index:
+            cleaned_si: Dict[str, float] = {}
+            for g, v in seasonality_index.items():
+                gk = str(g).strip().lower()
+                if gk not in self.valid_goals:
+                    continue
+                try:
+                    fv = float(v)
+                except (TypeError, ValueError):
+                    raise ValueError(f"seasonality_index[{gk!r}] must be numeric.")
+                if fv <= 0.0:
+                    raise ValueError(
+                        f"seasonality_index[{gk!r}] must be positive, got {fv}."
+                    )
+                # Sanity ceiling: 10× is already an extreme adjustment; values
+                # beyond that are almost certainly a typo (entered as % rather
+                # than multiplier, e.g. 250 instead of 2.5).
+                if fv > 10.0 or fv < 0.1:
+                    raise ValueError(
+                        f"seasonality_index[{gk!r}]={fv} is implausible "
+                        f"(expected ~0.1–10×). Did you enter a percentage instead of a multiplier?"
+                    )
+                cleaned_si[gk] = fv
+            self.seasonality_index = cleaned_si
 
         self.module1_finalised = True
         self.current_step = 2

@@ -517,6 +517,19 @@ def build_module5_input_from_state(state: WizardState) -> Module5LPInput:
     platform_goal_weights = _build_platform_goal_weights_from_state(state)
     r_pg = _build_r_pg_from_state(state)
 
+    # Apply seasonality multipliers to expected productivities BEFORE the LP
+    # runs.  Scenario goal multipliers compose multiplicatively on top of
+    # this — seasonality is a calendar-driven prior, scenarios are uncertainty.
+    seasonality = getattr(state, "seasonality_index", None) or {}
+    if seasonality:
+        for p in list(r_pg.keys()):
+            for g in list(r_pg[p].keys()):
+                mult = _safe_float(seasonality.get(g, 1.0), 1.0)
+                if mult <= 0.0:
+                    mult = 1.0
+                r_pg[p][g] *= mult
+        _LOG.info("Applied seasonality_index=%s to r_pg before LP.", seasonality)
+
     active_platforms = list(r_pg.keys())
     goals_by_platform = {
         p: list(state.goals_by_platform.get(p, []) or list(state.valid_goals))

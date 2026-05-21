@@ -66,6 +66,10 @@ class Module1Result:
     # reserve.  0.10 = "reserve 10% for new audiences / creative tests"; the LP
     # in Module 5 only optimises the remaining 90%.
     test_and_learn_pct: float = 0.0
+    # Per-goal seasonality multipliers, applied to productivities before LP.
+    # >1 = expected to outperform historical (cheaper auctions);
+    # <1 = expected to underperform (e.g. December CPM inflation).
+    seasonality_index: Dict[str, float] = field(default_factory=dict)
 
 
 def _normalise_objectives(raw_objectives: Sequence[str]) -> List[str]:
@@ -319,6 +323,54 @@ def _parse_test_and_learn_pct(raw_value: Any) -> float:
     return num
 
 
+def _parse_seasonality_index(
+    raw_value: Any,
+    valid_objectives: Sequence[str],
+) -> Dict[str, float]:
+    """Parse a {goal_code: multiplier} mapping for seasonality adjustment.
+
+    Each multiplier represents expected productivity vs. historical: 1.0 = same,
+    >1 = better (cheaper auctions), <1 = worse (more expensive auctions).
+    Keys not in *valid_objectives* are dropped.  Values must be in (0.1, 10.0]
+    — anything beyond that suggests a percentage was entered instead of a
+    multiplier (e.g. "250%" → 250.0 instead of 2.5).
+    """
+    if raw_value is None:
+        return {}
+    if not isinstance(raw_value, dict):
+        raise Module1ValidationError(
+            "seasonality_index must be a dict like {'aw': 0.4, 'lg': 1.1}."
+        )
+
+    allowed = {str(g).strip().lower() for g in valid_objectives}
+    cleaned: Dict[str, float] = {}
+    for g, v in raw_value.items():
+        gk = str(g).strip().lower()
+        if gk not in allowed:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            raise Module1ValidationError(
+                f"seasonality_index[{gk!r}] must be numeric, got {v!r}."
+            )
+        if math.isnan(fv) or math.isinf(fv):
+            raise Module1ValidationError(
+                f"seasonality_index[{gk!r}] must be finite."
+            )
+        if fv <= 0.0:
+            raise Module1ValidationError(
+                f"seasonality_index[{gk!r}] must be positive, got {fv}."
+            )
+        if fv > 10.0 or fv < 0.1:
+            raise Module1ValidationError(
+                f"seasonality_index[{gk!r}]={fv} is implausible (expected ~0.1–10×). "
+                f"Did you enter a percentage instead of a multiplier?"
+            )
+        cleaned[gk] = fv
+    return cleaned
+
+
 def _validate_budget(numeric_budget: float) -> None:
     if numeric_budget <= 1:
         raise Module1ValidationError(
@@ -339,6 +391,7 @@ def run_module_1(
     raw_duration_days: Any = None,
     raw_goal_values: Any = None,
     raw_test_and_learn_pct: Any = None,
+    raw_seasonality_index: Any = None,
 ) -> Module1Result:
     normalised_objectives = _normalise_objectives(raw_objectives)
     _validate_objectives(normalised_objectives)
@@ -350,6 +403,7 @@ def run_module_1(
     campaign_duration_days = _parse_duration(raw_duration_days)
     goal_values = _parse_goal_values(raw_goal_values, normalised_objectives)
     test_and_learn_pct = _parse_test_and_learn_pct(raw_test_and_learn_pct)
+    seasonality_index = _parse_seasonality_index(raw_seasonality_index, normalised_objectives)
 
     return Module1Result(
         selected_objectives=normalised_objectives,
@@ -358,6 +412,7 @@ def run_module_1(
         campaign_duration_days=campaign_duration_days,
         goal_value_per_unit=goal_values,
         test_and_learn_pct=test_and_learn_pct,
+        seasonality_index=seasonality_index,
     )
 
 
@@ -369,6 +424,7 @@ def complete_module1_and_advance(
     raw_duration_days: Any = None,
     raw_goal_values: Any = None,
     raw_test_and_learn_pct: Any = None,
+    raw_seasonality_index: Any = None,
 ) -> WizardState:
     if state.module1_finalised:
         raise FlowStateError(
@@ -388,6 +444,7 @@ def complete_module1_and_advance(
         raw_duration_days,
         raw_goal_values,
         raw_test_and_learn_pct,
+        raw_seasonality_index,
     )
 
     state.complete_module1_and_advance(
@@ -397,6 +454,7 @@ def complete_module1_and_advance(
         campaign_duration_days=result.campaign_duration_days,
         goal_value_per_unit=result.goal_value_per_unit,
         test_and_learn_pct=result.test_and_learn_pct,
+        seasonality_index=result.seasonality_index,
     )
 
     return state

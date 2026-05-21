@@ -183,6 +183,7 @@ def compute_module6_forecast(
     min_budget_threshold: float = 1.0,
     uncertainty_band: float = DEFAULT_UNCERTAINTY_BAND,
     module3_data: Optional[Dict[str, Dict[str, Any]]] = None,
+    seasonality_index: Optional[Dict[str, float]] = None,
 ) -> Module6Result:
     """Produce per-KPI forecasts from the LP allocation.
 
@@ -250,6 +251,20 @@ def compute_module6_forecast(
                     # → predicted count = ratio × allocated_budget
                     predicted = ratio_val * budget_val
 
+                # Apply seasonality multiplier to count KPIs so the forecast
+                # matches the productivity the LP optimised against.  Rate
+                # KPIs are not adjusted here — they're dimensionless and a
+                # seasonality multiplier on a rate is a separate concept.
+                if seasonality_index and kind != KIND_RATE:
+                    s_mult = seasonality_index.get(g)
+                    if s_mult is not None:
+                        try:
+                            s_val = float(s_mult)
+                            if s_val > 0.0:
+                                predicted *= s_val
+                        except (TypeError, ValueError):
+                            pass
+
                 if predicted <= 0.0:
                     d.skipped_invalid_ratio_items += 1
                     continue
@@ -313,6 +328,7 @@ def compute_module6_forecast_for_scenarios(
     min_budget_threshold: float = 1.0,
     uncertainty_band: float = DEFAULT_UNCERTAINTY_BAND,
     module3_data: Optional[Dict[str, Dict[str, Any]]] = None,
+    seasonality_index: Optional[Dict[str, float]] = None,
 ) -> Module6ScenarioResult:
     results_by_scenario: Dict[str, Module6Result] = {}
     for scenario_name, lp_res in module5_bundle.results_by_scenario.items():
@@ -322,6 +338,7 @@ def compute_module6_forecast_for_scenarios(
             min_budget_threshold=min_budget_threshold,
             uncertainty_band=uncertainty_band,
             module3_data=module3_data,
+            seasonality_index=seasonality_index,
         )
     return Module6ScenarioResult(results_by_scenario=results_by_scenario)
 
@@ -340,6 +357,8 @@ def run_module6(
 
     bundle = getattr(state, "module5_scenario_bundle", None)
 
+    seasonality = getattr(state, "seasonality_index", None) or None
+
     if isinstance(bundle, Module5ScenarioBundle):
         scenario_forecast = compute_module6_forecast_for_scenarios(
             kpi_ratios=state.kpi_ratios,
@@ -347,6 +366,7 @@ def run_module6(
             min_budget_threshold=min_budget_threshold,
             uncertainty_band=uncertainty_band,
             module3_data=getattr(state, "module3_data", None),
+            seasonality_index=seasonality,
         )
         state.complete_module6(
             module6_result=scenario_forecast.get_base(),
@@ -361,6 +381,7 @@ def run_module6(
             min_budget_threshold=min_budget_threshold,
             uncertainty_band=uncertainty_band,
             module3_data=getattr(state, "module3_data", None),
+            seasonality_index=seasonality,
         )
         state.complete_module6(
             module6_result=forecast,
