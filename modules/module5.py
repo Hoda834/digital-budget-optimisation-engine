@@ -48,9 +48,18 @@ PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH: Dict[str, float] = {
     "rd": 500.0,
     # Google Search needs ~30 conversions/month for Target CPA bidding to
     # exit the learning phase; £1k/month is the typical UK threshold at
-    # mid-funnel CPAs (£20-£35).  Display can technically run lower but
-    # we keep one threshold per platform.
-    "go": 1000.0,
+    # mid-funnel CPAs (£20–£35).
+    "go_search": 1000.0,
+    # Google Display Network auctions are thinner and CPMs are lower, so
+    # the smart-bidding learning phase finishes on less spend.  £500
+    # matches Reddit's threshold and reflects how little signal the
+    # Display auction needs.
+    "go_display": 500.0,
+    # Performance Max needs ~50 conversions across its blended surfaces
+    # before Smart Bidding stabilises — Google's published guidance puts
+    # the practical floor higher than Search.  £2,500 is the typical UK
+    # threshold at mid-funnel CPAs.
+    "go_pmax": 2500.0,
 }
 
 # Three diminishing-returns brackets per (platform, goal) cell.

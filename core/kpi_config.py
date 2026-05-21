@@ -57,15 +57,34 @@ KPI_CONFIG: List[Dict[str, Any]] = [
     {"platform": "rd", "goal": GOAL_EN, "var": "RD_EN_ENGRATERATE", "kpi_label": "Engagement Rate",  "kind": KIND_RATE},
     {"platform": "rd", "goal": GOAL_WT, "var": "RD_WT_CLICKS",      "kpi_label": "Link Clicks",      "kind": KIND_COUNT},
     {"platform": "rd", "goal": GOAL_LG, "var": "RD_LG_LEADS",       "kpi_label": "Leads",            "kind": KIND_COUNT},
-    # ── Google (Search + Display) ──────────────────────────────────────────
-    # Distinct from YouTube (which has its own video-view-driven KPIs).
-    # Search/Display lives or dies on CTR + Conversions; CTR sits in for an
-    # engagement-rate proxy because Google doesn't have a clean Likes/Saves
-    # metric outside YouTube.
-    {"platform": "go", "goal": GOAL_AW, "var": "GO_AW_IMPRESSION",  "kpi_label": "Impression",       "kind": KIND_COUNT},
-    {"platform": "go", "goal": GOAL_EN, "var": "GO_EN_CTR",         "kpi_label": "Click-through Rate", "kind": KIND_RATE},
-    {"platform": "go", "goal": GOAL_WT, "var": "GO_WT_CLICKS",      "kpi_label": "Clicks",           "kind": KIND_COUNT},
-    {"platform": "go", "goal": GOAL_LG, "var": "GO_LG_CONVERSIONS", "kpi_label": "Conversions",      "kind": KIND_COUNT},
+    # ── Google Search (keyword auctions, intent-driven) ────────────────────
+    # Search has the steepest CTR + Conversion productivity of any Google
+    # surface — keyword intent does most of the work.  Reviewers care that
+    # this lives separately from Display because lumping them obscures
+    # ~10× differences in lead-gen productivity.
+    {"platform": "go_search",  "goal": GOAL_AW, "var": "GO_SEARCH_AW_IMPRESSION",  "kpi_label": "Impression",         "kind": KIND_COUNT},
+    {"platform": "go_search",  "goal": GOAL_EN, "var": "GO_SEARCH_EN_CTR",         "kpi_label": "Click-through Rate", "kind": KIND_RATE},
+    {"platform": "go_search",  "goal": GOAL_WT, "var": "GO_SEARCH_WT_CLICKS",      "kpi_label": "Clicks",             "kind": KIND_COUNT},
+    {"platform": "go_search",  "goal": GOAL_LG, "var": "GO_SEARCH_LG_CONVERSIONS", "kpi_label": "Conversions",        "kind": KIND_COUNT},
+    # ── Google Display Network (CPM placements, lower intent) ──────────────
+    # Display is upper-funnel — high reach per pound, low conversion rate.
+    # Same KPI shape as Search so the LP can compare cells, but expect very
+    # different productivity numbers in Module 3 (Display impressions/£ will
+    # be much higher than Search; Search conversions/£ much higher than
+    # Display).
+    {"platform": "go_display", "goal": GOAL_AW, "var": "GO_DISPLAY_AW_IMPRESSION",  "kpi_label": "Impression",         "kind": KIND_COUNT},
+    {"platform": "go_display", "goal": GOAL_EN, "var": "GO_DISPLAY_EN_CTR",         "kpi_label": "Click-through Rate", "kind": KIND_RATE},
+    {"platform": "go_display", "goal": GOAL_WT, "var": "GO_DISPLAY_WT_CLICKS",      "kpi_label": "Clicks",             "kind": KIND_COUNT},
+    {"platform": "go_display", "goal": GOAL_LG, "var": "GO_DISPLAY_LG_CONVERSIONS", "kpi_label": "Conversions",        "kind": KIND_COUNT},
+    # ── Google Performance Max (Smart Bidding across all Google surfaces) ──
+    # PMax mixes Search, Display, YouTube, Shopping and Maps behind a single
+    # campaign type.  We keep it as a separate platform so the user reports
+    # the *blended* productivity their PMax campaigns actually deliver —
+    # rather than guessing how to split a PMax CSV row across the other two.
+    {"platform": "go_pmax",    "goal": GOAL_AW, "var": "GO_PMAX_AW_IMPRESSION",  "kpi_label": "Impression",         "kind": KIND_COUNT},
+    {"platform": "go_pmax",    "goal": GOAL_EN, "var": "GO_PMAX_EN_CTR",         "kpi_label": "Click-through Rate", "kind": KIND_RATE},
+    {"platform": "go_pmax",    "goal": GOAL_WT, "var": "GO_PMAX_WT_CLICKS",      "kpi_label": "Clicks",             "kind": KIND_COUNT},
+    {"platform": "go_pmax",    "goal": GOAL_LG, "var": "GO_PMAX_LG_CONVERSIONS", "kpi_label": "Conversions",        "kind": KIND_COUNT},
 ]
 
 

@@ -58,7 +58,7 @@ The LP:
 
 ### 3. Platform Catalogue + CSV Import
 
-Ten built-in platforms with curated KPI configs:
+Twelve built-in platforms with curated KPI configs.  Google appears as three distinct surfaces — Search, Display, and Performance Max — because their lead-gen productivities differ by an order of magnitude and lumping them obscures decisions a marketer actually needs to make:
 
 | Platform | KPIs (Awareness · Engagement · Traffic · Lead Gen) |
 |---|---|
@@ -66,14 +66,14 @@ Ten built-in platforms with curated KPI configs:
 | Instagram | Reach · Engagement Rate · Link Clicks · Leads |
 | LinkedIn | Impressions · Engagement Rate · Clicks · Leads |
 | YouTube | Views · View Rate · Clicks · Conversions |
-| Google (Search + Display) | Impressions · CTR · Clicks · Conversions |
+| Google Search | Impressions · CTR · Clicks · Conversions |
+| Google Display | Impressions · CTR · Clicks · Conversions |
+| Google Performance Max | Impressions · CTR · Clicks · Conversions |
 | TikTok | Video Views · Engagement Rate · Clicks · Leads |
 | Pinterest | Impressions · Saves · Outbound Clicks · Leads |
 | X (Twitter) | Impressions · Engagement Rate · Clicks · Leads |
 | Snapchat | Reach · Engagement Rate · Swipe-ups · Leads |
 | Reddit | Impressions · Engagement Rate · Clicks · Leads |
-
-Plus **custom platforms** the user can define on the fly (slug, label, supported objectives, KPI definitions with explicit count/rate kind, monthly effective minimum).
 
 **CSV import** for Meta / Google / LinkedIn / TikTok / YouTube — drop the platform's standard export into the form and the parser:
 

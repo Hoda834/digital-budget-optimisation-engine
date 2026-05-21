@@ -42,7 +42,7 @@ warnings, not constraints. Each section flags which category a constant is in.
 
 ### `YIELD_BRACKETS = ((0.25, 1.00), (0.35, 0.65), (0.40, 0.35))`
 
-- **Location:** `modules/module5.py:60–64`
+- **Location:** `modules/module5.py:69–73`
 - **Role:** Piecewise-linear approximation of diminishing returns. The LP
   fills the first bracket (up to 25% of a cell's "natural" budget) at full
   productivity, the next bracket (next 35%) at 65% productivity, and the
@@ -71,7 +71,7 @@ warnings, not constraints. Each section flags which category a constant is in.
 
 ### Tie-breaking tolerance `0.02`
 
-- **Location:** `modules/module5.py:907` ("Fix C")
+- **Location:** `modules/module5.py:916` ("Fix C")
 - **Role:** When two platforms have the same goal and their normalised
   productivities differ by ≤2%, redistribute the LP's allocation
   proportionally instead of accepting the solver's arbitrary corner choice.
@@ -89,7 +89,7 @@ warnings, not constraints. Each section flags which category a constant is in.
 
 ### Constraint slack tolerance `max(1e-4, 1e-3 × |rhs|)`
 
-- **Location:** `modules/module5.py:953`
+- **Location:** `modules/module5.py:962`
 - **Role:** Threshold for identifying which constraints are binding for
   sensitivity reporting. Relative to the right-hand-side magnitude so
   large constraints (whole-budget) and small ones (per-platform floors)
@@ -101,7 +101,7 @@ warnings, not constraints. Each section flags which category a constant is in.
 
 ### Feasibility epsilon `1e-9`
 
-- **Location:** `modules/module5.py:577, 1108`
+- **Location:** `modules/module5.py:586, 1117`
 - **Role:** Floating-point cushion for `binding_floor ≤ budget_cap`
   checks. Prevents an LP that's mathematically feasible from being
   declared infeasible due to rounding.
@@ -113,7 +113,7 @@ warnings, not constraints. Each section flags which category a constant is in.
 
 ### `PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH`
 
-- **Location:** `modules/module5.py:32–54`
+- **Location:** `modules/module5.py:32–63`
 - **Role:** Per-platform monthly spend below which the platform's auction
   / learning algorithm is unlikely to leave its learning phase. Used to
   raise warnings on the result page, **not** to constrain the LP. The
@@ -132,7 +132,9 @@ warnings, not constraints. Each section flags which category a constant is in.
   | X (Twitter) | 800 | Same — vendor publishes no floor; this is conventional |
   | Snapchat | 1,000 | Same — vendor publishes no floor; this is conventional |
   | Reddit | 500 | Reddit's auction is thinner; lower threshold reflects how little signal the platform's optimiser needs to act on |
-  | Google (Search + Display) | 1,000 | Target CPA bidding needs ~30 conversions/month to exit learning; £1k is the typical UK threshold at mid-funnel CPAs |
+  | Google Search | 1,000 | Target CPA bidding needs ~30 conversions/month to exit learning; £1k is the typical UK threshold at mid-funnel CPAs |
+  | Google Display | 500 | Display Network auctions are thinner and CPMs lower; learning phase finishes on less spend (matches the Reddit threshold) |
+  | Google Performance Max | 2,500 | Smart Bidding needs ~50 conversions across blended surfaces (Search / Display / YouTube / Shopping / Maps); higher floor than Search alone |
 
 - **Scaling:** Each threshold is multiplied by `campaign_duration_days / 30`
   before being attached to the LP input. A 90-day campaign gets a 3× threshold
@@ -209,7 +211,7 @@ warnings, not constraints. Each section flags which category a constant is in.
 
 ### Shrinkage prior strength `30 days`
 
-- **Location:** `modules/module5.py:334` (`_DATA_QUALITY_SHRINKAGE_REFERENCE_DAYS = 30.0`)
+- **Location:** `modules/module5.py:343` (`_DATA_QUALITY_SHRINKAGE_REFERENCE_DAYS = 30.0`)
 - **Role:** James-Stein-style shrinkage pulls each platform's productivity
   estimate toward the cross-platform mean for the same goal, weighted by
   how much historical data backs the estimate. The shrinkage weight is
@@ -353,7 +355,7 @@ warnings, not constraints. Each section flags which category a constant is in.
 
 ### `DEFAULT_MC_TRIALS = 200`
 
-- **Location:** `modules/module5.py:1228`
+- **Location:** `modules/module5.py:1237`
 - **Role:** Number of LP re-solves with productivities perturbed by
   their CV. Yields per-platform allocation distributions
   (mean / p5 / median / p95 / CV).
@@ -368,7 +370,7 @@ warnings, not constraints. Each section flags which category a constant is in.
 
 ### Per-cell sigma clamp `[0.05, 1.00]`
 
-- **Location:** `modules/module5.py:1308`
+- **Location:** `modules/module5.py:1317`
 - **Role:** Bounds on the lognormal scale used to perturb each cell's
   productivity. Floor prevents zero-noise / false-precision; cap
   prevents trials from turning the LP into white noise.
@@ -378,7 +380,7 @@ warnings, not constraints. Each section flags which category a constant is in.
 
 ### Instability threshold `DEFAULT_INSTABILITY_CV = 0.20`
 
-- **Location:** `modules/module5.py:1234`
+- **Location:** `modules/module5.py:1243`
 - **Role:** A platform whose allocation CV across MC trials exceeds 20%
   is flagged "unstable" — its rank ordering is sensitive to plausible
   perturbations of the input.

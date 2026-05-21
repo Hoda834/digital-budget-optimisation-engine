@@ -20,12 +20,14 @@ PLATFORM_PT = "pt"   # Pinterest
 PLATFORM_TW = "tw"   # X / Twitter (kept "tw" code for backwards compatibility headroom)
 PLATFORM_SN = "sn"   # Snapchat
 PLATFORM_RD = "rd"   # Reddit
-PLATFORM_GO = "go"   # Google (Search + Display, distinct from YouTube)
+PLATFORM_GO_SEARCH  = "go_search"   # Google Search (keyword auction, intent-driven)
+PLATFORM_GO_DISPLAY = "go_display"  # Google Display Network (CPM placements, lower intent)
+PLATFORM_GO_PMAX    = "go_pmax"     # Google Performance Max (Smart Bidding across all surfaces)
 
 ALLOWED_PLATFORMS: Set[str] = {
     PLATFORM_FB, PLATFORM_IG, PLATFORM_LI, PLATFORM_YT,
     PLATFORM_TT, PLATFORM_PT, PLATFORM_TW, PLATFORM_SN, PLATFORM_RD,
-    PLATFORM_GO,
+    PLATFORM_GO_SEARCH, PLATFORM_GO_DISPLAY, PLATFORM_GO_PMAX,
 }
 
 ALLOWED_CURRENCIES: Set[str] = {"GBP", "USD", "EUR"}

@@ -6,7 +6,10 @@ from typing import Dict, List, Optional
 from core.wizard_state import WizardState, ALLOWED_PLATFORMS
 
 
-PLATFORMS = ("fb", "ig", "li", "yt", "tt", "pt", "tw", "sn", "rd", "go")
+PLATFORMS = (
+    "fb", "ig", "li", "yt", "tt", "pt", "tw", "sn", "rd",
+    "go_search", "go_display", "go_pmax",
+)
 
 
 @dataclass
