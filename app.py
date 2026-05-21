@@ -11,6 +11,10 @@ from reportlab.lib.styles import getSampleStyleSheet  # type: ignore
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle  # type: ignore
 
 from core.wizard_state import WizardState, GOAL_AW, GOAL_EN, GOAL_LG, GOAL_WT
+from modules.module1 import (
+    complete_module1_and_advance as finalise_module1,
+    Module1ValidationError,
+)
 from core.kpi_config import KPI_CONFIG
 from modules.module2 import run_module2
 from modules.module4 import run_module4
@@ -1032,9 +1036,28 @@ def results_ui(state: WizardState) -> None:
         reset_state()
 
 
+# Default £-per-unit values shown as placeholders in the Module 1 form.
+# These are sensible starting points for a UK B2B SaaS context, not
+# universal truths — the user is meant to override them.
+_GOAL_VALUE_HINTS: Dict[str, Tuple[str, float]] = {
+    GOAL_LG: ("£ per qualified lead", 100.0),
+    GOAL_WT: ("£ per website click", 0.50),
+    GOAL_EN: ("£ per engagement", 0.20),
+    GOAL_AW: ("£ per reach impression", 0.001),
+}
+
+_GOAL_LABEL: Dict[str, str] = {
+    GOAL_AW: "Awareness",
+    GOAL_EN: "Engagement",
+    GOAL_WT: "Website Traffic",
+    GOAL_LG: "Lead Generation",
+}
+
+
 def module1_ui(state: WizardState) -> None:
     st.header("Objectives and total budget")
 
+    # ── Core inputs ────────────────────────────────────────────────────────
     goals = st.multiselect(
         "Choose one or more marketing objectives:",
         options=[
@@ -1047,16 +1070,103 @@ def module1_ui(state: WizardState) -> None:
     )
     goal_codes = [code for code, _ in goals]
 
-    total_budget = st.number_input(
-        "Enter your total budget (must be greater than 1)",
-        min_value=1.0,
-        value=1000.0,
-        step=100.0,
-    )
+    col_budget, col_currency, col_duration = st.columns([2, 1, 1])
+    with col_budget:
+        total_budget = st.number_input(
+            "Total budget",
+            min_value=1.0,
+            value=10000.0,
+            step=500.0,
+            help="The full campaign budget — including any test-and-learn reserve.",
+        )
+    with col_currency:
+        currency = st.selectbox("Currency", options=["GBP", "USD", "EUR"], index=0)
+    with col_duration:
+        duration_days = st.number_input(
+            "Campaign days",
+            min_value=1,
+            value=30,
+            step=1,
+            help="Used to scale industry-effective minimums and historical-window confidence bands.",
+        )
+
+    # ── Goal values (utility weights) ──────────────────────────────────────
+    goal_values: Dict[str, float] = {}
+    if goal_codes:
+        st.markdown("### What is each result worth to the business?")
+        st.caption(
+            "Set the £ value of one unit of each objective's KPI. The optimiser "
+            "uses these as utility weights — without them it falls back to "
+            "rank-based heuristics. Leave at 0 to skip."
+        )
+        cols = st.columns(min(len(goal_codes), 4))
+        for i, gcode in enumerate(goal_codes):
+            label, default = _GOAL_VALUE_HINTS.get(gcode, (f"£ per {gcode}", 1.0))
+            with cols[i % len(cols)]:
+                v = st.number_input(
+                    f"{_GOAL_LABEL.get(gcode, gcode)} — {label}",
+                    min_value=0.0,
+                    value=float(default),
+                    step=max(default / 10.0, 0.001),
+                    format="%.4f",
+                    key=f"goal_value_{gcode}",
+                )
+                if v > 0:
+                    goal_values[gcode] = v
+
+    # ── Advanced policy inputs ─────────────────────────────────────────────
+    with st.expander("Advanced policy (test-and-learn, seasonality)", expanded=False):
+        test_and_learn_pct = st.slider(
+            "Test-and-learn reserve",
+            min_value=0.0,
+            max_value=0.40,
+            value=0.10,
+            step=0.01,
+            format="%.0f%%",
+            help=(
+                "Fraction of every scenario's budget held back from the LP for "
+                "new audiences, creative tests, and emerging placements. "
+                "Standard strategist practice is 10–15%."
+            ),
+        )
+
+        st.markdown(
+            "**Seasonality multipliers** — set to >1 if you expect productivity "
+            "to beat the historical baseline during the campaign window "
+            "(e.g. January after the Q4 auction spike clears); <1 if you expect "
+            "underperformance (e.g. December CPM inflation). Leave at 1.0 for no adjustment."
+        )
+        seasonality_index: Dict[str, float] = {}
+        if goal_codes:
+            scols = st.columns(min(len(goal_codes), 4))
+            for i, gcode in enumerate(goal_codes):
+                with scols[i % len(scols)]:
+                    mult = st.slider(
+                        _GOAL_LABEL.get(gcode, gcode),
+                        min_value=0.2,
+                        max_value=3.0,
+                        value=1.0,
+                        step=0.05,
+                        key=f"seasonality_{gcode}",
+                    )
+                    if abs(mult - 1.0) > 1e-6:
+                        seasonality_index[gcode] = mult
 
     if st.button("Continue", disabled=not goal_codes or total_budget <= 1):
-        state.complete_module1_and_advance(valid_goals=goal_codes, total_budget=total_budget)
-        safe_rerun()
+        try:
+            finalise_module1(
+                state,
+                raw_objectives=goal_codes,
+                raw_budget=total_budget,
+                raw_currency=currency,
+                raw_duration_days=int(duration_days),
+                raw_goal_values=goal_values or None,
+                raw_test_and_learn_pct=test_and_learn_pct or None,
+                raw_seasonality_index=seasonality_index or None,
+            )
+            safe_rerun()
+        except (Module1ValidationError, ValueError) as e:
+            st.error(f"Could not finalise Module 1: {e}")
 
 
 def module2_ui(state: WizardState) -> None:
