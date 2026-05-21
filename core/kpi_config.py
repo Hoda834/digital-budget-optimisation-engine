@@ -59,6 +59,15 @@ KPI_CONFIG: List[Dict[str, Any]] = [
     {"platform": "rd", "goal": GOAL_EN, "var": "RD_EN_ENGRATERATE", "kpi_label": "Engagement Rate",  "kind": KIND_RATE},
     {"platform": "rd", "goal": GOAL_WT, "var": "RD_WT_CLICKS",      "kpi_label": "Link Clicks",      "kind": KIND_COUNT},
     {"platform": "rd", "goal": GOAL_LG, "var": "RD_LG_LEADS",       "kpi_label": "Leads",            "kind": KIND_COUNT},
+    # ── Google (Search + Display) ──────────────────────────────────────────
+    # Distinct from YouTube (which has its own video-view-driven KPIs).
+    # Search/Display lives or dies on CTR + Conversions; CTR sits in for an
+    # engagement-rate proxy because Google doesn't have a clean Likes/Saves
+    # metric outside YouTube.
+    {"platform": "go", "goal": GOAL_AW, "var": "GO_AW_IMPRESSION",  "kpi_label": "Impression",       "kind": KIND_COUNT},
+    {"platform": "go", "goal": GOAL_EN, "var": "GO_EN_CTR",         "kpi_label": "Click-through Rate", "kind": KIND_RATE},
+    {"platform": "go", "goal": GOAL_WT, "var": "GO_WT_CLICKS",      "kpi_label": "Clicks",           "kind": KIND_COUNT},
+    {"platform": "go", "goal": GOAL_LG, "var": "GO_LG_CONVERSIONS", "kpi_label": "Conversions",      "kind": KIND_COUNT},
 ]
 
 

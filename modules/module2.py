@@ -8,7 +8,7 @@ from core.wizard_state import WizardState, ALLOWED_PLATFORMS
 
 # Iteration order for the built-in platforms.  Custom platforms registered on
 # state extend the iteration via _effective_platforms(state) where needed.
-PLATFORMS = ("fb", "ig", "li", "yt", "tt", "pt", "tw", "sn", "rd")
+PLATFORMS = ("fb", "ig", "li", "yt", "tt", "pt", "tw", "sn", "rd", "go")
 
 
 def _effective_platforms(state: WizardState) -> List[str]:

@@ -41,6 +41,7 @@ PLATFORM_NAMES: Dict[str, str] = {
     "tw": "X (Twitter)",
     "sn": "Snapchat",
     "rd": "Reddit",
+    "go": "Google (Search + Display)",
 }
 
 GOAL_NAMES: Dict[str, str] = {
@@ -1458,7 +1459,7 @@ def module2_ui(state: WizardState) -> None:
 
     _render_custom_platform_form(state)
 
-    builtin_platforms = ["fb", "ig", "li", "yt", "tt", "pt", "tw", "sn", "rd"]
+    builtin_platforms = ["fb", "ig", "li", "yt", "tt", "pt", "tw", "sn", "rd", "go"]
     custom_codes = [str(cp.get("code", "")) for cp in (state.custom_platforms or [])]
     platforms = builtin_platforms + custom_codes
 

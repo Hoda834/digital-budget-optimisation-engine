@@ -46,6 +46,11 @@ PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH: Dict[str, float] = {
     "tw": 800.0,
     "sn": 1000.0,
     "rd": 500.0,
+    # Google Search needs ~30 conversions/month for Target CPA bidding to
+    # exit the learning phase; £1k/month is the typical UK threshold at
+    # mid-funnel CPAs (£20-£35).  Display can technically run lower but
+    # we keep one threshold per platform.
+    "go": 1000.0,
 }
 
 # Three diminishing-returns brackets per (platform, goal) cell.

@@ -959,6 +959,59 @@ def test_custom_platform_invalid_kind_rejected() -> None:
         )
 
 
+def test_google_pipeline_end_to_end() -> None:
+    """Google (Search + Display) — typically the #1 paid-media channel for
+    UK marketers — should flow through M1 → M7 just like a Meta platform."""
+    from modules.module2 import run_module2
+    from modules.module3 import finalise_module3_from_inputs
+    from modules.module4 import run_module4
+    from modules.module5 import (
+        run_module5,
+        PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH,
+    )
+    from modules.module6 import run_module6
+    from modules.module7 import run_module7
+    from core.kpi_config import effective_kpi_config
+
+    assert "go" in PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH, "Google missing from minimums table"
+    catalog = effective_kpi_config()
+    go_vars = {row["var"] for row in catalog if row["platform"] == "go"}
+    assert {"GO_AW_IMPRESSION", "GO_EN_CTR", "GO_WT_CLICKS", "GO_LG_CONVERSIONS"} <= go_vars
+
+    state = WizardState()
+    complete_module1_and_advance(
+        state, raw_objectives=["wt", "lg"], raw_budget=10000.0, raw_duration_days=30,
+    )
+    run_module2(
+        state,
+        selected_platforms=["go", "fb"],
+        priorities_input={
+            "go": {"priority_1": "lg", "priority_2": "wt"},
+            "fb": {"priority_1": "lg", "priority_2": None},
+        },
+    )
+    finalise_module3_from_inputs(
+        state,
+        platform_inputs={
+            "go": {"budget": 3000.0, "historical_days": 90,
+                   "kpis": {"GO_LG_CONVERSIONS": 120.0, "GO_WT_CLICKS": 4500.0}},
+            "fb": {"budget": 3000.0, "historical_days": 90,
+                   "kpis": {"FB_LG_LEADS": 90.0}},
+        },
+    )
+    run_module4(state)
+    run_module5(state)
+    run_module6(state)
+
+    base = state.module5_scenario_bundle.results_by_scenario["base"]
+    go_allocated = sum(base.budget_per_platform_goal.get("go", {}).values())
+    assert go_allocated > 0, "Google should receive non-zero allocation"
+
+    insights = run_module7(state, state.module5_scenario_bundle,
+                          state.module6_scenario_result.results_by_scenario)
+    assert "base" in insights.scenario_insights
+
+
 def test_tiktok_pipeline_end_to_end() -> None:
     """A new-catalog platform (TikTok) should flow through M1 → M5 → M6 → M7
     without special-casing, with its own KPI vars and effective minimum."""
