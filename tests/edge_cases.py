@@ -993,3 +993,213 @@ def test_module6_rate_kpi_band_is_point_estimate():
     rate_rows = [r for r in base_fc.rows if r.kpi_kind == "rate"]
     for row in rate_rows:
         assert row.predicted_kpi_low == row.predicted_kpi == row.predicted_kpi_high
+
+
+def test_usd_plan_excel_and_pdf_outputs_contain_no_pound_symbol() -> None:
+    """End-to-end regression: a USD plan must not leak £ into the
+    rendered Excel summary, the budget allocation tables, or the PDF.
+    Covers the audit's 'currency selector exists but UI still shows £
+    everywhere' complaint with a check that fails loudly if any
+    code path bypasses money() and hardcodes £.
+    """
+    import streamlit as st
+    from app import (
+        money,
+        build_budget_allocation_df,
+        build_platform_totals_df,
+        create_excel_bytes,
+        create_pdf_bytes,
+    )
+    from modules.module2 import run_module2
+    from modules.module3 import finalise_module3_from_inputs
+    from modules.module4 import run_module4
+    from modules.module5 import run_module5
+    from modules.module6 import run_module6
+
+    s = WizardState()
+    complete_module1_and_advance(
+        s,
+        raw_objectives=["aw", "lg"],
+        raw_budget=12000.0,
+        raw_currency="USD",
+        raw_duration_days=30,
+    )
+    run_module2(
+        s,
+        selected_platforms=["fb", "li"],
+        priorities_input={
+            "fb": {"priority_1": "aw", "priority_2": None},
+            "li": {"priority_1": "lg", "priority_2": None},
+        },
+    )
+    finalise_module3_from_inputs(
+        s,
+        platform_inputs={
+            "fb": {"budget": 4000.0, "kpis": {"FB_AW_REACH": 200000.0}},
+            "li": {"budget": 3000.0, "kpis": {"LI_LG_LEADS": 80.0}},
+        },
+    )
+    run_module4(s)
+    run_module5(s)
+    run_module6(s)
+
+    # Make the session state visible to money() and friends
+    st.session_state["wizard_state"] = s
+
+    try:
+        # Direct formatter check
+        assert money(1234.56) == "$1,234.56", "money() should resolve to $ from session state."
+
+        # Allocation / totals tables don't pre-format money columns themselves
+        # (they're formatted at render time via money()), so this asserts the
+        # consumer of those tables will see $ — verifying the upstream Df is
+        # numeric (not pre-baked with a £ sign).
+        budget_df = build_budget_allocation_df(s.module5_scenario_bundle.results_by_scenario["base"])
+        assert "Allocated Budget" in budget_df.columns
+        for v in budget_df["Allocated Budget"]:
+            assert isinstance(v, float)  # raw numeric, no currency baked in
+
+        totals_df = build_platform_totals_df(s.module5_scenario_bundle.results_by_scenario["base"])
+        assert "Total Allocated Budget" in totals_df.columns
+        for v in totals_df["Total Allocated Budget"]:
+            assert isinstance(v, float)
+
+        # Excel — read back via openpyxl so we only check user-visible cell
+        # values, not XML namespace boilerplate.  Excel stores money columns
+        # as raw floats so the user can apply their own number format in
+        # Excel; the test guarantee is that no cell baked in £ via a string.
+        lp = s.module5_scenario_bundle.results_by_scenario["base"]
+        fc = s.module6_scenario_result.results_by_scenario["base"]
+        xlsx = create_excel_bytes([("base", lp, fc)])
+
+        import io
+        from openpyxl import load_workbook
+        wb = load_workbook(io.BytesIO(xlsx))
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            for row in ws.iter_rows(values_only=True):
+                for cell in row:
+                    if isinstance(cell, str):
+                        assert "£" not in cell, (
+                            f"USD plan should not contain £ in Excel cell "
+                            f"({sheet_name}): {cell!r}"
+                        )
+
+        # PDF — money columns are pre-rendered via money() before being
+        # placed in the table.  Extract the rendered text via pypdf rather
+        # than searching the raw bytes: ReportLab uses WinAnsi single-byte
+        # encoding inside content streams, so the UTF-8 byte pattern for £
+        # (\xc2\xa3) never matches even when £ visually appears.  Extracted
+        # text gives the symbol back in its decoded form, which is the
+        # check we actually want.
+        pdf = create_pdf_bytes(s, [("base", lp, fc)])
+
+        import io
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(pdf))
+        pdf_text = "".join((p.extract_text() or "") for p in reader.pages)
+
+        assert "$" in pdf_text, (
+            "PDF export of a USD plan should contain at least one $ symbol "
+            "in the rendered text."
+        )
+        assert "£" not in pdf_text, (
+            f"PDF export of a USD plan must not contain a £ symbol in the "
+            f"rendered text.  Found in text starting with: "
+            f"{pdf_text[max(0, pdf_text.index('£')-40):pdf_text.index('£')+40]!r}"
+            if "£" in pdf_text else
+            "PDF export of a USD plan must not contain a £ symbol in the rendered text."
+        )
+    finally:
+        # Cleanup so subsequent tests aren't affected
+        if "wizard_state" in st.session_state:
+            del st.session_state["wizard_state"]
+
+
+def test_eur_plan_excel_output_contains_no_pound_symbol() -> None:
+    """Same regression as the USD test, but for €.  We exercise both
+    non-default currencies so a future regression that hardcoded $
+    instead of routing through state would still fail this suite.
+    """
+    import streamlit as st
+    from app import money, create_excel_bytes
+    from modules.module2 import run_module2
+    from modules.module3 import finalise_module3_from_inputs
+    from modules.module4 import run_module4
+    from modules.module5 import run_module5
+    from modules.module6 import run_module6
+
+    s = WizardState()
+    complete_module1_and_advance(
+        s,
+        raw_objectives=["lg"],
+        raw_budget=8000.0,
+        raw_currency="EUR",
+        raw_duration_days=30,
+    )
+    run_module2(
+        s,
+        selected_platforms=["li"],
+        priorities_input={"li": {"priority_1": "lg", "priority_2": None}},
+    )
+    finalise_module3_from_inputs(
+        s,
+        platform_inputs={"li": {"budget": 5000.0, "kpis": {"LI_LG_LEADS": 100.0}}},
+    )
+    run_module4(s)
+    run_module5(s)
+    run_module6(s)
+
+    st.session_state["wizard_state"] = s
+    try:
+        assert money(1234.56) == "€1,234.56"
+        lp = s.module5_scenario_bundle.results_by_scenario["base"]
+        fc = s.module6_scenario_result.results_by_scenario["base"]
+        xlsx = create_excel_bytes([("base", lp, fc)])
+
+        # Raw .xlsx bytes are a ZIP of XML files whose internals contain $
+        # and similar characters in namespace boilerplate.  Read cell values
+        # back via openpyxl so only user-visible content is checked.
+        import io
+        from openpyxl import load_workbook
+        wb = load_workbook(io.BytesIO(xlsx))
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            for row in ws.iter_rows(values_only=True):
+                for cell in row:
+                    if isinstance(cell, str):
+                        assert "£" not in cell, (
+                            f"EUR plan should not contain £ in Excel cell "
+                            f"({sheet_name}): {cell!r}"
+                        )
+                        assert "$" not in cell, (
+                            f"EUR plan should not contain $ in Excel cell "
+                            f"({sheet_name}): {cell!r}"
+                        )
+    finally:
+        if "wizard_state" in st.session_state:
+            del st.session_state["wizard_state"]
+
+
+def test_module1_error_examples_dont_anchor_on_pound_symbol() -> None:
+    """Budget parse errors should reference example values in a
+    currency-neutral way — a USD user shouldn't see a £ example
+    when their input fails to parse.  The previous error text said
+    'for example: 1200 or £1,200.50'; the new text lists all three
+    accepted symbols so no currency is privileged.
+    """
+    from modules.module1 import _parse_budget, Module1ValidationError
+
+    with pytest.raises(Module1ValidationError) as excinfo:
+        _parse_budget("not a number")
+    err = str(excinfo.value)
+    # Currency-neutral: the example must list all three accepted symbols
+    # rather than privileging £.  Normalise non-breaking spaces to
+    # regular spaces before comparison so a formatter change that swaps
+    # them wouldn't silently bypass the check.
+    normalised = err.replace(" ", " ")
+    assert "£, $, €" in normalised, (
+        f"Expected the error to list all three accepted currency symbols, got: {err!r}"
+    )
+    # And the value example itself should be plain (no £ prefix on the numeric example)
+    assert "£1,200.50" not in err

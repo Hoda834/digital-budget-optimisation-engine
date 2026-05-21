@@ -157,14 +157,14 @@ def _parse_budget(raw_budget: Any) -> Tuple[float, Optional[str]]:
     if raw_budget is None:
         raise Module1ValidationError(
             "Please enter your total budget as a valid monetary amount "
-            "(for example: 1200 or £1,200.50)."
+            "(for example: 1200 or 1,200.50; currency symbols £, $, € are accepted)."
         )
 
     value = str(raw_budget).strip()
     if not value:
         raise Module1ValidationError(
             "Please enter your total budget as a valid monetary amount "
-            "(for example: 1200 or £1,200.50)."
+            "(for example: 1200 or 1,200.50; currency symbols £, $, € are accepted)."
         )
 
     # Strip leading currency symbol and remember which one
@@ -180,7 +180,7 @@ def _parse_budget(raw_budget: Any) -> Tuple[float, Optional[str]]:
     except ValueError:
         raise Module1ValidationError(
             "Please enter your total budget as a valid monetary amount "
-            "(for example: 1200 or £1,200.50)."
+            "(for example: 1200 or 1,200.50; currency symbols £, $, € are accepted)."
         )
 
     if math.isnan(numeric) or math.isinf(numeric):
@@ -490,7 +490,7 @@ def _present_module_1_cli() -> None:
 
     raw_budget = input(
         "Please enter your total budget "
-        "(for example: 1200 or £1,200.50): "
+        "(for example: 1200 or 1,200.50; currency symbols £, $, € accepted): "
     )
 
     raw_currency = input(
