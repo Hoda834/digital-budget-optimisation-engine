@@ -18,7 +18,13 @@ from modules.module1 import (
 from core.kpi_config import KPI_CONFIG
 from modules.module2 import run_module2
 from modules.module4 import run_module4
-from modules.module5 import Module5LPResult, Module5ScenarioBundle, run_module5
+from modules.module5 import (
+    Module5LPResult,
+    Module5ScenarioBundle,
+    run_module5,
+    run_module5_montecarlo,
+    DEFAULT_MC_TRIALS,
+)
 from modules.module6 import Module6Result, Module6ScenarioResult, run_module6
 
 from modules.module7 import Module7BundleInsight, run_module7
@@ -986,6 +992,80 @@ def results_ui(state: WizardState) -> None:
                         f"{g_label}: {plats} — split was set by proportional "
                         f"redistribution, not by a meaningful productivity gap."
                     )
+
+    # ── Monte Carlo robustness ─────────────────────────────────────────────
+    # On-demand because n_trials LP solves is the expensive bit (~1-5 s).
+    # Caches the result in session state so toggling other UI elements
+    # doesn't re-run the whole batch.
+    with st.expander("Robustness check (Monte Carlo)", expanded=False):
+        st.caption(
+            "Re-solves the base scenario hundreds of times with productivities "
+            "perturbed by their observed noise.  Surfaces platforms whose share "
+            "is sensitive to the underlying assumptions."
+        )
+        col_n, col_seed, col_run = st.columns([1, 1, 1])
+        with col_n:
+            n_trials = st.number_input(
+                "Trials", min_value=20, max_value=500,
+                value=int(DEFAULT_MC_TRIALS), step=20,
+                help="More trials = tighter percentiles, more runtime.",
+            )
+        with col_seed:
+            seed = st.number_input(
+                "Seed", min_value=0, max_value=2_147_483_647,
+                value=42, step=1,
+                help="Reproducibility — same seed gives the same distribution.",
+            )
+        with col_run:
+            st.write("")  # vertical spacer to line up with inputs
+            run_mc = st.button("Run robustness check", type="primary")
+
+        if run_mc:
+            try:
+                with st.spinner(f"Running {int(n_trials)} LP solves..."):
+                    mc_result = run_module5_montecarlo(
+                        state, n_trials=int(n_trials), seed=int(seed),
+                    )
+                st.session_state["_mc_result"] = mc_result
+            except Exception as e:
+                st.error(f"Monte Carlo failed: {e}")
+
+        mc_result = st.session_state.get("_mc_result")
+        if mc_result is not None:
+            st.caption(
+                f"{mc_result.n_trials} trials completed (seed={mc_result.seed}). "
+                f"Instability threshold: CV > {mc_result.instability_threshold:.0%}."
+            )
+
+            if mc_result.unstable_platforms:
+                names = ", ".join(
+                    PLATFORM_NAMES.get(p, p) for p in mc_result.unstable_platforms
+                )
+                st.warning(
+                    f"Unstable platforms: {names}. "
+                    f"Allocation rank for these platforms is sensitive to "
+                    f"plausible productivity noise — don't bet the campaign on them."
+                )
+            else:
+                st.success(
+                    "No platform's allocation moved meaningfully under perturbation — "
+                    "the plan is robust to the noise in the input data."
+                )
+
+            platform_rows = []
+            for s in mc_result.per_platform:
+                platform_rows.append({
+                    "Platform": PLATFORM_NAMES.get(s.platform, s.platform),
+                    "Mean": money(s.mean),
+                    "p5": money(s.p5),
+                    "Median": money(s.p50),
+                    "p95": money(s.p95),
+                    "CV": f"{s.cv:.1%}",
+                })
+            if platform_rows:
+                st.markdown("**Per-platform allocation distribution:**")
+                st.dataframe(pd.DataFrame(platform_rows),
+                             use_container_width=True, hide_index=True)
 
     tabs = st.tabs([_human_scenario_name(k) for k in scenario_keys])
     scenario_payload_for_exports: List[Tuple[str, Module5LPResult, Optional[Module6Result]]] = []
