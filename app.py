@@ -753,35 +753,44 @@ def module3_ui(state: WizardState) -> None:
         "Count KPIs (reach, leads, clicks) are totals; rate KPIs (engagement rate) are percentages. "
         "Decimals are fine throughout."
     )
-    st.warning(
-        "**Form fields are pre-filled with placeholder values** (e.g. 1,000 leads, "
-        "2.5% engagement rate).  These are *not* defaults you should accept — they're "
-        "starter numbers to keep the form interactive.  Replace each cell with your "
-        "actual historical KPI before relying on the plan, or upload a CSV to "
-        "pre-fill from real data.  The results page will warn you about any cells "
-        "with no data, but it cannot tell when a placeholder was submitted as real.",
-        icon="⚠️",
-    )
-    st.info(
-        "**How your numbers are used.** Values are compared *relative to other platforms* "
-        "within the same objective — doubling every platform's reach won't shift the "
-        "allocation, only their ranking does.  Platforms with shorter historical windows "
-        "are partially pooled toward the cross-platform average: the LP trusts a 90-day "
-        "estimate more than a 7-day one.  If you want your raw numbers honoured without "
-        "pooling, give each platform a long history (180+ days).",
-        icon="ℹ️",
-    )
-    st.warning(
-        "**Attribution caveat.** The KPIs you enter reflect each platform's own "
-        "attribution model — typically last-click.  Platforms over-credit their own "
-        "conversions: Meta tends to claim leads that Search also influenced; Google "
-        "tends to claim conversions that brand awareness created.  The optimiser "
-        "treats these numbers as truth, so its recommendation is *conditional on "
-        "your attribution model being correct*.  Incrementality — would these "
-        "conversions have happened anyway? — is not modelled.  Treat productivity "
-        "ratios as upper bounds, not facts.",
-        icon="⚠️",
-    )
+    # Consolidate three notices (placeholders, normalisation, attribution) into
+    # one collapsible disclosure.  Each is real and worth surfacing the first
+    # time the user sees this step, but three stacked yellow boxes create
+    # warning fatigue and get skimmed past.
+    with st.expander("How Module 3 works (read once)", expanded=False):
+        st.markdown(
+            "**Form fields are pre-filled with placeholder values** "
+            "(e.g. 1,000 leads, 2.5% engagement rate). These are *not* "
+            "defaults you should accept — they're starter numbers to keep "
+            "the form interactive. Replace each cell with your actual "
+            "historical KPI, or upload a CSV to pre-fill from real data. "
+            "The results page will warn you about any cells with no data, "
+            "but it cannot tell when a placeholder was submitted as real."
+        )
+        st.markdown("---")
+        st.markdown(
+            "**How your numbers are used.** Values are compared *relative "
+            "to other platforms* within the same objective — doubling every "
+            "platform's reach won't shift the allocation, only their "
+            "ranking does. Platforms with shorter historical windows are "
+            "partially pooled toward the cross-platform average: the LP "
+            "trusts a 90-day estimate more than a 7-day one. If you want "
+            "your raw numbers honoured without pooling, give each platform "
+            "a long history (180+ days)."
+        )
+        st.markdown("---")
+        st.markdown(
+            "**Attribution caveat.** The KPIs you enter reflect each "
+            "platform's own attribution model — typically last-click. "
+            "Platforms over-credit their own conversions: Meta tends to "
+            "claim leads that Search also influenced; Google tends to "
+            "claim conversions that brand awareness created. The "
+            "optimiser treats these numbers as truth, so its "
+            "recommendation is *conditional on your attribution model "
+            "being correct*. Incrementality — would these conversions "
+            "have happened anyway? — is not modelled. Treat productivity "
+            "ratios as upper bounds, not facts."
+        )
 
     default_days = int(getattr(state, "campaign_duration_days", None) or 30)
     catalog = effective_kpi_config(state)
@@ -1680,9 +1689,19 @@ def module1_ui(state: WizardState) -> None:
     if goal_codes:
         st.markdown("### What is each result worth to the business?")
         st.caption(
-            "Set the £ value of one unit of each objective's KPI. The optimiser "
-            "uses these as utility weights — without them it falls back to "
-            "rank-based heuristics. Leave at 0 to skip."
+            "Set the £ value of one unit of each objective's KPI.  The "
+            "optimiser uses these as utility weights — without them it "
+            "falls back to rank-based heuristics.  Leave at 0 to skip."
+        )
+        st.info(
+            "ℹ️ **The values pre-filled below are illustrative — sized for "
+            "UK B2B SaaS** (£100/lead, £0.50/click, £0.20/engagement, "
+            "£0.001/impression).  A B2C e-commerce business would use very "
+            "different numbers: a lead might be worth £20, a click "
+            "£0.05, an impression £0.001.  **Replace them with your own "
+            "economics before relying on the plan** — these aren't "
+            "universal defaults, they're a starter for one specific "
+            "vertical."
         )
         cols = st.columns(min(len(goal_codes), 4))
         prior_values = state.goal_value_per_unit or {}
@@ -1888,74 +1907,80 @@ def module2_ui(state: WizardState) -> None:
     priorities_input: Dict[str, Dict[str, Optional[str]]] = {}
     is_valid = True
 
-    for p in selected_platforms:
-        platform_name = PLATFORM_NAMES.get(p, p)
-        st.subheader(platform_name)
-
-        p1_key = f"{p}_p1"
-        p2_key = f"{p}_p2"
-
-        # If the user came back to Module 1 and removed a goal, the cached
-        # session_state priority for this platform may now reference a
-        # removed goal.  Clear it so Streamlit doesn't render an invalid
-        # state.
-        options_p1 = [None] + list(state.valid_goals)
-        if st.session_state.get(p1_key) not in options_p1:
-            st.session_state[p1_key] = None
-
-        p1 = st.selectbox(
-            f"Priority 1 objective for {platform_name}",
-            options=options_p1,
-            format_func=lambda x: {
-                None: "(none)",
-                GOAL_AW: "Awareness",
-                GOAL_EN: "Engagement",
-                GOAL_WT: "Website Traffic",
-                GOAL_LG: "Lead Generation",
-            }.get(x, str(x)),
-            key=p1_key,
+    if selected_platforms:
+        st.markdown("### Set objective priorities per platform")
+        st.caption(
+            "Each platform must have a Priority 1 objective; Priority 2 "
+            "is optional.  Priorities determine which objectives the "
+            "platform competes in inside the LP."
         )
 
-        allowed_p2_options = [None] + [g for g in state.valid_goals if g != p1]
+    # Compact grid: 2 platforms per row instead of one column per platform.
+    # On a typical screen this halves the vertical scroll for a 6-platform
+    # plan and lets the user see most/all selections at once.
+    goal_options = [None] + list(state.valid_goals)
+    goal_format = lambda x: {
+        None: "(none)",
+        GOAL_AW: "Awareness",
+        GOAL_EN: "Engagement",
+        GOAL_WT: "Website Traffic",
+        GOAL_LG: "Lead Generation",
+    }.get(x, str(x))
 
-        current_p2 = st.session_state.get(p2_key, None)
-        if current_p2 == p1 and current_p2 is not None:
-            st.session_state[p2_key] = None
-            current_p2 = None
+    for i in range(0, len(selected_platforms), 2):
+        cols = st.columns(2, gap="large")
+        for j, p in enumerate(selected_platforms[i:i + 2]):
+            platform_name = _platform_display_name(state, p)
+            with cols[j]:
+                st.markdown(f"**{platform_name}**")
+                p1_key = f"{p}_p1"
+                p2_key = f"{p}_p2"
 
-        p2 = st.selectbox(
-            f"Priority 2 objective for {platform_name}",
-            options=allowed_p2_options,
-            format_func=lambda x: {
-                None: "(none)",
-                GOAL_AW: "Awareness",
-                GOAL_EN: "Engagement",
-                GOAL_WT: "Website Traffic",
-                GOAL_LG: "Lead Generation",
-            }.get(x, str(x)),
-            key=p2_key,
-        )
+                # Defensive cleanup: if the user went back to Module 1 and
+                # removed a goal, the cached priority for this platform may
+                # now reference a removed goal.
+                if st.session_state.get(p1_key) not in goal_options:
+                    st.session_state[p1_key] = None
 
-        if p2 is not None and p1 is None:
-            is_valid = False
-            st.error("Priority 2 cannot be set without Priority 1.")
+                p1 = st.selectbox(
+                    "Priority 1",
+                    options=goal_options,
+                    format_func=goal_format,
+                    key=p1_key,
+                )
 
-        if p1 is not None and p2 is not None and p1 == p2:
-            is_valid = False
-            st.error("Priority 1 and Priority 2 must be different.")
+                allowed_p2 = [None] + [g for g in state.valid_goals if g != p1]
+                if st.session_state.get(p2_key) == p1 and p1 is not None:
+                    st.session_state[p2_key] = None
+                if st.session_state.get(p2_key) not in allowed_p2:
+                    st.session_state[p2_key] = None
 
-        if len(state.valid_goals) == 1 and p2 is not None:
-            is_valid = False
-            st.error("Priority 2 cannot be set when there is only one selected objective.")
+                p2 = st.selectbox(
+                    "Priority 2 (optional)",
+                    options=allowed_p2,
+                    format_func=goal_format,
+                    key=p2_key,
+                )
 
-        priorities_input[p] = {"priority_1": p1, "priority_2": p2}
+                if p2 is not None and p1 is None:
+                    is_valid = False
+                    st.error("Priority 2 needs Priority 1.")
+                if p1 is not None and p2 is not None and p1 == p2:
+                    is_valid = False
+                    st.error("Priorities must differ.")
+                if len(state.valid_goals) == 1 and p2 is not None:
+                    is_valid = False
+                    st.error("Only one objective selected.")
 
-    if st.button("Continue", disabled=(not selected_platforms) or (not is_valid)):
+                priorities_input[p] = {"priority_1": p1, "priority_2": p2}
+
+    if st.button("Continue", disabled=(not selected_platforms) or (not is_valid),
+                 type="primary"):
         try:
             run_module2(state, selected_platforms, priorities_input)
             safe_rerun()
-        except Exception:
-            st.error("Please review your selections and try again.")
+        except Exception as e:
+            st.error(f"Could not finalise Module 2: {e}")
 
 
 def main() -> None:
