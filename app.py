@@ -81,6 +81,115 @@ def reset_state() -> None:
     safe_rerun()
 
 
+def _roll_back_to_step(state: WizardState, target_step: int) -> None:
+    """Rewind the wizard to *target_step* without losing the input values.
+
+    All module-finalised flags from target_step onwards are reset so the
+    user can re-enter that step.  WizardState's data fields (valid_goals,
+    total_budget, active_platforms, etc.) are preserved so the forms can
+    re-render with the user's previous selections as defaults.
+    """
+    if target_step <= 1:
+        state.module1_finalised = False
+    if target_step <= 2:
+        state.module2_finalised = False
+    if target_step <= 3:
+        state.module3_finalised = False
+    if target_step <= 4:
+        state.module4_finalised = False
+    if target_step <= 5:
+        state.module5_finalised = False
+    if target_step <= 6:
+        state.module6_finalised = False
+    if target_step <= 7:
+        state.module7_finalised = False
+    state.current_step = target_step
+    # Drop the cached Monte Carlo too; new policy may invalidate it.
+    st.session_state.pop("_mc_result", None)
+
+
+_CURRENCY_SYMBOLS = {"GBP": "£", "USD": "$", "EUR": "€"}
+
+
+def _render_sidebar(state: WizardState) -> None:
+    """Persistent left rail: progress, decisions so far, back-nav buttons.
+
+    Visible on every step so the user always sees where they are in the
+    wizard, what they've already chosen, and how to edit a previous step
+    without nuking the whole session.
+    """
+    with st.sidebar:
+        st.markdown("### Wizard")
+        steps = [
+            ("1. Objectives & Budget", 1, state.module1_finalised),
+            ("2. Platforms & Priorities", 2, state.module2_finalised),
+            ("3. Historical Data", 3, state.module3_finalised),
+            ("4. Results & Refine", 4, state.module6_finalised),
+        ]
+        for label, step_num, done in steps:
+            current = (state.current_step == step_num) or \
+                      (step_num == 4 and state.current_step >= 4)
+            if done and not current:
+                icon = "✅"
+            elif current:
+                icon = "▶"
+            else:
+                icon = "○"
+            st.markdown(f"{icon} {label}")
+
+        # Summary of decisions made so far
+        if state.valid_goals or state.total_budget or state.active_platforms:
+            st.markdown("---")
+            st.markdown("**So far:**")
+            if state.valid_goals:
+                labels = [_GOAL_LABEL.get(g, g) for g in state.valid_goals]
+                st.caption(f"_Objectives:_ {', '.join(labels)}")
+            if state.total_budget:
+                sym = _CURRENCY_SYMBOLS.get(state.currency or "GBP", "")
+                st.caption(f"_Budget:_ {sym}{state.total_budget:,.0f} "
+                           f"({state.currency or 'GBP'})")
+            if state.campaign_duration_days:
+                st.caption(f"_Duration:_ {state.campaign_duration_days} days")
+            if getattr(state, "test_and_learn_pct", 0.0) > 0:
+                st.caption(
+                    f"_Test reserve:_ {state.test_and_learn_pct*100:.0f}%"
+                )
+            if state.active_platforms:
+                names = [_platform_display_name(state, p)
+                         for p in state.active_platforms]
+                st.caption(f"_Platforms:_ {', '.join(names)}")
+
+        # Back-navigation: jump to any earlier completed step
+        any_complete = (state.module1_finalised or state.module2_finalised
+                        or state.module3_finalised)
+        if any_complete:
+            st.markdown("---")
+            st.markdown("**Edit a previous step:**")
+            if state.module1_finalised and state.current_step != 1:
+                if st.button("← Module 1: Objectives & Budget",
+                             key="_back_m1",
+                             use_container_width=True):
+                    _roll_back_to_step(state, 1)
+                    safe_rerun()
+            if state.module2_finalised and state.current_step != 2:
+                if st.button("← Module 2: Platforms",
+                             key="_back_m2",
+                             use_container_width=True):
+                    _roll_back_to_step(state, 2)
+                    safe_rerun()
+            if state.module3_finalised and state.current_step != 3:
+                if st.button("← Module 3: Historical Data",
+                             key="_back_m3",
+                             use_container_width=True):
+                    _roll_back_to_step(state, 3)
+                    safe_rerun()
+
+        st.markdown("---")
+        if st.button("Start over (reset everything)", key="_sidebar_reset",
+                     type="secondary"):
+            reset_state()
+
+
 def money(x: Any) -> str:
     try:
         v = float(x)
@@ -1524,14 +1633,19 @@ def module1_ui(state: WizardState) -> None:
     st.header("Objectives and total budget")
 
     # ── Core inputs ────────────────────────────────────────────────────────
+    # Defaults read from state when present so back-navigation shows the
+    # user's previous selections instead of a blank form.
+    objective_options = [
+        (GOAL_AW, "Awareness"),
+        (GOAL_EN, "Engagement"),
+        (GOAL_WT, "Website Traffic"),
+        (GOAL_LG, "Lead Generation"),
+    ]
+    prior_goals = set(state.valid_goals or [])
     goals = st.multiselect(
         "Choose one or more marketing objectives:",
-        options=[
-            (GOAL_AW, "Awareness"),
-            (GOAL_EN, "Engagement"),
-            (GOAL_WT, "Website Traffic"),
-            (GOAL_LG, "Lead Generation"),
-        ],
+        options=objective_options,
+        default=[opt for opt in objective_options if opt[0] in prior_goals],
         format_func=lambda x: x[1],
     )
     goal_codes = [code for code, _ in goals]
@@ -1541,17 +1655,22 @@ def module1_ui(state: WizardState) -> None:
         total_budget = st.number_input(
             "Total budget",
             min_value=1.0,
-            value=10000.0,
+            value=float(state.total_budget) if state.total_budget else 10000.0,
             step=500.0,
             help="The full campaign budget — including any test-and-learn reserve.",
         )
     with col_currency:
-        currency = st.selectbox("Currency", options=["GBP", "USD", "EUR"], index=0)
+        currency_options = ["GBP", "USD", "EUR"]
+        currency = st.selectbox(
+            "Currency", options=currency_options,
+            index=currency_options.index(state.currency)
+                  if state.currency in currency_options else 0,
+        )
     with col_duration:
         duration_days = st.number_input(
             "Campaign days",
             min_value=1,
-            value=30,
+            value=int(state.campaign_duration_days or 30),
             step=1,
             help="Used to scale industry-effective minimums and historical-window confidence bands.",
         )
@@ -1566,13 +1685,15 @@ def module1_ui(state: WizardState) -> None:
             "rank-based heuristics. Leave at 0 to skip."
         )
         cols = st.columns(min(len(goal_codes), 4))
+        prior_values = state.goal_value_per_unit or {}
         for i, gcode in enumerate(goal_codes):
             label, default = _GOAL_VALUE_HINTS.get(gcode, (f"£ per {gcode}", 1.0))
+            current = float(prior_values.get(gcode, default))
             with cols[i % len(cols)]:
                 v = st.number_input(
                     f"{_GOAL_LABEL.get(gcode, gcode)} — {label}",
                     min_value=0.0,
-                    value=float(default),
+                    value=current,
                     step=max(default / 10.0, 0.001),
                     format="%.4f",
                     key=f"goal_value_{gcode}",
@@ -1581,12 +1702,14 @@ def module1_ui(state: WizardState) -> None:
                     goal_values[gcode] = v
 
     # ── Advanced policy inputs ─────────────────────────────────────────────
-    with st.expander("Advanced policy (test-and-learn, seasonality)", expanded=False):
+    with st.expander("Advanced policy (test-and-learn, seasonality)",
+                     expanded=bool(getattr(state, "test_and_learn_pct", 0.0)
+                                    or getattr(state, "seasonality_index", {}))):
         test_and_learn_pct = st.slider(
             "Test-and-learn reserve",
             min_value=0.0,
             max_value=0.40,
-            value=0.10,
+            value=float(getattr(state, "test_and_learn_pct", 0.0) or 0.10),
             step=0.01,
             format="%.0f%%",
             help=(
@@ -1603,6 +1726,7 @@ def module1_ui(state: WizardState) -> None:
             "underperformance (e.g. December CPM inflation). Leave at 1.0 for no adjustment."
         )
         seasonality_index: Dict[str, float] = {}
+        prior_seasonality = getattr(state, "seasonality_index", {}) or {}
         if goal_codes:
             scols = st.columns(min(len(goal_codes), 4))
             for i, gcode in enumerate(goal_codes):
@@ -1611,7 +1735,7 @@ def module1_ui(state: WizardState) -> None:
                         _GOAL_LABEL.get(gcode, gcode),
                         min_value=0.2,
                         max_value=3.0,
-                        value=1.0,
+                        value=float(prior_seasonality.get(gcode, 1.0)),
                         step=0.05,
                         key=f"seasonality_{gcode}",
                     )
@@ -1751,9 +1875,13 @@ def module2_ui(state: WizardState) -> None:
     custom_codes = [str(cp.get("code", "")) for cp in (state.custom_platforms or [])]
     platforms = builtin_platforms + custom_codes
 
+    # Default to previously-selected platforms on rollback so the user
+    # doesn't have to re-pick them.
+    prior_active = [p for p in (state.active_platforms or []) if p in platforms]
     selected_platforms = st.multiselect(
         "Choose one or more platforms:",
         options=platforms,
+        default=prior_active,
         format_func=lambda p: _platform_display_name(state, str(p)),
     )
 
@@ -1767,9 +1895,17 @@ def module2_ui(state: WizardState) -> None:
         p1_key = f"{p}_p1"
         p2_key = f"{p}_p2"
 
+        # If the user came back to Module 1 and removed a goal, the cached
+        # session_state priority for this platform may now reference a
+        # removed goal.  Clear it so Streamlit doesn't render an invalid
+        # state.
+        options_p1 = [None] + list(state.valid_goals)
+        if st.session_state.get(p1_key) not in options_p1:
+            st.session_state[p1_key] = None
+
         p1 = st.selectbox(
             f"Priority 1 objective for {platform_name}",
-            options=[None] + list(state.valid_goals),
+            options=options_p1,
             format_func=lambda x: {
                 None: "(none)",
                 GOAL_AW: "Awareness",
@@ -1827,6 +1963,8 @@ def main() -> None:
     initialise_state()
 
     state: WizardState = st.session_state["wizard_state"]
+    _render_sidebar(state)
+
     if state.current_step == 1:
         module1_ui(state)
         return
