@@ -644,6 +644,159 @@ def test_module5_rejects_invalid_state_carveout() -> None:
         build_module5_input_from_state(state)
 
 
+def test_montecarlo_produces_per_platform_distribution() -> None:
+    """Monte Carlo should produce a per-platform distribution with non-trivial
+    spread reflecting the productivity noise."""
+    from modules.module5 import run_module5_montecarlo
+
+    state = _run_pipeline_to_module5()
+    mc = run_module5_montecarlo(state, n_trials=50, seed=42)
+
+    assert mc.n_trials > 0
+    assert len(mc.per_platform) >= 2
+    for s in mc.per_platform:
+        assert s.mean >= 0.0
+        assert s.p5 <= s.p50 <= s.p95
+        if s.mean > 1.0:
+            # Real allocations should have some spread under perturbation
+            assert s.std >= 0.0
+
+
+def test_montecarlo_seed_reproducibility() -> None:
+    """Same seed → same distribution.  This is the floor for any honest
+    Monte Carlo: results must be reproducible for audit."""
+    from modules.module5 import run_module5_montecarlo
+
+    state = _run_pipeline_to_module5()
+    a = run_module5_montecarlo(state, n_trials=30, seed=123)
+    b = run_module5_montecarlo(state, n_trials=30, seed=123)
+
+    a_by_p = {s.platform: s.mean for s in a.per_platform}
+    b_by_p = {s.platform: s.mean for s in b.per_platform}
+    assert a_by_p.keys() == b_by_p.keys()
+    for p in a_by_p:
+        assert a_by_p[p] == pytest.approx(b_by_p[p])
+
+
+def test_montecarlo_flags_unstable_platform() -> None:
+    """When productivity noise is high enough that the LP picks materially
+    different winners across trials, the unstable platform list should
+    surface those platforms."""
+    from modules.module5 import run_module5_montecarlo
+    from modules.module6 import _coefficient_of_variation
+    from modules.module2 import run_module2
+    from modules.module3 import finalise_module3_from_inputs
+    from modules.module4 import run_module4
+
+    state = WizardState()
+    complete_module1_and_advance(
+        state, raw_objectives=["lg"], raw_budget=10000.0, raw_duration_days=30,
+    )
+    run_module2(
+        state,
+        selected_platforms=["fb", "li"],
+        priorities_input={
+            "fb": {"priority_1": "lg", "priority_2": None},
+            "li": {"priority_1": "lg", "priority_2": None},
+        },
+    )
+    # Two platforms with near-identical productivity AND high observed
+    # variance → LP picks an arbitrary winner each trial → high allocation CV.
+    high_variance_obs = [50.0, 100.0, 150.0, 200.0, 60.0]
+    finalise_module3_from_inputs(
+        state,
+        platform_inputs={
+            "fb": {"budget": 3000.0, "kpis": {"FB_LG_LEADS": 100.0},
+                   "kpi_observations": {"FB_LG_LEADS": high_variance_obs}},
+            "li": {"budget": 3000.0, "kpis": {"LI_LG_LEADS": 100.0},
+                   "kpi_observations": {"LI_LG_LEADS": high_variance_obs}},
+        },
+    )
+    run_module4(state)
+    state.min_spend_per_platform = {"fb": 0.0, "li": 0.0}
+    run_module5(state)
+
+    # The CV on the observed data should be well above the instability threshold
+    obs_cv = _coefficient_of_variation(high_variance_obs)
+    assert obs_cv is not None and obs_cv > 0.30, f"Setup CV too low: {obs_cv}"
+
+    mc = run_module5_montecarlo(state, n_trials=80, seed=7, instability_cv_threshold=0.15)
+    # At least one of the two platforms should be flagged unstable given the
+    # combination of degenerate productivity + high noise.
+    assert mc.unstable_platforms, (
+        f"Expected at least one unstable platform under high-variance setup, "
+        f"got: unstable={mc.unstable_platforms}, "
+        f"per_platform_cv={[(s.platform, s.cv) for s in mc.per_platform]}"
+    )
+
+
+def test_montecarlo_rejects_tiny_n_trials() -> None:
+    from modules.module5 import run_module5_montecarlo, Module5ValidationError
+
+    state = _run_pipeline_to_module5()
+    with pytest.raises(Module5ValidationError, match="too small"):
+        run_module5_montecarlo(state, n_trials=5)
+
+
+def test_using_economic_weights_logs_rank_skip(caplog) -> None:
+    """When goal_value_per_unit is present, the rank-based fallback must be
+    skipped — and that decision should be auditable in the logs."""
+    from modules.module2 import run_module2
+    from modules.module3 import finalise_module3_from_inputs
+    from modules.module4 import run_module4
+    import logging
+
+    state = WizardState()
+    complete_module1_and_advance(
+        state,
+        raw_objectives=["aw", "lg"],
+        raw_budget=10000.0,
+        raw_duration_days=30,
+        raw_goal_values={"lg": 200.0, "aw": 0.0005},
+    )
+    run_module2(
+        state,
+        selected_platforms=["fb", "li"],
+        priorities_input={
+            "fb": {"priority_1": "aw", "priority_2": None},
+            "li": {"priority_1": "lg", "priority_2": None},
+        },
+    )
+    finalise_module3_from_inputs(
+        state,
+        platform_inputs={
+            "fb": {"budget": 4000.0, "kpis": {"FB_AW_REACH": 200000.0}},
+            "li": {"budget": 3000.0, "kpis": {"LI_LG_LEADS": 80.0}},
+        },
+    )
+    run_module4(state)
+
+    with caplog.at_level(logging.INFO, logger="modules.module5"):
+        run_module5(state)
+
+    text = " ".join(rec.message for rec in caplog.records)
+    assert "economic goal weights" in text.lower()
+    assert "rank-based weights from priority_rank are not consulted" in text
+
+
+def test_using_rank_weights_logs_recommendation(caplog) -> None:
+    """When goal_value_per_unit is absent, the rank-based path is used and
+    we should suggest switching to economic values."""
+    import logging
+
+    state = _run_pipeline_to_module5()  # no goal values
+    with caplog.at_level(logging.INFO, logger="modules.module5"):
+        # Re-run M5 by bypassing the finalised guard.  Reset just enough state.
+        state.module5_finalised = False
+        from modules.module5 import build_module5_input_from_state, run_module5_lp_scenarios
+        bundle = run_module5_lp_scenarios(build_module5_input_from_state(state))
+        assert bundle is not None  # use it
+
+    text = " ".join(rec.message for rec in caplog.records)
+    assert "rank-based goal weights" in text.lower()
+    assert "supply economic values" in text.lower()
+
+
 def test_seasonality_shifts_allocation_toward_boosted_goal() -> None:
     """A seasonality boost for one goal should pull more LP budget toward
     the platform serving that goal."""

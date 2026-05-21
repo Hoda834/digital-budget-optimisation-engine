@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import math
+import random
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pulp
 
@@ -359,11 +360,24 @@ def _build_system_goal_weights(state: WizardState) -> Dict[str, float]:
                 derived[g] = val * prod
         total = sum(derived.values())
         if total > 0.0:
+            # When economic weights are present, the rank-based fallback at 2b
+            # is deliberately skipped: the two value frameworks (utility vs.
+            # ordinal preference) shouldn't compose.  Log once so operators
+            # can audit the path the optimiser took.
+            if getattr(state, "priority_rank", None):
+                _LOG.info(
+                    "Using economic goal weights from goal_value_per_unit; "
+                    "rank-based weights from priority_rank are not consulted in this run. "
+                    "derived_weights=%s",
+                    {g: round(w / total, 4) for g, w in derived.items()},
+                )
             return {g: w / total for g, w in derived.items()}
 
     # 2b) derive from Module 2 platform priorities: each platform contributes
     #    rank-1 -> 2, rank-2 -> 1 to its respective goal. This makes the system-level
     #    weight a frequency-weighted preference instead of inert uniformity.
+    #    Used only when goal_value_per_unit is absent; surfaces as the
+    #    "no per-goal economic values" caveat in Module 7.
     derived: Dict[str, float] = {g: 0.0 for g in state.valid_goals}
     priority_map = getattr(state, "priority_rank", {}) or {}
     for p, ranks in priority_map.items():
@@ -379,6 +393,12 @@ def _build_system_goal_weights(state: WizardState) -> Dict[str, float]:
 
     total = sum(derived.values())
     if total > 0.0:
+        _LOG.info(
+            "Using rank-based goal weights (no goal_value_per_unit provided). "
+            "Supply economic values in Module 1 for utility-grounded weighting. "
+            "derived_weights=%s",
+            {g: round(w / total, 4) for g, w in derived.items()},
+        )
         return {g: w / total for g, w in derived.items()}
 
     # 3) last resort: uniform
@@ -1018,3 +1038,278 @@ def run_module5(state: WizardState) -> WizardState:
     )
 
     return state
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Monte Carlo robustness analysis
+# ────────────────────────────────────────────────────────────────────────────
+# A reviewer-driven addition: the LP gives a single deterministic allocation,
+# but a wrong productivity estimate can dominate the result without the
+# system flagging the underlying uncertainty.  This block re-solves the LP
+# many times with the productivities perturbed by their observed (or
+# window-scaled) coefficient of variation, then reports the *distribution*
+# of allocations.  Cells whose allocation has a wide spread are explicitly
+# called out as unstable — that's the honest answer to "how robust are the
+# assumptions?"
+
+# Default cap on Monte Carlo trials.  200 keeps the runtime under ~5 s on
+# typical small problems while giving stable p5/p95 estimates.
+DEFAULT_MC_TRIALS = 200
+
+# CV above which a per-platform total is treated as "unstable" — i.e. the
+# rank ordering of platforms is sensitive to plausible productivity noise.
+# 0.20 means "the platform's share moves by more than 20% of its mean
+# under realistic data perturbation."
+DEFAULT_INSTABILITY_CV = 0.20
+
+
+@dataclass
+class Module5MCCellSummary:
+    platform: str
+    goal: str               # empty string for platform totals
+    mean: float
+    std: float
+    cv: float               # std / mean (0 when mean ≈ 0)
+    p5: float
+    p50: float
+    p95: float
+
+
+@dataclass
+class Module5MonteCarloResult:
+    n_trials: int
+    seed: Optional[int]
+    per_cell: List[Module5MCCellSummary] = field(default_factory=list)
+    per_platform: List[Module5MCCellSummary] = field(default_factory=list)
+    # Platforms whose share is sensitive to plausible productivity perturbation.
+    # Populated when CV > instability_threshold.  These are the platforms whose
+    # rank in the plan should be treated with caution.
+    unstable_platforms: List[str] = field(default_factory=list)
+    instability_threshold: float = DEFAULT_INSTABILITY_CV
+    # Per-cell sigma used for sampling (the lognormal scale parameter).
+    # Surfaced so the user can see *which* assumptions had the most noise.
+    cell_sigma: Dict[str, Dict[str, float]] = field(default_factory=dict)
+
+
+def _per_cell_sigma(state: WizardState) -> Dict[str, Dict[str, float]]:
+    """Best estimate of per-(platform, goal) productivity noise.
+
+    For each cell, prefer the coefficient of variation computed from
+    module3_data['kpi_observations'] when ≥3 observations exist.  Else
+    scale Module 6's DEFAULT_UNCERTAINTY_BAND by sqrt(30/historical_days).
+    Final fallback: the flat default.
+    """
+    # Late import to avoid module-load cycle (module6 imports module5).
+    from modules.module6 import (
+        _coefficient_of_variation,
+        DEFAULT_UNCERTAINTY_BAND,
+    )
+
+    module3_data = getattr(state, "module3_data", {}) or {}
+    out: Dict[str, Dict[str, float]] = {}
+
+    for p in (getattr(state, "active_platforms", []) or []):
+        pdata = module3_data.get(p, {}) or {}
+        hist_days = pdata.get("historical_days")
+        observations_map = pdata.get("kpi_observations", {}) or {}
+        kpi_ratios = (getattr(state, "kpi_ratios", {}) or {}).get(p, {}) or {}
+
+        out[p] = {}
+        for g in (getattr(state, "valid_goals", []) or []):
+            # Aggregate CVs across all KPI vars in this cell — typically just
+            # one or two count KPIs per (platform, goal).
+            cell_cvs: List[float] = []
+            for var in (kpi_ratios.get(g, {}) or {}).keys():
+                cv = _coefficient_of_variation(observations_map.get(var) or [])
+                if cv is not None:
+                    cell_cvs.append(cv)
+
+            if cell_cvs:
+                sigma = sum(cell_cvs) / len(cell_cvs)
+            elif hist_days and hist_days > 0:
+                days = max(7.0, float(hist_days))
+                sigma = DEFAULT_UNCERTAINTY_BAND * math.sqrt(30.0 / days)
+            else:
+                sigma = DEFAULT_UNCERTAINTY_BAND
+
+            # Clamp: extreme values usually indicate bad data, and very large
+            # sigmas turn the LP into white noise (every solve is different).
+            sigma = max(0.05, min(1.0, sigma))
+            out[p][g] = sigma
+
+    return out
+
+
+def _percentile(values: Sequence[float], q: float) -> float:
+    """Linear-interpolation percentile (q in [0, 100]).  Avoids the numpy dep."""
+    if not values:
+        return 0.0
+    s = sorted(values)
+    if len(s) == 1:
+        return s[0]
+    idx = (q / 100.0) * (len(s) - 1)
+    lo = int(math.floor(idx))
+    hi = int(math.ceil(idx))
+    if lo == hi:
+        return s[lo]
+    return s[lo] + (s[hi] - s[lo]) * (idx - lo)
+
+
+def _summarise(values: List[float], platform: str, goal: str) -> Module5MCCellSummary:
+    n = len(values)
+    if n == 0:
+        return Module5MCCellSummary(platform=platform, goal=goal,
+                                    mean=0.0, std=0.0, cv=0.0, p5=0.0, p50=0.0, p95=0.0)
+    mean = sum(values) / n
+    var = sum((v - mean) ** 2 for v in values) / max(1, n - 1)
+    std = math.sqrt(var)
+    cv = (std / mean) if mean > 1e-9 else 0.0
+    return Module5MCCellSummary(
+        platform=platform, goal=goal,
+        mean=mean, std=std, cv=cv,
+        p5=_percentile(values, 5),
+        p50=_percentile(values, 50),
+        p95=_percentile(values, 95),
+    )
+
+
+def run_module5_montecarlo(
+    state: WizardState,
+    n_trials: int = DEFAULT_MC_TRIALS,
+    seed: Optional[int] = None,
+    instability_cv_threshold: float = DEFAULT_INSTABILITY_CV,
+) -> Module5MonteCarloResult:
+    """Re-solve the base-scenario LP with productivities perturbed by their
+    observed noise, then report the resulting distribution over allocations.
+
+    Each trial multiplies every r_pg[p][g] by a mean-preserving lognormal
+    shock with scale sigma = the cell's coefficient of variation (from
+    Module 3 observations, the historical-window prior, or the default).
+    Productivities are re-normalised per goal after the shock so the LP's
+    cross-platform comparison stays calibrated.
+
+    Returns per-cell and per-platform mean/std/p5/p50/p95 of the allocation
+    in £, plus the list of platforms whose share is sensitive (CV >
+    instability_cv_threshold).
+
+    Cost: n_trials LP solves.  At n=200 this is typically 1–5 s.
+    """
+    if not state.module4_finalised:
+        raise FlowStateError("Monte Carlo analysis requires Module 4 to be finalised.")
+    if n_trials < 10:
+        raise Module5ValidationError(
+            f"n_trials={n_trials} is too small to estimate percentiles. Use ≥10."
+        )
+    if n_trials > 1000:
+        raise Module5ValidationError(
+            f"n_trials={n_trials} > 1000 — refuse to run; that's >25 s of LP solves. "
+            f"Reduce n_trials or implement a proper parallel runner first."
+        )
+
+    lp_input = build_module5_input_from_state(state)
+    cell_sigma = _per_cell_sigma(state)
+    rng = random.Random(seed)
+
+    tl_pct = _safe_float(lp_input.test_and_learn_pct, 0.0)
+    lp_cap = lp_input.total_budget * (1.0 - tl_pct)
+
+    # Per-cell accumulator: platform → goal → list[£ allocated across trials]
+    cell_alloc: Dict[str, Dict[str, List[float]]] = {
+        p: {g: [] for g in lp_input.valid_goals} for p in lp_input.r_pg.keys()
+    }
+    platform_alloc: Dict[str, List[float]] = {p: [] for p in lp_input.r_pg.keys()}
+
+    failed_trials = 0
+    for _ in range(n_trials):
+        # Perturb r_pg with mean-preserving lognormal shocks.
+        perturbed: Dict[str, Dict[str, float]] = {}
+        for p, gdict in lp_input.r_pg.items():
+            perturbed[p] = {}
+            for g, r in gdict.items():
+                # Cell sigma is populated for every (p, g) that has a
+                # ratio in Module 3.  0.30 fallback only fires if r_pg has
+                # an entry the sigma table doesn't — defensive, not load-bearing.
+                sigma = cell_sigma.get(p, {}).get(g, 0.30)
+                # E[exp(sigma·Z - sigma²/2)] = 1, so the multiplier is unbiased.
+                z = rng.gauss(0.0, 1.0)
+                shock = math.exp(sigma * z - 0.5 * sigma * sigma)
+                perturbed[p][g] = max(0.0, _safe_float(r, 0.0) * shock)
+
+        # Re-normalise per goal so the cross-platform comparison stays at
+        # the same overall scale the LP was calibrated for.
+        for g in lp_input.valid_goals:
+            tot = sum(perturbed[p].get(g, 0.0) for p in perturbed)
+            if tot > 0.0:
+                for p in perturbed:
+                    if g in perturbed[p]:
+                        perturbed[p][g] /= tot
+
+        try:
+            result = _solve_single_lp(
+                valid_goals=lp_input.valid_goals,
+                total_budget=lp_cap,
+                system_goal_weights=lp_input.system_goal_weights,
+                platform_goal_weights=lp_input.platform_goal_weights,
+                r_pg=perturbed,
+                goals_by_platform=lp_input.goals_by_platform,
+                min_spend_per_platform=lp_input.min_spend_per_platform,
+                min_budget_per_goal=lp_input.min_budget_per_goal,
+                budget_cap=lp_cap,
+                cpu_per_goal=lp_input.cpu_per_goal,
+                effective_minimum_per_platform=lp_input.effective_minimum_per_platform,
+            )
+        except Module5ValidationError:
+            # An individual trial can fail (e.g. all productivity zero by
+            # chance).  Track but don't abort.
+            failed_trials += 1
+            continue
+
+        for p, gdict in result.budget_per_platform_goal.items():
+            ptotal = 0.0
+            for g in lp_input.valid_goals:
+                v = _safe_float(gdict.get(g, 0.0), 0.0)
+                cell_alloc.setdefault(p, {}).setdefault(g, []).append(v)
+                ptotal += v
+            platform_alloc.setdefault(p, []).append(ptotal)
+
+    if failed_trials >= n_trials:
+        raise Module5ValidationError(
+            f"All {n_trials} Monte Carlo trials failed. Check that historical "
+            f"productivities are positive and CVs aren't extreme."
+        )
+    if failed_trials > 0:
+        _LOG.warning(
+            "Monte Carlo: %d/%d trials failed (skipped in aggregation).",
+            failed_trials, n_trials,
+        )
+
+    per_cell: List[Module5MCCellSummary] = []
+    for p, gdict in cell_alloc.items():
+        for g, values in gdict.items():
+            if values:
+                per_cell.append(_summarise(values, platform=p, goal=g))
+
+    per_platform: List[Module5MCCellSummary] = []
+    unstable: List[str] = []
+    for p, values in platform_alloc.items():
+        if not values:
+            continue
+        summary = _summarise(values, platform=p, goal="")
+        per_platform.append(summary)
+        if summary.cv > instability_cv_threshold and summary.mean > 1.0:
+            unstable.append(p)
+
+    _LOG.info(
+        "Monte Carlo: n_trials=%d failed=%d unstable=%s",
+        n_trials, failed_trials, unstable,
+    )
+
+    return Module5MonteCarloResult(
+        n_trials=n_trials - failed_trials,
+        seed=seed,
+        per_cell=per_cell,
+        per_platform=per_platform,
+        unstable_platforms=unstable,
+        instability_threshold=instability_cv_threshold,
+        cell_sigma=cell_sigma,
+    )
