@@ -963,6 +963,88 @@ def results_ui(state: WizardState) -> None:
 
             st.markdown("---")
 
+    # ── Refine policy and re-solve ────────────────────────────────────────
+    # A marketer iterates: "what if I bump the LI floor by £2k?", "what if
+    # I cut the carve-out to 5%?".  Walking the wizard from Module 1 to
+    # explore those is painful.  This expander mutates the policy fields
+    # on state and re-runs Modules 4-7 in place — sub-second on typical
+    # problems.
+    with st.expander("Refine policy and re-solve", expanded=False):
+        st.caption(
+            "Adjust the policy levers below and click Re-solve.  Historical "
+            "data and platform selection from Modules 1-3 are preserved."
+        )
+
+        col_budget, col_carve = st.columns(2)
+        with col_budget:
+            new_budget = st.number_input(
+                "Total budget",
+                min_value=1.01,
+                value=float(state.total_budget or 0.0),
+                step=500.0, format="%.2f",
+                key="_resolve_budget",
+            )
+        with col_carve:
+            new_tl_pct = st.slider(
+                "Test-and-learn reserve",
+                min_value=0.0, max_value=0.40,
+                value=float(getattr(state, "test_and_learn_pct", 0.0)),
+                step=0.01, format="%.0f%%",
+                key="_resolve_tl",
+            )
+
+        new_seasonality: Dict[str, float] = {}
+        if state.valid_goals:
+            st.markdown("**Seasonality multipliers** (1.0 = no adjustment):")
+            current_si = getattr(state, "seasonality_index", None) or {}
+            scols = st.columns(min(len(state.valid_goals), 4))
+            for i, g in enumerate(state.valid_goals):
+                with scols[i % len(scols)]:
+                    cur = float(current_si.get(g, 1.0))
+                    m = st.slider(
+                        _GOAL_LABEL.get(g, g),
+                        min_value=0.2, max_value=3.0, value=cur, step=0.05,
+                        key=f"_resolve_seasonality_{g}",
+                    )
+                    if abs(m - 1.0) > 1e-6:
+                        new_seasonality[g] = m
+
+        new_min_spend: Dict[str, float] = {}
+        if state.active_platforms:
+            st.markdown("**Per-platform minimum spend** (LP must allocate at least this much):")
+            current_floors = getattr(state, "min_spend_per_platform", None) or {}
+            fcols = st.columns(min(len(state.active_platforms), 4))
+            for i, p in enumerate(state.active_platforms):
+                with fcols[i % len(fcols)]:
+                    cur = float(current_floors.get(p, 0.0))
+                    floor = st.number_input(
+                        _platform_display_name(state, p),
+                        min_value=0.0, value=cur, step=100.0, format="%.0f",
+                        key=f"_resolve_floor_{p}",
+                    )
+                    new_min_spend[p] = float(floor)
+
+        if st.button("Re-solve with these changes", type="primary", key="_resolve_button"):
+            try:
+                # Mutate the policy fields, then unset the M4-M7 finalised
+                # flags so results_ui's auto-run picks them up on rerun.
+                state.total_budget = float(new_budget)
+                state.test_and_learn_pct = float(new_tl_pct)
+                state.seasonality_index = dict(new_seasonality)
+                state.min_spend_per_platform = dict(new_min_spend)
+                state.module4_finalised = False
+                state.module5_finalised = False
+                state.module6_finalised = False
+                state.module7_finalised = False
+                # current_step is at 7+ after a full run; the per-module
+                # entry guards check it before running.  Roll back to 4.
+                state.current_step = 4
+                # Drop the cached Monte Carlo too; the new policy invalidates it.
+                st.session_state.pop("_mc_result", None)
+                safe_rerun()
+            except Exception as e:
+                st.error(f"Could not re-solve: {e}")
+
     # ── Solver diagnostics (auditable "why this allocation?") ──────────────
     # Surfaces the LP signals that already exist on every Module5LPResult
     # but were previously hidden from the UI.  Focused on the base scenario;

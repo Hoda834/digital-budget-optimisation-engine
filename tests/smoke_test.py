@@ -959,6 +959,50 @@ def test_custom_platform_invalid_kind_rejected() -> None:
         )
 
 
+def test_iterative_resolve_after_policy_mutation() -> None:
+    """The library must support iterative re-solve: mutate policy fields,
+    reset M4-M7 finalised flags, re-run the pipeline.  This is the
+    library half of the Streamlit 'Re-solve with these changes' button —
+    if it doesn't work in Python, it won't work in the UI either."""
+    from modules.module4 import run_module4
+    from modules.module5 import run_module5
+    from modules.module6 import run_module6
+
+    state = _run_pipeline_to_module5()
+    run_module6(state)
+    initial_alloc = state.module5_scenario_bundle.results_by_scenario["base"].budget_per_platform_goal
+    initial_fb = sum(initial_alloc.get("fb", {}).values())
+
+    # Mutate: heavy carve-out + LinkedIn floor + reset flags + current_step
+    state.test_and_learn_pct = 0.20
+    state.min_spend_per_platform = {"fb": 0.0, "ig": 0.0, "li": 5000.0}
+    state.module4_finalised = False
+    state.module5_finalised = False
+    state.module6_finalised = False
+    state.module7_finalised = False
+    state.current_step = 4
+
+    # Re-run the downstream pipeline
+    run_module4(state)
+    run_module5(state)
+    run_module6(state)
+
+    new_alloc = state.module5_scenario_bundle.results_by_scenario["base"].budget_per_platform_goal
+    new_li = sum(new_alloc.get("li", {}).values())
+    new_fb = sum(new_alloc.get("fb", {}).values())
+
+    # LI was floored at £5k, so it must take at least £5k
+    assert new_li >= 5000.0 - 1e-3, (
+        f"LI floor of £5,000 should bind; got £{new_li:.0f}"
+    )
+    # FB was the dominant platform in the original allocation; with a £5k LI
+    # floor and a 20% carve-out, FB should now get materially less
+    assert new_fb < initial_fb, (
+        f"Adding LI floor + carve-out should reduce FB allocation; "
+        f"initial £{initial_fb:.0f} → new £{new_fb:.0f}"
+    )
+
+
 def test_csv_import_parses_meta_export() -> None:
     """A Meta Ads Manager-style CSV should pre-fill Reach, Impressions,
     Engagement, Link Clicks, Leads, and Amount Spent without the user
