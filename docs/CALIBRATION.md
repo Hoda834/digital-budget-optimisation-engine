@@ -224,13 +224,24 @@ warnings, not constraints. Each section flags which category a constant is in.
   3. The fixed prior is conservative: it shrinks weak data more than a
      fitted prior probably would, which a reviewer should prefer over
      "garbage in, confident optimisation out."
-- **Sensitivity:** Tested empirically. Halving (15 days) reduces
-  shrinkage by ~33% on a 7-day history platform; doubling (60 days)
-  increases it by ~33%. The qualitative effect (low-data platforms move
-  toward the cross-platform mean) is preserved across both. A reviewer
-  who wants empirical-Bayes rigour can replace this constant with a
-  per-goal fitted value — the call site reads it from a module-level
-  constant for exactly that purpose.
+- **Sensitivity:** The shrinkage weight `w = REF / (REF + historical_days)`
+  responds non-linearly to changes in `REF`, so it's worth showing the
+  numbers directly rather than quoting one figure.  At three reference
+  values, with three example history lengths:
+
+  | History | REF=15 | REF=30 (default) | REF=60 |
+  |---:|---:|---:|---:|
+  |  7 days | 0.68 | **0.81** | 0.90 |
+  | 30 days | 0.33 | **0.50** | 0.67 |
+  | 90 days | 0.14 | **0.25** | 0.40 |
+
+  Halving the reference window changes the weight by ~16% (at 7-day
+  history) up to ~33% (at 30-day history); doubling moves it the other
+  way by a similar amount.  The qualitative effect (low-data platforms
+  pulled toward the cross-platform mean) is preserved across all
+  three settings.  A reviewer who wants empirical-Bayes rigour can
+  replace this constant with a per-goal fitted value — the call site
+  reads it from a module-level constant for exactly that purpose.
 - **When to change:** If your typical input has much shorter history
   windows (e.g. weekly reports only), consider 14 days. If you only
   ingest 90-day reports, consider 60 days. The default is sized for
