@@ -84,8 +84,13 @@ def _run(
     for name in ("conservative", "base", "optimistic"):
         if name in bundle.results_by_scenario:
             r = bundle.results_by_scenario[name]
+            reserve_str = (
+                f", reserve £{r.test_and_learn_reserve:,.0f}"
+                if r.test_and_learn_reserve > 0.0
+                else ""
+            )
             print(f"    {name:>13}: £{r.total_budget_used:,.0f}  "
-                  f"(cap £{r.effective_budget_cap:,.0f}, "
+                  f"(cap £{r.effective_budget_cap:,.0f}{reserve_str}, "
                   f"objective={r.objective_value:,.0f})")
 
     print("\n  Module 6 base forecast (with ±30% band on count KPIs):")

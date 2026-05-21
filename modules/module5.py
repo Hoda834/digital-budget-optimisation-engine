@@ -31,6 +31,9 @@ YIELD_BRACKETS: Tuple[Tuple[float, float], ...] = (
 @dataclass
 class Module5LPInput:
     valid_goals: List[str]
+    # The user's declared total budget.  Per-scenario LP caps are derived as
+    # (total_budget × scenario_scalar) × (1 - test_and_learn_pct), so the
+    # invariant lp_used + reserve ≤ total_budget × scenario_scalar always holds.
     total_budget: float
     system_goal_weights: Dict[str, float]
     platform_goal_weights: Dict[str, Dict[str, float]]
@@ -41,6 +44,11 @@ class Module5LPInput:
     scenario_multipliers: Dict[str, float]
     scenario_goal_multipliers: Dict[str, Dict[str, float]]
     cpu_per_goal: Dict[str, Dict[str, Dict[str, float]]] = field(default_factory=dict)
+    # Fraction of every scenario's budget held back from the LP as a
+    # test-and-learn reserve.  The LP cap shrinks proportionally; the reserve
+    # scales with the scenario so the cross-scenario story is internally
+    # consistent ("X% of every plan's budget goes to testing").
+    test_and_learn_pct: float = 0.0
 
 
 @dataclass
@@ -434,6 +442,21 @@ def build_module5_input_from_state(state: WizardState) -> Module5LPInput:
     if state.total_budget is None or float(state.total_budget) <= 1:
         raise Module5ValidationError("Module 5 cannot run, total_budget is missing or invalid.")
 
+    # Validate the test-and-learn carve-out strictly: bad state means a bug
+    # upstream, and silently clamping would produce a plan the user didn't ask for.
+    tl_pct = _safe_float(getattr(state, "test_and_learn_pct", 0.0), 0.0)
+    if tl_pct < 0.0 or tl_pct >= 0.5:
+        raise Module5ValidationError(
+            f"Invalid test_and_learn_pct={tl_pct} in state; must be in [0.0, 0.5). "
+            f"This is a Module 1 input — re-finalise Module 1 with a valid value."
+        )
+    base_lp_cap = float(state.total_budget) * (1.0 - tl_pct)
+    if base_lp_cap <= 1.0:
+        raise Module5ValidationError(
+            f"LP cap after test-and-learn carve-out is too small ({base_lp_cap:.2f}). "
+            f"Reduce test_and_learn_pct or raise total_budget."
+        )
+
     system_goal_weights = _build_system_goal_weights(state)
     platform_goal_weights = _build_platform_goal_weights_from_state(state)
     r_pg = _build_r_pg_from_state(state)
@@ -444,26 +467,14 @@ def build_module5_input_from_state(state: WizardState) -> Module5LPInput:
         for p in active_platforms
     }
 
-    # Apply the test-and-learn carve-out before the LP runs.  The LP only ever
-    # sees the optimisation budget; the reserve is reported separately so the
-    # user can see the full split (optimised + reserved = declared total).
-    tl_pct = _safe_float(getattr(state, "test_and_learn_pct", 0.0), 0.0)
-    if tl_pct < 0.0 or tl_pct >= 0.5:
-        tl_pct = 0.0
-    raw_total = float(state.total_budget)
-    optimisation_budget = raw_total * (1.0 - tl_pct)
-    if optimisation_budget <= 1.0:
-        raise Module5ValidationError(
-            f"Optimisation budget after test-and-learn carve-out is too small "
-            f"({optimisation_budget:.2f}). Reduce test_and_learn_pct or raise "
-            f"total_budget."
-        )
-
+    # Feasibility check uses the base LP cap (post-carve-out, scalar=1.0).
+    # Per-scenario re-checks in run_module5_lp_scenarios handle the conservative
+    # case where the smaller cap may not clear the floors.
     min_spend_per_platform, min_budget_per_goal, scenario_multipliers, scenario_goal_multipliers = _extract_policy_from_state(
         state=state,
         valid_goals=list(state.valid_goals),
         active_platforms=active_platforms,
-        total_budget=optimisation_budget,
+        total_budget=base_lp_cap,
     )
 
     module4_result = getattr(state, "module4_result", None)
@@ -476,7 +487,7 @@ def build_module5_input_from_state(state: WizardState) -> Module5LPInput:
 
     return Module5LPInput(
         valid_goals=list(state.valid_goals),
-        total_budget=optimisation_budget,
+        total_budget=float(state.total_budget),
         system_goal_weights=system_goal_weights,
         platform_goal_weights=platform_goal_weights,
         r_pg=r_pg,
@@ -486,6 +497,7 @@ def build_module5_input_from_state(state: WizardState) -> Module5LPInput:
         scenario_multipliers=scenario_multipliers,
         scenario_goal_multipliers=scenario_goal_multipliers,
         cpu_per_goal=cpu_per_goal,
+        test_and_learn_pct=tl_pct,
     )
 
 
@@ -683,23 +695,37 @@ def _solve_single_lp(
 
 
 def run_module5_lp(input_data: Module5LPInput) -> Module5LPResult:
-    return _solve_single_lp(
+    tl_pct = _safe_float(input_data.test_and_learn_pct, 0.0)
+    if tl_pct < 0.0 or tl_pct >= 0.5:
+        raise Module5ValidationError(
+            f"Invalid test_and_learn_pct={tl_pct}; must be in [0.0, 0.5)."
+        )
+    lp_cap = input_data.total_budget * (1.0 - tl_pct)
+    result = _solve_single_lp(
         valid_goals=input_data.valid_goals,
-        total_budget=input_data.total_budget,
+        total_budget=lp_cap,
         system_goal_weights=input_data.system_goal_weights,
         platform_goal_weights=input_data.platform_goal_weights,
         r_pg=input_data.r_pg,
         goals_by_platform=input_data.goals_by_platform,
         min_spend_per_platform=input_data.min_spend_per_platform,
         min_budget_per_goal=input_data.min_budget_per_goal,
-        budget_cap=input_data.total_budget,
+        budget_cap=lp_cap,
         cpu_per_goal=input_data.cpu_per_goal,
     )
+    result.test_and_learn_reserve = input_data.total_budget - lp_cap
+    return result
 
 
 def run_module5_lp_scenarios(input_data: Module5LPInput) -> Module5ScenarioBundle:
     if not input_data.scenario_multipliers:
         raise Module5ValidationError("scenario_multipliers is empty.")
+
+    tl_pct = _safe_float(input_data.test_and_learn_pct, 0.0)
+    if tl_pct < 0.0 or tl_pct >= 0.5:
+        raise Module5ValidationError(
+            f"Invalid test_and_learn_pct={tl_pct}; must be in [0.0, 0.5)."
+        )
 
     results: Dict[str, Module5LPResult] = {}
 
@@ -710,6 +736,12 @@ def run_module5_lp_scenarios(input_data: Module5LPInput) -> Module5ScenarioBundl
     )
     for g in input_data.valid_goals:
         base_goal_map.setdefault(g, 1.0)
+
+    # Bracket caps for diminishing returns are anchored to the base LP capacity
+    # (post-carve-out, scalar=1.0).  This stays constant across scenarios so
+    # diminishing-returns kick in at the same £ thresholds regardless of which
+    # scenario the user is looking at — cleaner cross-scenario comparison.
+    base_lp_cap = input_data.total_budget * (1.0 - tl_pct)
 
     for scenario_name, scalar_multiplier in input_data.scenario_multipliers.items():
         scalar_m = _safe_float(scalar_multiplier, 1.0)
@@ -731,10 +763,16 @@ def run_module5_lp_scenarios(input_data: Module5LPInput) -> Module5ScenarioBundl
                     gm = 1.0
                 adjusted_r_pg[p][g] = max(0.0, val * gm)
 
-        # The scalar multiplier moves to the constraint side: scenarios change capacity,
-        # not just the objective. This is what makes scenarios meaningfully differ from
-        # one another (positive scaling of a linear objective is argmax-invariant).
-        budget_cap = input_data.total_budget * scalar_m
+        # Apply the carve-out per scenario so the invariant holds in every cell:
+        #   scenario_total = declared_total × scalar
+        #   budget_cap     = scenario_total × (1 - tl_pct)
+        #   reserve        = scenario_total × tl_pct
+        # which guarantees lp_used + reserve ≤ scenario_total for every scenario,
+        # including optimistic.  Without this, optimistic was spending the full
+        # scenario uplift PLUS the base reserve, exceeding the user's declared total.
+        scenario_total = input_data.total_budget * scalar_m
+        budget_cap = scenario_total * (1.0 - tl_pct)
+        scenario_reserve = scenario_total - budget_cap
 
         # Re-check feasibility against the binding floor for this scenario.
         sum_min_p = sum(input_data.min_spend_per_platform.values())
@@ -744,9 +782,9 @@ def run_module5_lp_scenarios(input_data: Module5LPInput) -> Module5ScenarioBundl
             # Skip this scenario rather than fail outright — caller still sees others.
             continue
 
-        results[scenario_name] = _solve_single_lp(
+        result = _solve_single_lp(
             valid_goals=input_data.valid_goals,
-            total_budget=input_data.total_budget,
+            total_budget=base_lp_cap,
             system_goal_weights=input_data.system_goal_weights,
             platform_goal_weights=input_data.platform_goal_weights,
             r_pg=adjusted_r_pg,
@@ -756,6 +794,8 @@ def run_module5_lp_scenarios(input_data: Module5LPInput) -> Module5ScenarioBundl
             budget_cap=budget_cap,
             cpu_per_goal=input_data.cpu_per_goal,
         )
+        result.test_and_learn_reserve = scenario_reserve
+        results[scenario_name] = result
 
     if not results:
         raise Module5ValidationError("No scenario results were produced.")
@@ -773,16 +813,6 @@ def run_module5(state: WizardState) -> WizardState:
 
     lp_input = build_module5_input_from_state(state)
     bundle = run_module5_lp_scenarios(lp_input)
-
-    # Tag each scenario's result with the £ amount that was held back from the LP.
-    # lp_input.total_budget is already the post-carve-out optimisation budget; the
-    # difference vs state.total_budget is the reserve.
-    raw_total = _safe_float(state.total_budget, 0.0)
-    reserve = max(0.0, raw_total - lp_input.total_budget)
-    if reserve > 0.0:
-        for res in bundle.results_by_scenario.values():
-            res.test_and_learn_reserve = reserve
-
     base_result = bundle.get_base()
 
     state.complete_module5_and_advance(

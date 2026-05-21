@@ -500,44 +500,45 @@ def test_goal_value_weights_shift_allocation_toward_high_value_goal() -> None:
     )
 
 
-def test_test_and_learn_carveout_reduces_lp_budget() -> None:
-    """A 10% test-and-learn carve-out should cap LP spend at 90% of the
-    declared total and surface the reserved £ amount on every scenario."""
+def _run_carveout_pipeline(carve_out_pct=None) -> WizardState:
     from modules.module2 import run_module2
     from modules.module3 import finalise_module3_from_inputs
     from modules.module4 import run_module4
     from modules.module5 import run_module5
 
-    def _alloc(carve_out_pct=None) -> WizardState:
-        s = WizardState()
-        complete_module1_and_advance(
-            s,
-            raw_objectives=["aw", "lg"],
-            raw_budget=10000.0,
-            raw_duration_days=30,
-            raw_test_and_learn_pct=carve_out_pct,
-        )
-        run_module2(
-            s,
-            selected_platforms=["fb", "li"],
-            priorities_input={
-                "fb": {"priority_1": "aw", "priority_2": None},
-                "li": {"priority_1": "lg", "priority_2": None},
-            },
-        )
-        finalise_module3_from_inputs(
-            s,
-            platform_inputs={
-                "fb": {"budget": 4000.0, "kpis": {"FB_AW_REACH": 200000.0}},
-                "li": {"budget": 3000.0, "kpis": {"LI_LG_LEADS": 80.0}},
-            },
-        )
-        run_module4(s)
-        run_module5(s)
-        return s
+    s = WizardState()
+    complete_module1_and_advance(
+        s,
+        raw_objectives=["aw", "lg"],
+        raw_budget=10000.0,
+        raw_duration_days=30,
+        raw_test_and_learn_pct=carve_out_pct,
+    )
+    run_module2(
+        s,
+        selected_platforms=["fb", "li"],
+        priorities_input={
+            "fb": {"priority_1": "aw", "priority_2": None},
+            "li": {"priority_1": "lg", "priority_2": None},
+        },
+    )
+    finalise_module3_from_inputs(
+        s,
+        platform_inputs={
+            "fb": {"budget": 4000.0, "kpis": {"FB_AW_REACH": 200000.0}},
+            "li": {"budget": 3000.0, "kpis": {"LI_LG_LEADS": 80.0}},
+        },
+    )
+    run_module4(s)
+    run_module5(s)
+    return s
 
-    no_carve = _alloc(carve_out_pct=None)
-    with_carve = _alloc(carve_out_pct=0.10)
+
+def test_test_and_learn_carveout_reduces_lp_budget() -> None:
+    """A 10% test-and-learn carve-out should cap base LP spend at 90% of the
+    declared total and surface the reserved £ amount on every scenario."""
+    no_carve = _run_carveout_pipeline(carve_out_pct=None)
+    with_carve = _run_carveout_pipeline(carve_out_pct=0.10)
 
     base_no = no_carve.module5_scenario_bundle.results_by_scenario["base"]
     base_yes = with_carve.module5_scenario_bundle.results_by_scenario["base"]
@@ -545,10 +546,46 @@ def test_test_and_learn_carveout_reduces_lp_budget() -> None:
     # No carve-out → reserve is zero, LP can use the full £10k
     assert base_no.test_and_learn_reserve == pytest.approx(0.0)
 
-    # 10% carve-out → £1,000 reserve, LP cap is £9,000
+    # 10% carve-out → £1,000 reserve at base, LP cap is £9,000
     assert base_yes.test_and_learn_reserve == pytest.approx(1000.0)
     assert base_yes.total_budget_used <= 9000.0 + 1e-6
     assert base_yes.effective_budget_cap == pytest.approx(9000.0)
+
+
+def test_carveout_invariant_lp_used_plus_reserve_within_scenario_total() -> None:
+    """Across every scenario, lp_used + reserve must not exceed
+    declared_total × scenario_scalar. This is the contract that was broken
+    when the carve-out was applied before scenario scaling (optimistic
+    used to over-spend the declared total)."""
+    state = _run_carveout_pipeline(carve_out_pct=0.12)
+    declared_total = float(state.total_budget)
+    bundle = state.module5_scenario_bundle
+
+    for name, res in bundle.results_by_scenario.items():
+        scalar = bundle.scenario_multipliers.get(name, 1.0)
+        scenario_total = declared_total * scalar
+        # reserve = scenario_total × tl_pct
+        assert res.test_and_learn_reserve == pytest.approx(scenario_total * 0.12)
+        # lp_used + reserve must not exceed scenario_total
+        assert res.total_budget_used + res.test_and_learn_reserve <= scenario_total + 1e-6, (
+            f"Scenario {name!r}: lp_used={res.total_budget_used:.2f} + "
+            f"reserve={res.test_and_learn_reserve:.2f} exceeds scenario_total={scenario_total:.2f}."
+        )
+
+
+def test_zero_carveout_equivalent_to_no_carveout() -> None:
+    """Explicit 0.0 must produce identical allocations to omitting the param."""
+    none_state = _run_carveout_pipeline(carve_out_pct=None)
+    zero_state = _run_carveout_pipeline(carve_out_pct=0.0)
+
+    for name in ("conservative", "base", "optimistic"):
+        none_alloc = none_state.module5_scenario_bundle.results_by_scenario[name].budget_per_platform_goal
+        zero_alloc = zero_state.module5_scenario_bundle.results_by_scenario[name].budget_per_platform_goal
+        for p in none_alloc:
+            for g in none_alloc[p]:
+                assert zero_alloc[p][g] == pytest.approx(none_alloc[p][g]), (
+                    f"0% carve-out diverged from no carve-out at {name}/{p}/{g}."
+                )
 
 
 def test_test_and_learn_carveout_rejects_out_of_range() -> None:
@@ -576,6 +613,35 @@ def test_test_and_learn_carveout_accepts_percentage_string() -> None:
         raw_test_and_learn_pct="15%",
     )
     assert state.test_and_learn_pct == pytest.approx(0.15)
+
+
+def test_test_and_learn_carveout_bare_string_treated_as_fraction() -> None:
+    """A string '15' (no '%' suffix) must be treated as a fraction, not 15%,
+    so the contract matches int/float behaviour. 15.0 is out of range so it
+    must be rejected — proving the heuristic is gone."""
+    from modules.module1 import Module1ValidationError
+
+    state = WizardState()
+    with pytest.raises(Module1ValidationError, match="below 50%"):
+        complete_module1_and_advance(
+            state,
+            raw_objectives=["aw"],
+            raw_budget=10000.0,
+            raw_test_and_learn_pct="15",
+        )
+
+
+def test_module5_rejects_invalid_state_carveout() -> None:
+    """If state.test_and_learn_pct somehow holds an out-of-range value
+    (direct mutation, future bug), Module 5 must raise rather than silently
+    optimise the full budget."""
+    from modules.module5 import build_module5_input_from_state, Module5ValidationError
+
+    state = _run_carveout_pipeline(carve_out_pct=0.10)
+    state.module5_finalised = False
+    state.test_and_learn_pct = 0.75  # bypass Module 1 validation
+    with pytest.raises(Module5ValidationError, match="test_and_learn_pct"):
+        build_module5_input_from_state(state)
 
 
 def test_module6_count_kpi_has_confidence_band() -> None:

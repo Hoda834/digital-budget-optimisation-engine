@@ -264,27 +264,34 @@ def _parse_goal_values(
 def _parse_test_and_learn_pct(raw_value: Any) -> float:
     """Parse a test-and-learn carve-out fraction.
 
-    Accepts None, fractions in [0, 0.5) (e.g. 0.10 = 10%), or percentage strings
-    like "10%", "12.5 %", "15".  Returns a float in [0, 0.5).  Values >= 0.5
-    are rejected so the LP always has something meaningful to allocate.
+    Accepts:
+      - None or empty string → 0.0
+      - A fraction in [0, 0.5) as int/float/numeric string (e.g. 0.10)
+      - A percentage string with explicit '%' suffix (e.g. "10%", "12.5 %")
+
+    Bare numbers (whether int, float, or str) are always treated as fractions
+    so the parser is type-consistent.  Values ≥ 0.5 are rejected — both to
+    prevent accidental "10" meaning "10%" interpretation and to keep the LP
+    with something meaningful to allocate.
     """
     if raw_value is None:
         return 0.0
 
+    is_percentage_form = False
     if isinstance(raw_value, str):
-        token = raw_value.strip().rstrip("%").strip()
+        token = raw_value.strip()
         if not token:
             return 0.0
+        if token.endswith("%"):
+            is_percentage_form = True
+            token = token[:-1].strip()
         try:
             num = float(token)
         except ValueError:
             raise Module1ValidationError(
-                f"Test-and-learn carve-out must be a percentage like '10%' or a "
-                f"fraction like 0.10, got {raw_value!r}."
+                f"Test-and-learn carve-out must be a fraction like 0.10 or a "
+                f"percentage like '15%', got {raw_value!r}."
             )
-        # "10" without a % sign is ambiguous; treat anything >= 1 as a percentage.
-        if num >= 1.0 or raw_value.strip().endswith("%"):
-            num = num / 100.0
     else:
         try:
             num = float(raw_value)
@@ -295,6 +302,10 @@ def _parse_test_and_learn_pct(raw_value: Any) -> float:
 
     if math.isnan(num) or math.isinf(num):
         raise Module1ValidationError("Test-and-learn carve-out must be finite.")
+
+    if is_percentage_form:
+        num = num / 100.0
+
     if num < 0.0:
         raise Module1ValidationError(
             f"Test-and-learn carve-out must be non-negative, got {num}."
@@ -302,6 +313,7 @@ def _parse_test_and_learn_pct(raw_value: Any) -> float:
     if num >= 0.5:
         raise Module1ValidationError(
             f"Test-and-learn carve-out must be below 50% (got {num*100:.1f}%). "
+            f"Pass a fraction (0.15) or a string with '%' suffix ('15%'). "
             f"A 10–15% reserve is standard practice."
         )
     return num
