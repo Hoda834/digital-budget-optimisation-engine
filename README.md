@@ -241,6 +241,7 @@ Detailed explanations of system behaviour and modelling choices are provided in 
 * **modules.md** – role and responsibility of each module
 * **scenarios.md** – scenario design and interpretation logic
 * **decision_logic.md** – optimisation assumptions and modelling rationale
+* **calibration.md** – every hand-set numeric constant in the engine, its source / intuition, what changes if the value moves, and whether a user-facing override exists
 
 These documents expand on the architectural and decision principles outlined above.
 
