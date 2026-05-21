@@ -334,11 +334,39 @@ def finalise_module3_from_inputs(
                     raise ValueError(f"Count KPI {var} must be greater than zero.")
             validated_kpis[var] = v
 
+        # Optional multi-period observations for variance-based confidence
+        # bands in Module 6.  Shape: {var: [v1, v2, ...]}.  Only count KPIs are
+        # supported (rate KPIs are already an average).  Each list must contain
+        # positive finite values; invalid entries are dropped, and lists with
+        # <3 surviving values are dropped wholesale (the band falls back to
+        # the window-scaled prior).
+        validated_observations: Dict[str, List[float]] = {}
+        raw_observations = pin.get("kpi_observations", {})
+        if isinstance(raw_observations, dict):
+            for var, raw_list in raw_observations.items():
+                if var not in allowed_vars or not isinstance(raw_list, (list, tuple)):
+                    continue
+                kind = next((r.get("kind", KIND_COUNT) for r in KPI_CONFIG
+                             if r["platform"] == platform and r["var"] == var), KIND_COUNT)
+                if kind == KIND_RATE:
+                    continue
+                clean_list: List[float] = []
+                for raw in raw_list:
+                    try:
+                        v = float(raw)
+                    except (TypeError, ValueError):
+                        continue
+                    if v > 0.0 and not (v != v or v == float("inf") or v == float("-inf")):
+                        clean_list.append(v)
+                if len(clean_list) >= 3:
+                    validated_observations[var] = clean_list
+
         cleaned[platform] = {
             "time_window": time_window_label,
             "historical_days": historical_days,
             "budget": budget,
             "kpis": validated_kpis,
+            "kpi_observations": validated_observations,
         }
 
     return _finalise_module3(state, cleaned)

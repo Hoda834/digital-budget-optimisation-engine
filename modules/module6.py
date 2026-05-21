@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from core.wizard_state import WizardState
 from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE
@@ -14,12 +15,66 @@ _KPI_KIND: Dict[str, str] = {
     for row in KPI_CONFIG
 }
 
-# Default ±30% confidence band on count-KPI forecasts.  Without multi-period
-# variance data we apply a flat band that reflects the typical week-to-week
-# spread of digital ad performance (algorithm shifts, auction noise, creative
-# fatigue).  The band is shown alongside the point estimate so the user does
-# not mistake "predicted 425,000 reach" for a precise commitment.
+# Default ±30% confidence band on count-KPI forecasts.  This is the *fallback*
+# used when no per-KPI history is available; whenever Module 3 has either
+# multi-period observations or a historical_days length, the band is derived
+# from data (see _band_for_kpi).
 DEFAULT_UNCERTAINTY_BAND = 0.30
+
+# Reference window the default 30% band represents: ~30 days of digital
+# campaign data.  Bands scale by sqrt(REF_WINDOW_DAYS / observed_days) so a
+# 90-day history produces a ~17% band and a 7-day history a ~62% band.
+_REFERENCE_WINDOW_DAYS = 30.0
+
+# Hard limits so noisy data or pathological inputs can't produce 0% (false
+# precision) or >100% (the forecast becomes meaningless) bands.
+_MIN_BAND = 0.05
+_MAX_BAND = 1.00
+
+
+def _coefficient_of_variation(observations: Sequence[float]) -> Optional[float]:
+    """Sample CV (std / mean) when there's enough data to be honest about it.
+
+    Returns None when observations are too few, non-positive, or yield a
+    mean ≤ 0 — caller should fall back to a window-scaled prior.
+    """
+    vals = [float(x) for x in observations if x is not None]
+    vals = [x for x in vals if not math.isnan(x) and not math.isinf(x) and x > 0.0]
+    if len(vals) < 3:
+        return None
+    mean = sum(vals) / len(vals)
+    if mean <= 0.0:
+        return None
+    variance = sum((x - mean) ** 2 for x in vals) / (len(vals) - 1)
+    std = math.sqrt(variance)
+    return std / mean
+
+
+def _band_for_kpi(
+    observations: Optional[Sequence[float]],
+    historical_days: Optional[int],
+    default_band: float,
+) -> float:
+    """Pick the most data-driven band available.
+
+    Preference order:
+      1. Coefficient of variation from ≥3 observations (true sample noise)
+      2. Default band scaled by sqrt(30 / historical_days) (more days → narrower)
+      3. The flat default
+
+    Clamped to [_MIN_BAND, _MAX_BAND] to prevent false precision and runaway
+    bands.
+    """
+    cv = _coefficient_of_variation(observations) if observations else None
+    if cv is not None:
+        return max(_MIN_BAND, min(_MAX_BAND, cv))
+
+    if historical_days and historical_days > 0:
+        days = max(7.0, float(historical_days))  # floor at 7 so the band doesn't blow up
+        scaled = default_band * math.sqrt(_REFERENCE_WINDOW_DAYS / days)
+        return max(_MIN_BAND, min(_MAX_BAND, scaled))
+
+    return max(_MIN_BAND, min(_MAX_BAND, default_band))
 
 
 @dataclass
@@ -33,6 +88,8 @@ class Module6ForecastRow:
     predicted_kpi: float          # count KPI: units; rate KPI: expected rate (dimensionless)
     predicted_kpi_low: float = 0.0    # lower bound of the confidence band
     predicted_kpi_high: float = 0.0   # upper bound of the confidence band
+    band_source: str = "default"      # "observations" | "window_scaled" | "default"
+    band_pct: float = 0.0             # the band fraction actually used for this row
 
 
 @dataclass
@@ -61,6 +118,8 @@ class Module6Result:
                 "predicted_kpi": r.predicted_kpi,
                 "predicted_kpi_low": r.predicted_kpi_low,
                 "predicted_kpi_high": r.predicted_kpi_high,
+                "band_source": r.band_source,
+                "band_pct": r.band_pct,
             }
             for r in self.rows
         ]
@@ -123,6 +182,7 @@ def compute_module6_forecast(
     module5_result: Module5LPResult,
     min_budget_threshold: float = 1.0,
     uncertainty_band: float = DEFAULT_UNCERTAINTY_BAND,
+    module3_data: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Module6Result:
     """Produce per-KPI forecasts from the LP allocation.
 
@@ -198,9 +258,25 @@ def compute_module6_forecast(
                 # inherent noise of digital ad performance.  Rate KPIs already
                 # bake in averaging across the historical window, so we keep
                 # the point estimate without a wider band.
+                band_pct = 0.0
+                band_source = "default"
                 if kind == KIND_COUNT and uncertainty_band > 0:
-                    p_low = predicted * (1.0 - uncertainty_band)
-                    p_high = predicted * (1.0 + uncertainty_band)
+                    # Per-KPI data-driven band: prefer observations, then
+                    # historical window length, then the flat default.
+                    pdata = (module3_data or {}).get(p) or {}
+                    observations = (
+                        (pdata.get("kpi_observations") or {}).get(kpi_name)
+                        if isinstance(pdata.get("kpi_observations"), dict)
+                        else None
+                    )
+                    hist_days = pdata.get("historical_days")
+                    band_pct = _band_for_kpi(observations, hist_days, uncertainty_band)
+                    if observations and _coefficient_of_variation(observations) is not None:
+                        band_source = "observations"
+                    elif hist_days and hist_days > 0:
+                        band_source = "window_scaled"
+                    p_low = predicted * (1.0 - band_pct)
+                    p_high = predicted * (1.0 + band_pct)
                 else:
                     p_low = predicted
                     p_high = predicted
@@ -216,6 +292,8 @@ def compute_module6_forecast(
                         predicted_kpi=predicted,
                         predicted_kpi_low=p_low,
                         predicted_kpi_high=p_high,
+                        band_source=band_source,
+                        band_pct=band_pct,
                     )
                 )
                 any_row = True
@@ -234,6 +312,7 @@ def compute_module6_forecast_for_scenarios(
     module5_bundle: Module5ScenarioBundle,
     min_budget_threshold: float = 1.0,
     uncertainty_band: float = DEFAULT_UNCERTAINTY_BAND,
+    module3_data: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Module6ScenarioResult:
     results_by_scenario: Dict[str, Module6Result] = {}
     for scenario_name, lp_res in module5_bundle.results_by_scenario.items():
@@ -242,6 +321,7 @@ def compute_module6_forecast_for_scenarios(
             module5_result=lp_res,
             min_budget_threshold=min_budget_threshold,
             uncertainty_band=uncertainty_band,
+            module3_data=module3_data,
         )
     return Module6ScenarioResult(results_by_scenario=results_by_scenario)
 
@@ -266,6 +346,7 @@ def run_module6(
             module5_bundle=bundle,
             min_budget_threshold=min_budget_threshold,
             uncertainty_band=uncertainty_band,
+            module3_data=getattr(state, "module3_data", None),
         )
         state.complete_module6(
             module6_result=scenario_forecast.get_base(),
@@ -279,6 +360,7 @@ def run_module6(
             module5_result=state.module5_result,
             min_budget_threshold=min_budget_threshold,
             uncertainty_band=uncertainty_band,
+            module3_data=getattr(state, "module3_data", None),
         )
         state.complete_module6(
             module6_result=forecast,

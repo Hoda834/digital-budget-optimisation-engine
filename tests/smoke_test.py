@@ -644,6 +644,99 @@ def test_module5_rejects_invalid_state_carveout() -> None:
         build_module5_input_from_state(state)
 
 
+def test_module6_band_uses_observations_when_present() -> None:
+    """With ≥3 historical observations, the band should equal the sample
+    coefficient of variation, not the flat default."""
+    from modules.module6 import compute_module6_forecast, _coefficient_of_variation
+    from modules.module5 import Module5LPResult
+
+    lp = Module5LPResult(
+        budget_per_platform_goal={"fb": {"lg": 5000.0}},
+        budget_per_platform={"fb": 5000.0},
+        total_budget_used=5000.0,
+        objective_value=1.0,
+        r_pg={"fb": {"lg": 1.0}},
+        combined_weight_pg={"fb": {"lg": 1.0}},
+        estimated_kpi_per_platform_goal={"fb": {"lg": 100.0}},
+    )
+    observations = [80.0, 100.0, 120.0, 90.0, 110.0]
+    expected_cv = _coefficient_of_variation(observations)
+    assert expected_cv is not None and expected_cv > 0
+
+    result = compute_module6_forecast(
+        kpi_ratios={"fb": {"lg": {"FB_LG_LEADS": 0.025}}},
+        module5_result=lp,
+        module3_data={"fb": {"historical_days": 30,
+                             "kpi_observations": {"FB_LG_LEADS": observations}}},
+    )
+    row = next(r for r in result.rows if r.kpi_kind == "count")
+    assert row.band_source == "observations"
+    assert row.band_pct == pytest.approx(expected_cv)
+    # Different from default 30% — proves we didn't fall back
+    assert abs(row.band_pct - 0.30) > 0.01
+
+
+def test_module6_band_window_scaled_when_no_observations() -> None:
+    """Without observations but with historical_days, the band should scale
+    by sqrt(30 / days): more history → tighter band."""
+    from modules.module6 import compute_module6_forecast, DEFAULT_UNCERTAINTY_BAND
+    from modules.module5 import Module5LPResult
+    import math as _m
+
+    lp = Module5LPResult(
+        budget_per_platform_goal={"fb": {"lg": 5000.0}},
+        budget_per_platform={"fb": 5000.0},
+        total_budget_used=5000.0,
+        objective_value=1.0,
+        r_pg={"fb": {"lg": 1.0}},
+        combined_weight_pg={"fb": {"lg": 1.0}},
+        estimated_kpi_per_platform_goal={"fb": {"lg": 100.0}},
+    )
+
+    result_90 = compute_module6_forecast(
+        kpi_ratios={"fb": {"lg": {"FB_LG_LEADS": 0.025}}},
+        module5_result=lp,
+        module3_data={"fb": {"historical_days": 90}},
+    )
+    row_90 = next(r for r in result_90.rows if r.kpi_kind == "count")
+    assert row_90.band_source == "window_scaled"
+    expected_90 = DEFAULT_UNCERTAINTY_BAND * _m.sqrt(30.0 / 90.0)
+    assert row_90.band_pct == pytest.approx(expected_90, rel=1e-6)
+
+    # 7-day window should produce a wider band than 90-day
+    result_7 = compute_module6_forecast(
+        kpi_ratios={"fb": {"lg": {"FB_LG_LEADS": 0.025}}},
+        module5_result=lp,
+        module3_data={"fb": {"historical_days": 7}},
+    )
+    row_7 = next(r for r in result_7.rows if r.kpi_kind == "count")
+    assert row_7.band_pct > row_90.band_pct
+
+
+def test_module6_band_falls_back_to_default_without_module3_data() -> None:
+    """Backwards-compatibility: callers that don't pass module3_data must still
+    get the flat default band (no breaking change for existing call sites)."""
+    from modules.module6 import compute_module6_forecast, DEFAULT_UNCERTAINTY_BAND
+    from modules.module5 import Module5LPResult
+
+    lp = Module5LPResult(
+        budget_per_platform_goal={"fb": {"lg": 5000.0}},
+        budget_per_platform={"fb": 5000.0},
+        total_budget_used=5000.0,
+        objective_value=1.0,
+        r_pg={"fb": {"lg": 1.0}},
+        combined_weight_pg={"fb": {"lg": 1.0}},
+        estimated_kpi_per_platform_goal={"fb": {"lg": 100.0}},
+    )
+    result = compute_module6_forecast(
+        kpi_ratios={"fb": {"lg": {"FB_LG_LEADS": 0.025}}},
+        module5_result=lp,
+    )
+    row = next(r for r in result.rows if r.kpi_kind == "count")
+    assert row.band_source == "default"
+    assert row.band_pct == pytest.approx(DEFAULT_UNCERTAINTY_BAND)
+
+
 def test_module6_count_kpi_has_confidence_band() -> None:
     """Module 6 must surface a ±band on every count-KPI forecast so the
     output cannot be mistaken for a precise commitment."""
