@@ -242,6 +242,7 @@ def build_kpi_meta() -> Dict[str, Dict[str, Any]]:
             "platform": str(row.get("platform", "")).strip(),
             "goal": str(row.get("goal", "")).strip(),
             "kpi_label": str(row.get("kpi_label", "")).strip(),
+            "kind": str(row.get("kind", "count")).strip().lower() or "count",
         }
     return meta
 
@@ -282,9 +283,30 @@ def build_platform_totals_df(lp_res: Module5LPResult) -> pd.DataFrame:
     return df
 
 
-def build_forecast_df(module6_res: Module6Result) -> pd.DataFrame:
+def build_forecast_df(
+    module6_res: Module6Result,
+    goal_values: Optional[Dict[str, float]] = None,
+) -> pd.DataFrame:
+    """Build the per-KPI forecast table.
+
+    When ``goal_values`` is provided and contains at least one positive value,
+    the table gains ``Expected Revenue`` and ``ROAS`` columns.  Revenue is only
+    well-defined for count KPIs (Reach, Leads, Clicks, …); rate KPIs
+    (Engagement Rate, CTR) are dimensionless and leave those cells at zero.
+    """
     kpi_meta = build_kpi_meta()
     rows: List[Dict[str, Any]] = []
+
+    gv: Dict[str, float] = {}
+    if goal_values:
+        for k, v in goal_values.items():
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+            if fv > 0:
+                gv[str(k)] = fv
+    revenue_enabled = bool(gv)
 
     for r in (module6_res.rows or []):
         var = str(r.kpi_name)
@@ -297,16 +319,31 @@ def build_forecast_df(module6_res: Module6Result) -> pd.DataFrame:
         objective_name = GOAL_NAMES.get(objective_code, objective_code) if objective_code else ""
 
         kpi_label = str(meta.get("kpi_label", "")).strip() or "KPI"
+        kind = str(meta.get("kind", "count")).strip().lower() or "count"
 
-        rows.append(
-            {
-                "Platform": platform_name,
-                "Objective": objective_name,
-                "KPI": kpi_label,
-                "Allocated Budget": float(r.allocated_budget or 0.0),
-                "Predicted KPI": float(r.predicted_kpi or 0.0),
-            }
-        )
+        budget = float(r.allocated_budget or 0.0)
+        predicted = float(r.predicted_kpi or 0.0)
+
+        row: Dict[str, Any] = {
+            "Platform": platform_name,
+            "Objective": objective_name,
+            "KPI": kpi_label,
+            "Allocated Budget": budget,
+            "Predicted KPI": predicted,
+        }
+
+        if revenue_enabled:
+            goal_value = gv.get(objective_code, 0.0)
+            if kind == "count" and goal_value > 0 and predicted > 0:
+                revenue = predicted * goal_value
+                roas = revenue / budget if budget > 0 else 0.0
+            else:
+                revenue = 0.0
+                roas = 0.0
+            row["Expected Revenue"] = revenue
+            row["ROAS"] = roas
+
+        rows.append(row)
 
     df = pd.DataFrame(rows)
     if not df.empty:
@@ -423,6 +460,7 @@ def _scenario_goal_multiplier_table(state: WizardState) -> pd.DataFrame:
 
 def create_excel_bytes(
     scenario_payload: List[Tuple[str, Module5LPResult, Optional[Module6Result]]],
+    goal_values: Optional[Dict[str, float]] = None,
 ) -> bytes:
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
@@ -442,6 +480,16 @@ def create_excel_bytes(
                     }
                 )
 
+            if forecast_res is not None and goal_values:
+                fdf_for_totals = build_forecast_df(forecast_res, goal_values=goal_values)
+                if "Expected Revenue" in fdf_for_totals.columns:
+                    total_rev = float(fdf_for_totals["Expected Revenue"].sum())
+                    spend = float(lp_res.total_budget_used or 0.0)
+                    summary_rows.append({"Metric": "Expected Revenue", "Value": total_rev})
+                    summary_rows.append(
+                        {"Metric": "ROAS", "Value": (total_rev / spend) if spend > 0 else 0.0}
+                    )
+
             summary_df = pd.DataFrame(summary_rows)
             budget_df = build_budget_allocation_df(lp_res)
             platform_df = build_platform_totals_df(lp_res)
@@ -451,7 +499,7 @@ def create_excel_bytes(
             platform_df.to_excel(writer, sheet_name=f"Platforms_{suffix}"[:31], index=False)
 
             if forecast_res is not None:
-                forecast_df = build_forecast_df(forecast_res)
+                forecast_df = build_forecast_df(forecast_res, goal_values=goal_values)
                 forecast_df.to_excel(writer, sheet_name=f"Forecast_{suffix}"[:31], index=False)
 
     buffer.seek(0)
@@ -750,10 +798,16 @@ def create_pdf_bytes(
             story.append(Spacer(1, 10))
 
         if forecast_res is not None:
-            forecast_df = build_forecast_df(forecast_res)
+            forecast_df = build_forecast_df(
+                forecast_res,
+                goal_values=getattr(state, "goal_value_per_unit", None) or None,
+            )
             if not forecast_df.empty:
                 story.append(Paragraph("Forecast KPIs (goal-aligned)", styles["Heading3"]))
-                t = Table(_df_to_table_data(forecast_df, money_columns=["Allocated Budget"]))
+                money_cols = ["Allocated Budget"]
+                if "Expected Revenue" in forecast_df.columns:
+                    money_cols.append("Expected Revenue")
+                t = Table(_df_to_table_data(forecast_df, money_columns=money_cols))
                 t.setStyle(
                     TableStyle(
                         [
@@ -1136,6 +1190,10 @@ def _get_module6_scenarios(state: WizardState) -> Dict[str, Module6Result]:
 
 def results_ui(state: WizardState) -> None:
     st.header("Results")
+
+    goal_values_for_results: Optional[Dict[str, float]] = (
+        getattr(state, "goal_value_per_unit", None) or None
+    )
 
     if st.button("Reset", type="secondary"):
         reset_state()
@@ -1583,10 +1641,18 @@ def results_ui(state: WizardState) -> None:
                 bullets.append(f"Highest allocated objective: {top_g['Objective']} with {money(top_g['Allocated Budget'])}.")
 
         if fc_res is not None:
-            fdf = build_forecast_df(fc_res)
+            fdf = build_forecast_df(fc_res, goal_values=goal_values_for_results)
             if not fdf.empty:
                 top_kpi = fdf.sort_values("Predicted KPI", ascending=False).iloc[0]
                 bullets.append(f"Top predicted KPI: {top_kpi['KPI']} on {top_kpi['Platform']} at {number(top_kpi['Predicted KPI'], 2)}.")
+                if "Expected Revenue" in fdf.columns:
+                    total_rev = float(fdf["Expected Revenue"].sum())
+                    spend = float(lp_res.total_budget_used or 0.0)
+                    if total_rev > 0 and spend > 0:
+                        bullets.append(
+                            f"Expected revenue: {money(total_rev)} on {money(spend)} spend "
+                            f"(ROAS {number(total_rev / spend, 2)}×)."
+                        )
 
         if hasattr(lp_res, "objective_value_raw"):
             bullets.append(f"Objective (raw): {number(getattr(lp_res, 'objective_value_raw') or 0.0, 6)}.")
@@ -1602,11 +1668,45 @@ def results_ui(state: WizardState) -> None:
 
         with tab:
             st.subheader("Summary")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.metric("Total budget used", money(lp_res.total_budget_used or 0.0))
-            with c2:
-                st.metric("Objective value", number(lp_res.objective_value or 0.0, 2))
+
+            # Pre-compute revenue totals for both the metric row and the
+            # downstream forecast table so we render the same numbers in
+            # both places.
+            scenario_total_revenue = 0.0
+            scenario_roas = 0.0
+            if forecast_res is not None and goal_values_for_results:
+                fdf_preview = build_forecast_df(
+                    forecast_res, goal_values=goal_values_for_results
+                )
+                if "Expected Revenue" in fdf_preview.columns:
+                    scenario_total_revenue = float(fdf_preview["Expected Revenue"].sum())
+                    spend_for_roas = float(lp_res.total_budget_used or 0.0)
+                    if spend_for_roas > 0:
+                        scenario_roas = scenario_total_revenue / spend_for_roas
+
+            if scenario_total_revenue > 0:
+                c1, c2, c3, c4 = st.columns(4)
+                with c1:
+                    st.metric("Total budget used", money(lp_res.total_budget_used or 0.0))
+                with c2:
+                    st.metric("Expected revenue", money(scenario_total_revenue))
+                with c3:
+                    st.metric("ROAS", f"{number(scenario_roas, 2)}×")
+                with c4:
+                    st.metric("Objective value", number(lp_res.objective_value or 0.0, 2))
+                st.caption(
+                    "Expected revenue = predicted volume × goal value (count KPIs only). "
+                    "Rate KPIs (Engagement Rate, CTR) contribute zero. Cells with multiple "
+                    "count KPIs for the same objective (e.g. Facebook Awareness: Reach + "
+                    "Impression) sum each KPI's contribution — treat the total as an upper "
+                    "bound when those KPIs measure overlapping value."
+                )
+            else:
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.metric("Total budget used", money(lp_res.total_budget_used or 0.0))
+                with c2:
+                    st.metric("Objective value", number(lp_res.objective_value or 0.0, 2))
 
             if hasattr(lp_res, "objective_value_raw"):
                 st.caption(f"Objective value (raw): {number(getattr(lp_res, 'objective_value_raw') or 0.0, 6)}")
@@ -1662,13 +1762,23 @@ def results_ui(state: WizardState) -> None:
             if forecast_res is None:
                 st.info("Forecast is not available for this scenario.")
             else:
-                forecast_df = build_forecast_df(forecast_res)
+                forecast_df = build_forecast_df(
+                    forecast_res, goal_values=goal_values_for_results
+                )
                 if forecast_df.empty:
                     st.warning("No forecast KPIs to display.")
                 else:
                     show_forecast = forecast_df.copy()
                     show_forecast["Allocated Budget"] = show_forecast["Allocated Budget"].apply(money)
                     show_forecast["Predicted KPI"] = show_forecast["Predicted KPI"].apply(lambda x: number(x, 2))
+                    if "Expected Revenue" in show_forecast.columns:
+                        show_forecast["Expected Revenue"] = show_forecast["Expected Revenue"].apply(
+                            lambda x: money(x) if float(x) > 0 else ""
+                        )
+                    if "ROAS" in show_forecast.columns:
+                        show_forecast["ROAS"] = show_forecast["ROAS"].apply(
+                            lambda x: f"{number(x, 2)}×" if float(x) > 0 else ""
+                        )
                     st.dataframe(show_forecast, use_container_width=True, hide_index=True)
 
     st.subheader("Downloads")
@@ -1688,7 +1798,9 @@ def results_ui(state: WizardState) -> None:
         excel_available = False
 
     if excel_available:
-        xlsx_bytes = create_excel_bytes(scenario_payload_for_exports)
+        xlsx_bytes = create_excel_bytes(
+            scenario_payload_for_exports, goal_values=goal_values_for_results
+        )
         st.download_button(
             label="Download Excel",
             data=xlsx_bytes,
