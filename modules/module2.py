@@ -11,6 +11,23 @@ from core.wizard_state import WizardState, ALLOWED_PLATFORMS
 PLATFORMS = ("fb", "ig", "li", "yt", "tt", "pt", "tw", "sn", "rd")
 
 
+def _effective_platforms(state: WizardState) -> List[str]:
+    """Built-in PLATFORMS plus any custom platforms registered on state.
+
+    Preserves PLATFORMS order; appends custom platforms in registration order.
+    """
+    customs = [str(p.get("code", "")).strip().lower()
+               for p in (getattr(state, "custom_platforms", None) or [])
+               if p.get("code")]
+    seen: set = set(PLATFORMS)
+    out = list(PLATFORMS)
+    for c in customs:
+        if c and c not in seen:
+            out.append(c)
+            seen.add(c)
+    return out
+
+
 @dataclass
 class PlatformPriority:
     selected: bool = False
@@ -21,7 +38,7 @@ class PlatformPriority:
 def initialise_module2_state(state: WizardState) -> None:
     if not state.module1_finalised:
         raise ValueError("Module 1 has not been finalised, cannot enter Module 2.")
-    for p in PLATFORMS:
+    for p in _effective_platforms(state):
         if p not in state.platform_priorities:
             state.platform_priorities[p] = PlatformPriority()
 
@@ -37,18 +54,20 @@ def set_module2_inputs(
     initialise_module2_state(state)
 
     selected_set = set(selected_platforms)
+    effective = set(_effective_platforms(state))
+    allowed = state.allowed_platform_codes()
 
-    unknown_platforms = selected_set - set(PLATFORMS)
+    unknown_platforms = selected_set - effective
     if unknown_platforms:
         raise ValueError(f"Unknown platform codes in selection: {unknown_platforms}")
 
-    invalid_platforms = selected_set - ALLOWED_PLATFORMS
+    invalid_platforms = selected_set - allowed
     if invalid_platforms:
         raise ValueError(
             f"Invalid platform codes according to WizardState: {invalid_platforms}"
         )
 
-    for p in PLATFORMS:
+    for p in effective:
         platform_state: PlatformPriority = state.platform_priorities[p]
         platform_state.selected = p in selected_set
 
@@ -57,7 +76,7 @@ def set_module2_inputs(
             platform_state.priority_2 = None
 
     for p, prio_dict in priorities_input.items():
-        if p not in PLATFORMS:
+        if p not in effective:
             raise ValueError(f"Unknown platform in priorities_input: {p}")
 
         platform_state = state.platform_priorities[p]
@@ -81,7 +100,7 @@ def validate_module2(state: WizardState) -> None:
 
     selected_platforms = [
         p
-        for p in PLATFORMS
+        for p in _effective_platforms(state)
         if isinstance(state.platform_priorities.get(p), PlatformPriority)
         and state.platform_priorities[p].selected
     ]
@@ -136,7 +155,7 @@ def compute_priority_ranks(state: WizardState) -> None:
     valid_goals = list(state.valid_goals)
     state.priority_rank = {}
 
-    for p in PLATFORMS:
+    for p in _effective_platforms(state):
         prio = state.platform_priorities.get(p)
         if not isinstance(prio, PlatformPriority) or not prio.selected:
             state.priority_rank[p] = {}
@@ -167,7 +186,7 @@ def compute_platform_weights(state: WizardState) -> None:
     valid_goals = list(state.valid_goals)
     state.platform_weights = {}
 
-    for p in PLATFORMS:
+    for p in _effective_platforms(state):
         ranks_for_p = state.priority_rank.get(p, {})
 
         prio = state.platform_priorities.get(p)

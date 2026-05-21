@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import pulp
 
 from core.wizard_state import WizardState, FlowStateError
-from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE
+from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE, effective_kpi_config
 
 
 _LOG = logging.getLogger(__name__)
@@ -207,7 +207,7 @@ def _build_r_pg_from_state(state: WizardState) -> Dict[str, Dict[str, float]]:
     # Look up KPI kind per (platform, var) so we know whether to treat r as rate or per-money.
     kind_lookup: Dict[Tuple[str, str], str] = {
         (row["platform"], row["var"]): row.get("kind", KIND_COUNT)
-        for row in KPI_CONFIG
+        for row in effective_kpi_config(state)
     }
 
     r_pg: Dict[str, Dict[str, float]] = {}
@@ -316,7 +316,7 @@ def _representative_productivity_per_goal(state: WizardState) -> Dict[str, float
     """
     kind_lookup: Dict[Tuple[str, str], str] = {
         (row["platform"], row["var"]): row.get("kind", KIND_COUNT)
-        for row in KPI_CONFIG
+        for row in effective_kpi_config(state)
     }
     by_goal: Dict[str, List[float]] = {g: [] for g in state.valid_goals}
     for p in (getattr(state, "active_platforms", []) or []):
@@ -594,9 +594,20 @@ def build_module5_input_from_state(state: WizardState) -> Module5LPInput:
     if campaign_days <= 0.0:
         campaign_days = 30.0
     scale = campaign_days / 30.0
+    # Merge built-in catalogue thresholds with any custom platforms registered
+    # on state.  Custom entries supply their own monthly_effective_minimum.
+    monthly_minimums: Dict[str, float] = dict(PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH)
+    for cp in (getattr(state, "custom_platforms", None) or []):
+        code = str(cp.get("code", "")).strip().lower()
+        mm = cp.get("monthly_effective_minimum")
+        if code and mm is not None:
+            try:
+                monthly_minimums[code] = max(0.0, float(mm))
+            except (TypeError, ValueError):
+                pass
     effective_minimums: Dict[str, float] = {}
     for p in active_platforms:
-        threshold = PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH.get(p, 0.0) * scale
+        threshold = monthly_minimums.get(p, 0.0) * scale
         if threshold > 0.0:
             effective_minimums[p] = threshold
 

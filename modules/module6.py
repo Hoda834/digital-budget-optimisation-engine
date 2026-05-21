@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
 from core.wizard_state import WizardState
-from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE
+from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE, effective_kpi_config
 from modules.module5 import Module5LPResult, Module5ScenarioBundle
 
 
@@ -184,6 +184,7 @@ def compute_module6_forecast(
     uncertainty_band: float = DEFAULT_UNCERTAINTY_BAND,
     module3_data: Optional[Dict[str, Dict[str, Any]]] = None,
     seasonality_index: Optional[Dict[str, float]] = None,
+    kpi_kind_override: Optional[Dict[str, str]] = None,
 ) -> Module6Result:
     """Produce per-KPI forecasts from the LP allocation.
 
@@ -238,7 +239,7 @@ def compute_module6_forecast(
                     d.skipped_invalid_ratio_items += 1
                     continue
 
-                kind = _KPI_KIND.get(kpi_name, KIND_COUNT)
+                kind = (kpi_kind_override or _KPI_KIND).get(kpi_name, KIND_COUNT)
 
                 if kind == KIND_RATE:
                     # Engagement-rate style KPIs are dimensionless proportions.
@@ -329,6 +330,7 @@ def compute_module6_forecast_for_scenarios(
     uncertainty_band: float = DEFAULT_UNCERTAINTY_BAND,
     module3_data: Optional[Dict[str, Dict[str, Any]]] = None,
     seasonality_index: Optional[Dict[str, float]] = None,
+    kpi_kind_override: Optional[Dict[str, str]] = None,
 ) -> Module6ScenarioResult:
     results_by_scenario: Dict[str, Module6Result] = {}
     for scenario_name, lp_res in module5_bundle.results_by_scenario.items():
@@ -339,6 +341,7 @@ def compute_module6_forecast_for_scenarios(
             uncertainty_band=uncertainty_band,
             module3_data=module3_data,
             seasonality_index=seasonality_index,
+            kpi_kind_override=kpi_kind_override,
         )
     return Module6ScenarioResult(results_by_scenario=results_by_scenario)
 
@@ -359,6 +362,14 @@ def run_module6(
 
     seasonality = getattr(state, "seasonality_index", None) or None
 
+    # Include custom-platform KPI kinds in the lookup so rate KPIs on a
+    # custom platform aren't mistaken for counts (which would then get
+    # multiplied by the budget — silently wrong forecast).
+    kpi_kind_override = {
+        row["var"]: row.get("kind", KIND_COUNT)
+        for row in effective_kpi_config(state)
+    }
+
     if isinstance(bundle, Module5ScenarioBundle):
         scenario_forecast = compute_module6_forecast_for_scenarios(
             kpi_ratios=state.kpi_ratios,
@@ -367,6 +378,7 @@ def run_module6(
             uncertainty_band=uncertainty_band,
             module3_data=getattr(state, "module3_data", None),
             seasonality_index=seasonality,
+            kpi_kind_override=kpi_kind_override,
         )
         state.complete_module6(
             module6_result=scenario_forecast.get_base(),
@@ -382,6 +394,7 @@ def run_module6(
             uncertainty_band=uncertainty_band,
             module3_data=getattr(state, "module3_data", None),
             seasonality_index=seasonality,
+            kpi_kind_override=kpi_kind_override,
         )
         state.complete_module6(
             module6_result=forecast,

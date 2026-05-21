@@ -797,6 +797,113 @@ def test_using_rank_weights_logs_recommendation(caplog) -> None:
     assert "supply economic values" in text.lower()
 
 
+def test_custom_platform_pipeline_end_to_end() -> None:
+    """A user-defined custom platform should flow through M2 → M5 → M6 → M7
+    just like a built-in.  Validates the effective_kpi_config + allowed_platform_codes
+    machinery end-to-end."""
+    from modules.module2 import run_module2
+    from modules.module3 import finalise_module3_from_inputs
+    from modules.module4 import run_module4
+    from modules.module5 import run_module5
+    from modules.module6 import run_module6
+    from modules.module7 import run_module7
+
+    state = WizardState()
+    complete_module1_and_advance(
+        state, raw_objectives=["lg", "aw"], raw_budget=10000.0, raw_duration_days=30,
+    )
+    # Register a custom platform before Module 2 runs
+    state.register_custom_platform(
+        code="yz",
+        label="MyChannel",
+        monthly_effective_minimum=600.0,
+        kpis=[
+            {"goal": "lg", "var": "YZ_LG_LEADS", "kpi_label": "Leads", "kind": "count"},
+            {"goal": "aw", "var": "YZ_AW_IMPRESSION", "kpi_label": "Impressions", "kind": "count"},
+        ],
+    )
+    assert "yz" in state.allowed_platform_codes()
+
+    run_module2(
+        state,
+        selected_platforms=["fb", "yz"],
+        priorities_input={
+            "fb": {"priority_1": "aw", "priority_2": None},
+            "yz": {"priority_1": "lg", "priority_2": None},
+        },
+    )
+    finalise_module3_from_inputs(
+        state,
+        platform_inputs={
+            "fb": {"budget": 4000.0, "kpis": {"FB_AW_REACH": 200000.0}},
+            "yz": {"budget": 3000.0, "kpis": {"YZ_LG_LEADS": 60.0}},
+        },
+    )
+    run_module4(state)
+    run_module5(state)
+    run_module6(state)
+
+    base = state.module5_scenario_bundle.results_by_scenario["base"]
+    yz_allocated = sum(base.budget_per_platform_goal.get("yz", {}).values())
+    assert yz_allocated > 0, "Custom platform 'yz' should receive a non-zero allocation"
+
+    # Custom platform's effective minimum should be in the per-platform map
+    # at the scaled value (600 monthly × 1.0 = 600 for 30-day campaign).
+    from modules.module5 import build_module5_input_from_state
+    state.module5_finalised = False
+    lp_input = build_module5_input_from_state(state)
+    assert lp_input.effective_minimum_per_platform.get("yz") == pytest.approx(600.0)
+
+    # M7 should report on the custom platform too
+    insights = run_module7(state, state.module5_scenario_bundle,
+                          state.module6_scenario_result.results_by_scenario)
+    assert "base" in insights.scenario_insights
+
+
+def test_custom_platform_code_collision_rejected() -> None:
+    """register_custom_platform must refuse codes that collide with built-ins
+    or with previously-registered customs."""
+    state = WizardState()
+    complete_module1_and_advance(state, raw_objectives=["lg"], raw_budget=10000.0)
+
+    # Built-in collision
+    with pytest.raises(ValueError, match="already in use"):
+        state.register_custom_platform(
+            code="fb",
+            label="Fake Facebook",
+            kpis=[{"goal": "lg", "var": "FB_X", "kpi_label": "x", "kind": "count"}],
+        )
+
+    # Successful registration
+    state.register_custom_platform(
+        code="yz",
+        label="MyChannel",
+        kpis=[{"goal": "lg", "var": "YZ_LG_LEADS", "kpi_label": "Leads", "kind": "count"}],
+    )
+
+    # Duplicate custom code
+    with pytest.raises(ValueError, match="already in use"):
+        state.register_custom_platform(
+            code="yz",
+            label="Another",
+            kpis=[{"goal": "lg", "var": "YZ_OTHER", "kpi_label": "x", "kind": "count"}],
+        )
+
+
+def test_custom_platform_invalid_kind_rejected() -> None:
+    """register_custom_platform must reject unknown KPI kinds — getting count vs
+    rate wrong would silently produce wrong forecasts."""
+    state = WizardState()
+    complete_module1_and_advance(state, raw_objectives=["lg"], raw_budget=10000.0)
+
+    with pytest.raises(ValueError, match="kind"):
+        state.register_custom_platform(
+            code="yz",
+            label="MyChannel",
+            kpis=[{"goal": "lg", "var": "YZ_LG_LEADS", "kpi_label": "Leads", "kind": "ratio"}],
+        )
+
+
 def test_tiktok_pipeline_end_to_end() -> None:
     """A new-catalog platform (TikTok) should flow through M1 → M5 → M6 → M7
     without special-casing, with its own KPI vars and effective minimum."""

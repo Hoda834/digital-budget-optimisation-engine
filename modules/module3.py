@@ -4,7 +4,13 @@ import math
 from typing import Any, Dict, List
 
 from core.wizard_state import WizardState, GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG
-from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE, get_kpi_rows
+from core.kpi_config import (
+    KPI_CONFIG,
+    KIND_COUNT,
+    KIND_RATE,
+    get_kpi_rows,
+    effective_kpi_config,
+)
 
 
 def get_platform_kpis(platform: str, active_goals_for_platform: List[str]) -> List[Dict[str, Any]]:
@@ -132,15 +138,21 @@ def _compute_kpi_ratios_for_platform(
     platform: str,
     budget: float,
     kpi_values: Dict[str, float],
+    kpi_catalog: List[Dict[str, Any]] = None,
 ) -> Dict[str, Dict[str, float]]:
     """Return kpi_ratios[goal][var] = productivity for one platform.
 
     For count KPIs the productivity is value / budget (units per money).
     For rate KPIs the productivity is the rate itself (already dimensionless;
     dividing by budget would be meaningless).
+
+    ``kpi_catalog`` defaults to the built-in KPI_CONFIG; pass
+    effective_kpi_config(state) to include custom-platform rows.
     """
+    if kpi_catalog is None:
+        kpi_catalog = KPI_CONFIG
     out: Dict[str, Dict[str, float]] = {}
-    for row in KPI_CONFIG:
+    for row in kpi_catalog:
         if row["platform"] != platform:
             continue
         var = row["var"]
@@ -253,13 +265,16 @@ def _finalise_module3(
     platform_kpis: Dict[str, Dict[str, float]] = {}
     kpi_ratios: Dict[str, Dict[str, Dict[str, float]]] = {}
 
+    kpi_catalog = effective_kpi_config(state)
     for platform, pdata in temp_module3_data.items():
         budget = float(pdata["budget"])
         kpis: Dict[str, float] = pdata["kpis"]
 
         platform_budgets[platform] = budget
         platform_kpis[platform] = dict(kpis)
-        kpi_ratios[platform] = _compute_kpi_ratios_for_platform(platform, budget, kpis)
+        kpi_ratios[platform] = _compute_kpi_ratios_for_platform(
+            platform, budget, kpis, kpi_catalog=kpi_catalog,
+        )
 
     state.complete_module3_and_advance(
         module3_data=temp_module3_data,
@@ -313,13 +328,14 @@ def finalise_module3_from_inputs(
 
         validated_kpis: Dict[str, float] = {}
         active_goals = state.goals_by_platform.get(platform, [])
-        allowed_vars = {row["var"] for row in KPI_CONFIG
+        kpi_catalog = effective_kpi_config(state)
+        allowed_vars = {row["var"] for row in kpi_catalog
                         if row["platform"] == platform and row["goal"] in active_goals}
         for var, raw_value in raw_kpis.items():
             if var not in allowed_vars:
                 continue
             v = _validate_finite(float(raw_value), f"KPI {var}")
-            kind = next((r.get("kind", KIND_COUNT) for r in KPI_CONFIG
+            kind = next((r.get("kind", KIND_COUNT) for r in kpi_catalog
                          if r["platform"] == platform and r["var"] == var), KIND_COUNT)
             if kind == KIND_RATE:
                 if v > 1.0:
@@ -346,7 +362,7 @@ def finalise_module3_from_inputs(
             for var, raw_list in raw_observations.items():
                 if var not in allowed_vars or not isinstance(raw_list, (list, tuple)):
                     continue
-                kind = next((r.get("kind", KIND_COUNT) for r in KPI_CONFIG
+                kind = next((r.get("kind", KIND_COUNT) for r in kpi_catalog
                              if r["platform"] == platform and r["var"] == var), KIND_COUNT)
                 if kind == KIND_RATE:
                     continue
