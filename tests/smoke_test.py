@@ -117,7 +117,9 @@ def test_full_pipeline_smoke() -> None:
     for _, lp_res in bundle.results_by_scenario.items():
         used = float(lp_res.total_budget_used or 0.0)
         # Each scenario has its own cap = scalar_m * total_budget; check the recorded cap.
-        assert used <= lp_res.effective_budget_cap + 1e-6
+        # Tolerance is 1e-3 (= £0.001 on a £10k budget) to cover CBC's internal
+        # tolerance plus cumulative FP error from summing many bracket variables.
+        assert used <= lp_res.effective_budget_cap + 1e-3
 
 
 def test_module2_excludes_non_priority_goals() -> None:
@@ -797,6 +799,59 @@ def test_using_rank_weights_logs_recommendation(caplog) -> None:
     assert "supply economic values" in text.lower()
 
 
+def test_data_quality_shrinkage_compresses_productivity_gap() -> None:
+    """A short-window platform's productivity (post-shrinkage) should be
+    closer to the cross-platform mean than the same platform with a long
+    window.  We assert on the r_pg values the LP actually sees, not on
+    final allocations — shrinkage compresses ranking magnitudes but can't
+    flip them within a goal, so the LP's *ordering* is unchanged."""
+    from modules.module2 import run_module2
+    from modules.module3 import finalise_module3_from_inputs
+    from modules.module4 import run_module4
+    from modules.module5 import build_module5_input_from_state
+
+    def _r_pg(hist_days_li: int) -> dict:
+        s = WizardState()
+        complete_module1_and_advance(
+            s, raw_objectives=["lg"], raw_budget=10000.0, raw_duration_days=30,
+        )
+        run_module2(
+            s,
+            selected_platforms=["fb", "li"],
+            priorities_input={
+                "fb": {"priority_1": "lg", "priority_2": None},
+                "li": {"priority_1": "lg", "priority_2": None},
+            },
+        )
+        finalise_module3_from_inputs(
+            s,
+            platform_inputs={
+                "fb": {"budget": 5000.0, "historical_days": 365,
+                       "kpis": {"FB_LG_LEADS": 100.0}},  # 0.02 leads/£
+                "li": {"budget": 5000.0, "historical_days": hist_days_li,
+                       "kpis": {"LI_LG_LEADS": 500.0}},  # 0.10 leads/£ raw
+            },
+        )
+        run_module4(s)
+        return build_module5_input_from_state(s).r_pg
+
+    # After per-goal normalisation, sums to 1.0.  The DIFFERENCE between
+    # FB and LI shares is what shrinkage compresses: short LI history →
+    # smaller gap, long LI history → larger gap.
+    short_rpg = _r_pg(hist_days_li=7)
+    long_rpg = _r_pg(hist_days_li=365)
+
+    short_gap = abs(short_rpg["li"]["lg"] - short_rpg["fb"]["lg"])
+    long_gap = abs(long_rpg["li"]["lg"] - long_rpg["fb"]["lg"])
+
+    assert long_gap > short_gap, (
+        f"With 365-day LI history the LP should see a wider productivity "
+        f"gap (got {long_gap:.4f}) than with 7-day LI history "
+        f"({short_gap:.4f}) — shrinkage is not pooling short-window "
+        f"estimates toward the mean."
+    )
+
+
 def test_custom_platform_pipeline_end_to_end() -> None:
     """A user-defined custom platform should flow through M2 → M5 → M6 → M7
     just like a built-in.  Validates the effective_kpi_config + allowed_platform_codes
@@ -1067,8 +1122,13 @@ def test_module5_warns_when_platform_below_effective_minimum() -> None:
     finalise_module3_from_inputs(
         state,
         platform_inputs={
-            "fb": {"budget": 3000.0, "kpis": {"FB_LG_LEADS": 300.0}},  # 0.1 leads/£
-            "li": {"budget": 3000.0, "kpis": {"LI_LG_LEADS": 30.0}},   # 0.01 leads/£
+            # Generous historical_days so data-quality shrinkage doesn't pool
+            # the productivity gap away — we want a clean 10× advantage that
+            # the LP can honour.
+            "fb": {"budget": 3000.0, "historical_days": 365,
+                   "kpis": {"FB_LG_LEADS": 300.0}},  # 0.1 leads/£
+            "li": {"budget": 3000.0, "historical_days": 365,
+                   "kpis": {"LI_LG_LEADS": 30.0}},   # 0.01 leads/£
         },
     )
     run_module4(state)

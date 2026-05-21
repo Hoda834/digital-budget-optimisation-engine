@@ -290,6 +290,22 @@ def _build_r_pg_from_state(state: WizardState) -> Dict[str, Dict[str, float]]:
             for p in rate_only_ps:
                 r_pg[p][g] *= count_mean
 
+    # ── Data-quality shrinkage (James-Stein style) ────────────────────────────
+    # Pool each (platform, goal) productivity estimate toward the cross-
+    # platform mean for that goal, weighted by how much historical data
+    # backs the platform's estimate.  Applied after Fix A so all values are
+    # on the same numerical footing, and before Fix B so the pooled values
+    # are what gets normalised.  Without this the LP treats a 7-day reading
+    # with the same authority as a 365-day one — which is exactly the
+    # reviewer's "garbage in, confident optimisation out" critique.
+    #
+    # shrinkage weight = REF / (REF + historical_days)
+    #   hist =   7 days → ~81% pulled toward mean (weak data, strong prior)
+    #   hist =  30 days → ~50% pulled toward mean
+    #   hist =  90 days → ~25% pulled toward mean
+    #   hist = 365 days → ~8%  pulled toward mean (rich data, prior recedes)
+    _apply_data_quality_shrinkage(r_pg, state)
+
     # ── Fix B: normalise productivities per goal ──────────────────────────────
     # Without normalisation, "100 reach/£" and "0.016 leads/£" live on a
     # 6,000× scale gap; the LP then treats reach as far more valuable than
@@ -305,6 +321,53 @@ def _build_r_pg_from_state(state: WizardState) -> Dict[str, Dict[str, float]]:
                     r_pg[p][g] /= total
 
     return r_pg
+
+
+# Reference window for the James-Stein shrinkage prior.  Larger value =
+# stronger prior = more pooling toward the cross-platform mean for short
+# histories.  30 days is the conventional "campaign month" baseline.
+_DATA_QUALITY_SHRINKAGE_REFERENCE_DAYS = 30.0
+
+
+def _apply_data_quality_shrinkage(
+    r_pg: Dict[str, Dict[str, float]],
+    state: WizardState,
+) -> None:
+    """Pool short-history platform productivities toward the cross-platform
+    mean within each goal.
+
+    For each goal with two or more positive-productivity platforms, compute
+    the mean across those platforms and replace each platform's productivity
+    with a convex combination of its own estimate and the mean:
+
+        shrunk = (1 - w) × own + w × mean
+        w      = REF / (REF + historical_days)
+
+    A 7-day-history platform gets pulled hard toward the mean (w ≈ 0.81);
+    a 365-day-history platform keeps almost its own value (w ≈ 0.08).
+    Mutates r_pg in place.  Cells with only one positive platform are
+    untouched — there's nothing to shrink toward.
+    """
+    module3_data = getattr(state, "module3_data", None) or {}
+    ref = _DATA_QUALITY_SHRINKAGE_REFERENCE_DAYS
+
+    for g in state.valid_goals:
+        active: List[Tuple[str, float]] = []
+        for p, gdict in r_pg.items():
+            v = _safe_float(gdict.get(g, 0.0), 0.0)
+            if v > 0.0:
+                active.append((p, v))
+        if len(active) < 2:
+            continue  # nothing to pool toward
+
+        mean = sum(v for _, v in active) / len(active)
+        for p, v in active:
+            hist = _safe_float(
+                module3_data.get(p, {}).get("historical_days"), ref,
+            )
+            hist = max(1.0, hist)
+            w = ref / (ref + hist)
+            r_pg[p][g] = (1.0 - w) * v + w * mean
 
 
 def _representative_productivity_per_goal(state: WizardState) -> Dict[str, float]:
