@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import pulp
 
 from core.wizard_state import WizardState, FlowStateError
-from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE, effective_kpi_config
+from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE
 
 
 _LOG = logging.getLogger(__name__)
@@ -212,7 +212,7 @@ def _build_r_pg_from_state(state: WizardState) -> Dict[str, Dict[str, float]]:
     # Look up KPI kind per (platform, var) so we know whether to treat r as rate or per-money.
     kind_lookup: Dict[Tuple[str, str], str] = {
         (row["platform"], row["var"]): row.get("kind", KIND_COUNT)
-        for row in effective_kpi_config(state)
+        for row in KPI_CONFIG
     }
 
     r_pg: Dict[str, Dict[str, float]] = {}
@@ -384,7 +384,7 @@ def _representative_productivity_per_goal(state: WizardState) -> Dict[str, float
     """
     kind_lookup: Dict[Tuple[str, str], str] = {
         (row["platform"], row["var"]): row.get("kind", KIND_COUNT)
-        for row in effective_kpi_config(state)
+        for row in KPI_CONFIG
     }
     by_goal: Dict[str, List[float]] = {g: [] for g in state.valid_goals}
     for p in (getattr(state, "active_platforms", []) or []):

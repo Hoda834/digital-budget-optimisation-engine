@@ -7,11 +7,9 @@ KIND_COUNT = "count"
 KIND_RATE = "rate"
 
 
-# Built-in KPI catalogue.  Each row pairs a (platform, goal) cell with the
-# specific KPI a marketer would track on that platform for that objective,
-# and whether the metric is a count (units/£) or a rate (dimensionless).
-# Custom platforms registered via state.custom_platforms extend this set at
-# runtime; see effective_kpi_config().
+# KPI catalogue.  Each row pairs a (platform, goal) cell with the specific
+# KPI a marketer would track on that platform for that objective, and
+# whether the metric is a count (units/£) or a rate (dimensionless).
 KPI_CONFIG: List[Dict[str, Any]] = [
     # ── Meta / Facebook ────────────────────────────────────────────────────
     {"platform": "fb", "goal": GOAL_AW, "var": "FB_AW_REACH",       "kpi_label": "Reach",            "kind": KIND_COUNT},
@@ -82,27 +80,3 @@ def get_kind(platform: str, var: str) -> str:
     return KIND_COUNT
 
 
-def effective_kpi_config(state: Any = None) -> List[Dict[str, Any]]:
-    """Return the built-in KPI_CONFIG plus any custom-platform rows registered
-    on the WizardState.  Modules that loop over KPI rows should consult this
-    function instead of KPI_CONFIG directly so custom platforms are honoured.
-    """
-    if state is None:
-        return list(KPI_CONFIG)
-    custom = getattr(state, "custom_platforms", None) or []
-    extra: List[Dict[str, Any]] = []
-    for plat in custom:
-        for row in (plat.get("kpis") or []):
-            extra.append({
-                "platform": plat.get("code"),
-                "goal": row.get("goal"),
-                "var": row.get("var"),
-                "kpi_label": row.get("kpi_label", row.get("var", "")),
-                "kind": row.get("kind", KIND_COUNT),
-            })
-    return list(KPI_CONFIG) + extra
-
-
-def effective_get_kpi_rows(state: Any, platform: str, goal: str) -> List[Dict[str, Any]]:
-    return [r for r in effective_kpi_config(state)
-            if r["platform"] == platform and r["goal"] == goal]

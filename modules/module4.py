@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from core.wizard_state import WizardState, FlowStateError
-from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE, effective_kpi_config
+from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE
 
 
 # CPU values more than this multiple of the per-goal median are flagged as outliers
@@ -66,9 +66,7 @@ def run_module4(
     _assert_module4_flow_allowed(state)
 
     if kpi_config is None:
-        # Built-in KPI_CONFIG plus any custom-platform rows registered
-        # on the state.
-        kpi_config = effective_kpi_config(state)
+        kpi_config = KPI_CONFIG
 
     idx = _index_kpi_config(kpi_config)
 

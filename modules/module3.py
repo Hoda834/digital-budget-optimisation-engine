@@ -4,13 +4,7 @@ import math
 from typing import Any, Dict, List
 
 from core.wizard_state import WizardState, GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG
-from core.kpi_config import (
-    KPI_CONFIG,
-    KIND_COUNT,
-    KIND_RATE,
-    get_kpi_rows,
-    effective_kpi_config,
-)
+from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE, get_kpi_rows
 
 
 def get_platform_kpis(platform: str, active_goals_for_platform: List[str]) -> List[Dict[str, Any]]:
@@ -146,8 +140,8 @@ def _compute_kpi_ratios_for_platform(
     For rate KPIs the productivity is the rate itself (already dimensionless;
     dividing by budget would be meaningless).
 
-    ``kpi_catalog`` defaults to the built-in KPI_CONFIG; pass
-    effective_kpi_config(state) to include custom-platform rows.
+    ``kpi_catalog`` defaults to the built-in KPI_CONFIG; pass a custom
+    catalog if you're invoking this from outside the normal pipeline.
     """
     if kpi_catalog is None:
         kpi_catalog = KPI_CONFIG
@@ -265,7 +259,7 @@ def _finalise_module3(
     platform_kpis: Dict[str, Dict[str, float]] = {}
     kpi_ratios: Dict[str, Dict[str, Dict[str, float]]] = {}
 
-    kpi_catalog = effective_kpi_config(state)
+    kpi_catalog = KPI_CONFIG
     for platform, pdata in temp_module3_data.items():
         budget = float(pdata["budget"])
         kpis: Dict[str, float] = pdata["kpis"]
@@ -328,7 +322,7 @@ def finalise_module3_from_inputs(
 
         validated_kpis: Dict[str, float] = {}
         active_goals = state.goals_by_platform.get(platform, [])
-        kpi_catalog = effective_kpi_config(state)
+        kpi_catalog = KPI_CONFIG
         allowed_vars = {row["var"] for row in kpi_catalog
                         if row["platform"] == platform and row["goal"] in active_goals}
         for var, raw_value in raw_kpis.items():

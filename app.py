@@ -15,7 +15,7 @@ from modules.module1 import (
     complete_module1_and_advance as finalise_module1,
     Module1ValidationError,
 )
-from core.kpi_config import KPI_CONFIG, effective_kpi_config
+from core.kpi_config import KPI_CONFIG
 from core.csv_import import (
     parse_platform_csv,
     SUPPORTED_PLATFORMS as CSV_SUPPORTED,
@@ -797,7 +797,7 @@ def module3_ui(state: WizardState) -> None:
         )
 
     default_days = int(getattr(state, "campaign_duration_days", None) or 30)
-    catalog = effective_kpi_config(state)
+    catalog = KPI_CONFIG
     m3_inputs: Dict[str, Dict[str, Any]] = {}
 
     for platform in state.active_platforms:
@@ -1807,120 +1807,15 @@ def module1_ui(state: WizardState) -> None:
 
 
 def _platform_display_name(state: WizardState, code: str) -> str:
-    """Display label for a platform code, consulting the built-in
-    PLATFORM_NAMES map first and falling back to any custom platform
-    registered on state."""
+    """Display label for a platform code (built-in catalogue only)."""
     code_l = str(code).lower()
-    if code_l in PLATFORM_NAMES:
-        return PLATFORM_NAMES[code_l]
-    for cp in (state.custom_platforms or []):
-        if str(cp.get("code", "")).lower() == code_l:
-            return str(cp.get("label") or code_l)
-    return code_l
-
-
-def _render_custom_platform_form(state: WizardState) -> None:
-    """A self-contained form for defining a single new custom platform.
-
-    Kept inside the Module 2 step because that's where platform selection
-    happens; the user defines it, then selects it like a built-in.
-    """
-    with st.expander("Add a custom platform", expanded=False):
-        st.caption(
-            "Define a platform that isn't in the built-in catalogue. "
-            "You'll need to pick which objectives it supports and name "
-            "the KPI you report for each (e.g. Reach, Leads, Engagement Rate)."
-        )
-
-        existing = [str(cp.get("code", "")) for cp in (state.custom_platforms or [])]
-        if existing:
-            st.markdown(
-                "**Currently registered:** "
-                + ", ".join(_platform_display_name(state, c) for c in existing)
-            )
-
-        with st.form("custom_platform_form", clear_on_submit=True):
-            col_code, col_label, col_min = st.columns([1, 2, 1])
-            with col_code:
-                cp_code = st.text_input("Code", help="2–6 lowercase letters/digits, e.g. 'spc'")
-            with col_label:
-                cp_label = st.text_input("Display name", help="e.g. 'Spotify Ads'")
-            with col_min:
-                cp_min = st.number_input(
-                    "Monthly effective minimum (£)",
-                    min_value=0.0, value=1000.0, step=100.0,
-                    help="Used to warn when allocations might be too small to optimise.",
-                )
-
-            selected_goals = st.multiselect(
-                "Which objectives does this platform support?",
-                options=list(state.valid_goals),
-                format_func=lambda g: _GOAL_LABEL.get(g, g),
-            )
-
-            kpi_rows: List[Dict[str, Any]] = []
-            for g in selected_goals:
-                gcol_label, gcol_var, gcol_kind = st.columns([2, 2, 1])
-                glabel = _GOAL_LABEL.get(g, g)
-                with gcol_label:
-                    st.markdown(f"**{glabel}**")
-                with gcol_var:
-                    kpi_label = st.text_input(
-                        f"KPI for {glabel}",
-                        value="",
-                        key=f"_cp_kpi_label_{g}",
-                        help="e.g. Listens, Saves, Reach",
-                    )
-                with gcol_kind:
-                    kind = st.radio(
-                        "Kind",
-                        options=["count", "rate"],
-                        index=0,
-                        key=f"_cp_kpi_kind_{g}",
-                        horizontal=True,
-                        help=(
-                            "count = absolute unit (Leads, Reach, Clicks); "
-                            "rate = dimensionless ratio in [0,1] like Engagement Rate."
-                        ),
-                    )
-                if kpi_label.strip():
-                    # Auto-generate a unique var name from code + goal + label
-                    safe_label = "".join(
-                        ch.upper() if ch.isalnum() else "_"
-                        for ch in (kpi_label or "X")
-                    )[:20]
-                    var = f"{(cp_code or 'X').upper()}_{g.upper()}_{safe_label}"
-                    kpi_rows.append({
-                        "goal": g, "var": var,
-                        "kpi_label": kpi_label.strip(), "kind": kind,
-                    })
-
-            submitted = st.form_submit_button("Register platform")
-            if submitted:
-                try:
-                    state.register_custom_platform(
-                        code=cp_code,
-                        label=cp_label,
-                        kpis=kpi_rows,
-                        monthly_effective_minimum=float(cp_min),
-                    )
-                    st.success(
-                        f"Registered '{cp_label}' ({cp_code}) with "
-                        f"{len(kpi_rows)} KPI{'s' if len(kpi_rows) != 1 else ''}."
-                    )
-                    safe_rerun()
-                except (ValueError, TypeError) as e:
-                    st.error(f"Could not register platform: {e}")
+    return PLATFORM_NAMES.get(code_l, code_l)
 
 
 def module2_ui(state: WizardState) -> None:
     st.header("Platforms and priorities")
 
-    _render_custom_platform_form(state)
-
-    builtin_platforms = ["fb", "ig", "li", "yt", "tt", "pt", "tw", "sn", "rd", "go"]
-    custom_codes = [str(cp.get("code", "")) for cp in (state.custom_platforms or [])]
-    platforms = builtin_platforms + custom_codes
+    platforms = ["fb", "ig", "li", "yt", "tt", "pt", "tw", "sn", "rd", "go"]
 
     # Default to previously-selected platforms on rollback so the user
     # doesn't have to re-pick them.

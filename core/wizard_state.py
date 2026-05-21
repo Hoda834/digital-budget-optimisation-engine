@@ -77,22 +77,6 @@ class WizardState:
     # by default ⇒ no adjustment (historical productivities used as-is).
     seasonality_index: Dict[str, float] = field(default_factory=dict)
 
-    # User-defined platforms that aren't in the built-in catalogue.  Each
-    # entry has the shape:
-    #   {
-    #     "code": "yz",                 # 2-3 char lowercase slug, unique
-    #     "label": "MyChannel",
-    #     "monthly_effective_minimum": 800.0,
-    #     "kpis": [
-    #       {"goal": "lg", "var": "YZ_LG_LEADS",
-    #        "kpi_label": "Leads", "kind": "count"},
-    #       ...
-    #     ],
-    #   }
-    # These are merged into KPI_CONFIG by effective_kpi_config() and into
-    # platform validation by allowed_platform_codes().
-    custom_platforms: List[Dict[str, Any]] = field(default_factory=list)
-
     system_goal_weights: Dict[str, float] = field(default_factory=dict)
 
     platform_priorities: Dict[str, Any] = field(default_factory=dict)
@@ -128,88 +112,6 @@ class WizardState:
         fresh = WizardState()
         for f in fresh.__dataclass_fields__:
             setattr(self, f, getattr(fresh, f))
-
-    def allowed_platform_codes(self) -> Set[str]:
-        """Built-in ALLOWED_PLATFORMS plus any custom platforms registered
-        on this state instance.  Use this for validation instead of the
-        bare ALLOWED_PLATFORMS constant whenever a state is in scope."""
-        custom = {str(p.get("code", "")).strip().lower()
-                  for p in (self.custom_platforms or [])
-                  if p.get("code")}
-        return ALLOWED_PLATFORMS | custom
-
-    def register_custom_platform(
-        self,
-        code: str,
-        label: str,
-        kpis: List[Dict[str, Any]],
-        monthly_effective_minimum: float = 1000.0,
-    ) -> None:
-        """Register a user-defined platform with its own KPI catalogue.
-
-        ``kpis`` is a list of {goal, var, kpi_label, kind} dicts — at least
-        one row, one KPI per goal the platform supports.  ``code`` must be a
-        new lowercase slug that doesn't collide with the built-in catalogue
-        or any previously-registered custom platform.
-
-        Raises ValueError on any validation failure so the UI can surface
-        the issue rather than silently dropping the registration.
-        """
-        slug = str(code or "").strip().lower()
-        if not slug or not slug.isalnum() or len(slug) > 6:
-            raise ValueError(
-                f"Custom platform code must be 1-6 alphanumeric characters, got {code!r}."
-            )
-        existing_codes = {p.get("code") for p in (self.custom_platforms or [])}
-        if slug in ALLOWED_PLATFORMS or slug in existing_codes:
-            raise ValueError(
-                f"Custom platform code {slug!r} is already in use. "
-                f"Pick a slug that doesn't collide with the built-in catalogue."
-            )
-
-        clean_label = str(label or "").strip()
-        if not clean_label:
-            raise ValueError("Custom platform label cannot be empty.")
-
-        if not kpis or not isinstance(kpis, list):
-            raise ValueError("Custom platform must define at least one KPI row.")
-
-        clean_kpis: List[Dict[str, Any]] = []
-        seen_vars: Set[str] = set()
-        for row in kpis:
-            if not isinstance(row, dict):
-                continue
-            g = str(row.get("goal", "")).strip().lower()
-            if g not in ALLOWED_OBJECTIVES:
-                raise ValueError(f"KPI row goal {g!r} is not a valid objective.")
-            var = str(row.get("var", "")).strip()
-            if not var or var in seen_vars:
-                raise ValueError(f"KPI var {var!r} is empty or duplicated.")
-            kind = str(row.get("kind", "count")).strip().lower()
-            if kind not in ("count", "rate"):
-                raise ValueError(f"KPI kind must be 'count' or 'rate', got {kind!r}.")
-            kpi_label = str(row.get("kpi_label", var)).strip()
-            clean_kpis.append({
-                "goal": g, "var": var, "kpi_label": kpi_label, "kind": kind,
-            })
-            seen_vars.add(var)
-
-        if not clean_kpis:
-            raise ValueError("Custom platform must define at least one valid KPI row.")
-
-        try:
-            min_spend = float(monthly_effective_minimum)
-        except (TypeError, ValueError):
-            min_spend = 1000.0
-        if min_spend < 0.0:
-            min_spend = 0.0
-
-        self.custom_platforms.append({
-            "code": slug,
-            "label": clean_label,
-            "monthly_effective_minimum": min_spend,
-            "kpis": clean_kpis,
-        })
 
     def complete_module1_and_advance(
         self,
@@ -323,10 +225,7 @@ class WizardState:
             raise FlowStateError("valid_goals must be set in Module 1 before Module 2.")
 
         platforms = [str(p).strip().lower() for p in active_platforms if str(p).strip()]
-        # allowed_platform_codes() = built-in ALLOWED_PLATFORMS ∪ custom platforms
-        # registered on this state, so user-defined platforms survive the filter.
-        allowed = self.allowed_platform_codes()
-        platforms = [p for p in platforms if p in allowed]
+        platforms = [p for p in platforms if p in ALLOWED_PLATFORMS]
         if not platforms:
             raise ValueError("At least one valid platform must be selected in Module 2.")
 

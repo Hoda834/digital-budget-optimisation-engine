@@ -3,12 +3,11 @@ happy-path smoke tests miss.
 
 Categories covered:
   1. CSV parsing edge cases (encoding, delimiters, malformed cells)
-  2. Custom platform edge cases (rate-only, duplicates, special inputs)
-  3. State machine boundaries (re-finalise guards, step rollback)
-  4. Iterative re-solve edge cases (infeasibility, floor invalidation)
-  5. Module 1 input boundary values (carve-out, seasonality, goal values)
-  6. Module 5 / Monte Carlo edge cases (small budget, single platform)
-  7. Catalog & lookup completeness for every built-in platform
+  2. State machine boundaries (re-finalise guards, step rollback)
+  3. Iterative re-solve edge cases (infeasibility, floor invalidation)
+  4. Module 1 input boundary values (carve-out, seasonality, goal values)
+  5. Module 5 / Monte Carlo edge cases (small budget, single platform)
+  6. Catalog & lookup completeness for every built-in platform
 """
 from __future__ import annotations
 
@@ -18,7 +17,7 @@ from core.wizard_state import (
     WizardState, ALLOWED_PLATFORMS,
     GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG,
 )
-from core.kpi_config import KPI_CONFIG, effective_kpi_config, get_kpi_rows
+from core.kpi_config import KPI_CONFIG, get_kpi_rows
 from core.csv_import import parse_platform_csv, SUPPORTED_PLATFORMS
 from modules.module1 import (
     complete_module1_and_advance, Module1ValidationError,
@@ -158,108 +157,7 @@ def test_csv_with_totals_row_doesnt_double_count():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Group 2: Custom platform edge cases
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _basic_state_with_goals():
-    s = WizardState()
-    complete_module1_and_advance(s, raw_objectives=["aw", "lg"], raw_budget=10000.0)
-    return s
-
-
-def test_custom_platform_rate_only_kpis():
-    """A custom platform defining only rate KPIs should still work end-to-end."""
-    s = WizardState()
-    complete_module1_and_advance(s, raw_objectives=["en"], raw_budget=10000.0,
-                                 raw_duration_days=30)
-    s.register_custom_platform(
-        code="aa", label="AlphaAds",
-        kpis=[{"goal": "en", "var": "AA_EN_RATE",
-               "kpi_label": "Engagement Rate", "kind": "rate"}],
-    )
-    run_module2(s, selected_platforms=["aa", "fb"],
-                priorities_input={
-                    "aa": {"priority_1": "en", "priority_2": None},
-                    "fb": {"priority_1": "en", "priority_2": None},
-                })
-    finalise_module3_from_inputs(s, platform_inputs={
-        "aa": {"budget": 3000.0, "historical_days": 30,
-               "kpis": {"AA_EN_RATE": 0.05}},
-        "fb": {"budget": 3000.0, "historical_days": 30,
-               "kpis": {"FB_EN_ENGAGEMENT": 5000.0}},
-    })
-    run_module4(s)
-    run_module5(s)
-    # Both platforms should have non-zero r_pg for EN
-    bundle = s.module5_scenario_bundle
-    base = bundle.results_by_scenario["base"]
-    assert base.r_pg.get("aa", {}).get("en", 0.0) > 0
-
-
-def test_custom_platform_special_chars_in_code_rejected():
-    s = _basic_state_with_goals()
-    for bad in ("my-platform", "x!", "TT", "abcdefg"):  # too long, mixed case, dashes
-        with pytest.raises(ValueError):
-            s.register_custom_platform(
-                code=bad, label="X",
-                kpis=[{"goal": "lg", "var": "X_LG", "kpi_label": "x", "kind": "count"}],
-            )
-
-
-def test_custom_platform_empty_kpi_list_rejected():
-    s = _basic_state_with_goals()
-    with pytest.raises(ValueError):
-        s.register_custom_platform(code="yz", label="MyChannel", kpis=[])
-
-
-def test_custom_platform_kpi_with_invalid_goal_rejected():
-    s = _basic_state_with_goals()
-    with pytest.raises(ValueError):
-        s.register_custom_platform(
-            code="yz", label="MyChannel",
-            kpis=[{"goal": "nonsense", "var": "Y_X",
-                   "kpi_label": "x", "kind": "count"}],
-        )
-
-
-def test_custom_platform_two_kpis_same_var_rejected():
-    s = _basic_state_with_goals()
-    with pytest.raises(ValueError):
-        s.register_custom_platform(
-            code="yz", label="MyChannel",
-            kpis=[
-                {"goal": "lg", "var": "YZ_X", "kpi_label": "x", "kind": "count"},
-                {"goal": "aw", "var": "YZ_X", "kpi_label": "y", "kind": "count"},
-            ],
-        )
-
-
-def test_custom_platform_unselected_doesnt_break_pipeline():
-    """Register a custom platform but don't actually select it in Module 2.
-    The pipeline should ignore it cleanly."""
-    s = WizardState()
-    complete_module1_and_advance(s, raw_objectives=["lg"], raw_budget=10000.0,
-                                 raw_duration_days=30)
-    s.register_custom_platform(
-        code="yz", label="MyChannel",
-        kpis=[{"goal": "lg", "var": "YZ_LG", "kpi_label": "Leads", "kind": "count"}],
-    )
-    run_module2(s, selected_platforms=["fb", "li"],  # Note: yz NOT selected
-                priorities_input={
-                    "fb": {"priority_1": "lg", "priority_2": None},
-                    "li": {"priority_1": "lg", "priority_2": None},
-                })
-    finalise_module3_from_inputs(s, platform_inputs={
-        "fb": {"budget": 3000.0, "historical_days": 30, "kpis": {"FB_LG_LEADS": 60.0}},
-        "li": {"budget": 3000.0, "historical_days": 30, "kpis": {"LI_LG_LEADS": 40.0}},
-    })
-    run_module4(s)
-    run_module5(s)
-    assert "yz" not in s.active_platforms
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Group 3: Module 1 boundary values
+# Group 2: Module 1 boundary values
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_module1_carveout_exact_boundary_rejected():
@@ -434,19 +332,6 @@ def test_re_finalising_module1_raises():
     complete_module1_and_advance(s, raw_objectives=["lg"], raw_budget=10000.0)
     with pytest.raises(Exception):
         complete_module1_and_advance(s, raw_objectives=["aw"], raw_budget=20000.0)
-
-
-def test_reset_clears_custom_platforms():
-    s = WizardState()
-    complete_module1_and_advance(s, raw_objectives=["lg"], raw_budget=10000.0)
-    s.register_custom_platform(
-        code="yz", label="Test",
-        kpis=[{"goal": "lg", "var": "YZ_LG", "kpi_label": "Leads", "kind": "count"}],
-    )
-    assert "yz" in s.allowed_platform_codes()
-    s.reset()
-    assert "yz" not in s.allowed_platform_codes()
-    assert s.custom_platforms == []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -688,38 +573,6 @@ def test_montecarlo_with_high_carveout_still_valid():
     run_module4(s)
     mc = run_module5_montecarlo(s, n_trials=20, seed=1)
     assert mc.n_trials > 0
-
-
-def test_pipeline_with_custom_platform_then_csv_for_builtin():
-    """A custom platform plus a CSV upload for a built-in in the same run —
-    both should reach Module 5 alive."""
-    s = WizardState()
-    complete_module1_and_advance(s, raw_objectives=["lg"], raw_budget=10000.0,
-                                 raw_duration_days=30)
-    s.register_custom_platform(
-        code="yz", label="MyChannel",
-        kpis=[{"goal": "lg", "var": "YZ_LG", "kpi_label": "Leads", "kind": "count"}],
-    )
-    run_module2(s, selected_platforms=["fb", "yz"],
-                priorities_input={
-                    "fb": {"priority_1": "lg", "priority_2": None},
-                    "yz": {"priority_1": "lg", "priority_2": None},
-                })
-    # Simulate the CSV path: a parsed Meta export feeds FB's KPI input
-    parsed_fb = parse_platform_csv(
-        b"Reach,Leads,Amount Spent\n200000,80,3000\n", "fb",
-    )
-    assert "error" not in parsed_fb
-    finalise_module3_from_inputs(s, platform_inputs={
-        "fb": {"budget": parsed_fb["budget"], "historical_days": 30,
-               "kpis": parsed_fb["kpis"]},
-        "yz": {"budget": 3000.0, "historical_days": 30, "kpis": {"YZ_LG": 60.0}},
-    })
-    run_module4(s)
-    run_module5(s)
-    base = s.module5_scenario_bundle.results_by_scenario["base"]
-    assert sum(base.budget_per_platform_goal.get("yz", {}).values()) > 0
-    assert sum(base.budget_per_platform_goal.get("fb", {}).values()) > 0
 
 
 def test_composition_sums_engagement_components_excluding_clicks():
