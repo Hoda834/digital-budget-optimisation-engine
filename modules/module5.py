@@ -184,6 +184,46 @@ def _build_r_pg_from_state(state: WizardState) -> Dict[str, Dict[str, float]]:
             "and that goals_by_platform from Module 2 covers at least one KPI per cell."
         )
 
+    # ── Fix A: scale rate-only cells to count scale ───────────────────────────
+    # A raw engagement-rate value (0.045) and a count productivity (3 eng/£) are
+    # on different scales and cannot be compared directly.  When a (p,g) cell
+    # has only rate KPIs while other platforms report a count KPI for the same
+    # goal, multiply the rate-only values by the cross-platform count mean so
+    # they compete on the same numerical footing inside the LP.
+    for g in state.valid_goals:
+        count_productivities: List[float] = []
+        rate_only_ps: List[str] = []
+        for p in list(r_pg.keys()):
+            if g not in r_pg[p] or r_pg[p][g] <= 0.0:
+                continue
+            kpi_vars = state.kpi_ratios.get(p, {}).get(g, {})
+            has_count = any(
+                kind_lookup.get((p, var), KIND_COUNT) == KIND_COUNT
+                for var in kpi_vars
+            )
+            if has_count:
+                count_productivities.append(r_pg[p][g])
+            else:
+                rate_only_ps.append(p)
+        if count_productivities and rate_only_ps:
+            count_mean = sum(count_productivities) / len(count_productivities)
+            for p in rate_only_ps:
+                r_pg[p][g] *= count_mean
+
+    # ── Fix B: normalise productivities per goal ──────────────────────────────
+    # Without normalisation, "100 reach/£" and "0.016 leads/£" live on a
+    # 6,000× scale gap; the LP then treats reach as far more valuable than
+    # leads regardless of the goal weights, making multi-objective campaigns
+    # uncontrollable.  After normalisation each goal's total sums to 1.0 across
+    # platforms, so the goal weights set by Module 2 become the actual control
+    # knob for cross-objective emphasis.
+    for g in state.valid_goals:
+        total = sum(r_pg.get(p, {}).get(g, 0.0) for p in r_pg)
+        if total > 0.0:
+            for p in r_pg:
+                if g in r_pg[p] and r_pg[p][g] > 0.0:
+                    r_pg[p][g] /= total
+
     return r_pg
 
 
@@ -521,6 +561,35 @@ def _solve_single_lp(
             estimated_kpi_per_platform_goal[p][g] = r_val * cell_yield_sum
 
         budget_per_platform[p] = total_p
+
+    # ── Fix C: proportional redistribution for near-equal productivity cells ──
+    # LP problems with identical (or near-identical) objective coefficients are
+    # degenerate: any split across the tied cells is optimal, and the solver
+    # picks an arbitrary corner (e.g. 60/40 instead of 50/50).  When two or more
+    # platforms have the same goal and their normalised productivities are within
+    # 2 % of each other, redistribute the total goal budget proportionally so the
+    # allocation reflects relative efficiency rather than solver tie-breaking.
+    for g in valid_goals:
+        active = {
+            p: _safe_float(r_pg.get(p, {}).get(g, 0.0), 0.0)
+            for p in platforms
+            if _safe_float(r_pg.get(p, {}).get(g, 0.0), 0.0) > 0.0
+        }
+        if len(active) < 2:
+            continue
+        max_r = max(active.values())
+        min_r = min(active.values())
+        if max_r <= 0.0 or (max_r - min_r) / max_r > 0.02:
+            continue  # clear winner — keep LP allocation as-is
+        total_g = sum(budget_per_platform_goal[p][g] for p in active)
+        total_r = sum(active.values())
+        if total_r > 0.0 and total_g > 0.0:
+            for p in active:
+                budget_per_platform_goal[p][g] = total_g * (active[p] / total_r)
+
+    # Recompute platform totals after any redistribution.
+    for p in platforms:
+        budget_per_platform[p] = sum(budget_per_platform_goal[p][g] for g in valid_goals)
 
     total_budget_used = sum(
         budget_per_platform_goal[p][g] for p in platforms for g in valid_goals

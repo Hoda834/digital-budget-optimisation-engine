@@ -355,6 +355,97 @@ def test_module1_currency_auto_detected_from_symbol() -> None:
     assert state.total_budget == pytest.approx(5000.0)
 
 
+def test_multi_objective_goal_normalisation_prevents_scale_dominance() -> None:
+    """With three objectives and dedicated platforms, every platform should get
+    meaningful budget — not just the one with the largest raw KPI count.
+
+    Before goal normalisation FB-AW (100 reach/£) dominated LI-LG (0.016 leads/£)
+    by 6,000× and swallowed £18k of a £20k budget, leaving LinkedIn with only the
+    5% floor.  After normalisation the goal weights drive allocation, so LI (the
+    only lead-gen platform) must receive more than its floor.
+    """
+    from modules.module2 import run_module2
+    from modules.module3 import finalise_module3_from_inputs
+    from modules.module4 import run_module4
+    from modules.module5 import run_module5
+
+    state = WizardState()
+    complete_module1_and_advance(
+        state, raw_objectives=["aw", "en", "lg"], raw_budget=20000.0, raw_duration_days=30
+    )
+    run_module2(
+        state,
+        selected_platforms=["fb", "ig", "li"],
+        priorities_input={
+            "fb": {"priority_1": "aw", "priority_2": "en"},
+            "ig": {"priority_1": "en", "priority_2": "aw"},
+            "li": {"priority_1": "lg", "priority_2": "en"},
+        },
+    )
+    finalise_module3_from_inputs(
+        state,
+        platform_inputs={
+            "fb": {"budget": 5000.0, "kpis": {"FB_AW_REACH": 500000.0, "FB_AW_IMPRESSION": 1200000.0, "FB_EN_ENGAGEMENT": 8000.0}},
+            "ig": {"budget": 4000.0, "kpis": {"IG_AW_REACH": 200000.0, "IG_EN_ENGRATERATE": 0.05}},
+            "li": {"budget": 5000.0, "kpis": {"LI_LG_LEADS": 80.0, "LI_EN_ENGRATERATE": 0.025}},
+        },
+    )
+    run_module4(state)
+    run_module5(state)
+
+    base = state.module5_scenario_bundle.results_by_scenario["base"]
+    alloc = base.budget_per_platform_goal
+    li_total = sum(alloc.get("li", {}).values())
+    fb_total = sum(alloc.get("fb", {}).values())
+
+    assert li_total > 2000.0, (
+        f"LinkedIn (only LG platform) should get >£2,000 but got £{li_total:.0f}. "
+        "Goal normalisation may have regressed."
+    )
+    assert fb_total < 17000.0, (
+        f"Facebook should not absorb >£17,000 of £20,000 but got £{fb_total:.0f}. "
+        "Multi-objective scale bias may have regressed."
+    )
+
+
+def test_equal_productivity_gives_balanced_allocation() -> None:
+    """When two platforms have identical KPI productivity the budget should be
+    split roughly 50/50, not piled into one by LP solver tie-breaking."""
+    from modules.module2 import run_module2
+    from modules.module3 import finalise_module3_from_inputs
+    from modules.module4 import run_module4
+    from modules.module5 import run_module5
+
+    state = WizardState()
+    complete_module1_and_advance(state, raw_objectives=["lg"], raw_budget=10000.0, raw_duration_days=30)
+    run_module2(
+        state,
+        selected_platforms=["fb", "ig"],
+        priorities_input={
+            "fb": {"priority_1": "lg", "priority_2": None},
+            "ig": {"priority_1": "lg", "priority_2": None},
+        },
+    )
+    finalise_module3_from_inputs(
+        state,
+        platform_inputs={
+            "fb": {"budget": 4000.0, "kpis": {"FB_LG_LEADS": 100.0}},
+            "ig": {"budget": 4000.0, "kpis": {"IG_LG_LEADS": 100.0}},
+        },
+    )
+    run_module4(state)
+    run_module5(state)
+
+    base = state.module5_scenario_bundle.results_by_scenario["base"]
+    fb = sum(base.budget_per_platform_goal.get("fb", {}).values())
+    ig = sum(base.budget_per_platform_goal.get("ig", {}).values())
+    total = fb + ig
+    assert total > 0
+    assert abs(fb - ig) / total < 0.10, (
+        f"Equal productivity should give a near-equal split. Got FB=£{fb:.0f}, IG=£{ig:.0f}."
+    )
+
+
 def test_module6_rate_kpi_not_multiplied_by_budget() -> None:
     from modules.module6 import compute_module6_forecast, Module6ForecastRow
     from modules.module5 import Module5LPResult
