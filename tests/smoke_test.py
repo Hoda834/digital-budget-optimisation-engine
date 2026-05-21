@@ -644,6 +644,102 @@ def test_module5_rejects_invalid_state_carveout() -> None:
         build_module5_input_from_state(state)
 
 
+def test_module5_reports_binding_budget_cap() -> None:
+    """With no per-platform / per-goal floors, the only constraint the LP can
+    hit is the total budget cap — and it should always hit it for a problem
+    with positive productivity."""
+    state = _run_pipeline_to_module5()
+    base = state.module5_scenario_bundle.results_by_scenario["base"]
+    names = [bc.name for bc in base.binding_constraints]
+    assert "budget_cap" in names, (
+        f"Expected budget_cap to bind on a budget-limited problem, got: {names}"
+    )
+    # Shadow prices dict should be populated for every named constraint
+    assert "budget_cap" in base.shadow_prices
+
+
+def test_module5_reports_binding_platform_floor() -> None:
+    """When a platform minimum forces the LP into a sub-optimal allocation,
+    that floor must appear in binding_constraints with the right target."""
+    from modules.module2 import run_module2
+    from modules.module3 import finalise_module3_from_inputs
+    from modules.module4 import run_module4
+    from modules.module5 import run_module5
+
+    state = WizardState()
+    complete_module1_and_advance(
+        state, raw_objectives=["aw", "lg"], raw_budget=10000.0, raw_duration_days=30,
+    )
+    run_module2(
+        state,
+        selected_platforms=["fb", "li"],
+        priorities_input={
+            "fb": {"priority_1": "aw", "priority_2": None},
+            "li": {"priority_1": "lg", "priority_2": None},
+        },
+    )
+    finalise_module3_from_inputs(
+        state,
+        platform_inputs={
+            "fb": {"budget": 4000.0, "kpis": {"FB_AW_REACH": 50000.0}},   # low productivity
+            "li": {"budget": 3000.0, "kpis": {"LI_LG_LEADS": 200.0}},     # high productivity
+        },
+    )
+    run_module4(state)
+    # Override default floors: force FB to take at least £4,000 even though
+    # LI is more productive.  This is what makes the floor *bind*.
+    state.min_spend_per_platform = {"fb": 4000.0, "li": 0.0}
+    run_module5(state)
+
+    base = state.module5_scenario_bundle.results_by_scenario["base"]
+    platform_floors = [bc for bc in base.binding_constraints if bc.kind == "min_platform"]
+    assert any(bc.target == "fb" for bc in platform_floors), (
+        f"FB floor of £4,000 should bind when LI is more productive, got "
+        f"binding={[(bc.name, bc.kind, bc.target) for bc in base.binding_constraints]}"
+    )
+
+
+def test_module5_detects_near_degenerate_groups() -> None:
+    """When two platforms have effectively identical productivity for a goal,
+    the LP solution is ambiguous; the redistribution logic should fire AND
+    surface the ambiguity in near_degenerate_groups."""
+    from modules.module2 import run_module2
+    from modules.module3 import finalise_module3_from_inputs
+    from modules.module4 import run_module4
+    from modules.module5 import run_module5
+
+    state = WizardState()
+    complete_module1_and_advance(
+        state, raw_objectives=["aw"], raw_budget=10000.0, raw_duration_days=30,
+    )
+    run_module2(
+        state,
+        selected_platforms=["fb", "ig"],
+        priorities_input={
+            "fb": {"priority_1": "aw", "priority_2": None},
+            "ig": {"priority_1": "aw", "priority_2": None},
+        },
+    )
+    # Same productivity per £ on both platforms → ambiguous LP
+    finalise_module3_from_inputs(
+        state,
+        platform_inputs={
+            "fb": {"budget": 5000.0, "kpis": {"FB_AW_REACH": 500000.0}},
+            "ig": {"budget": 5000.0, "kpis": {"IG_AW_REACH": 500000.0}},
+        },
+    )
+    run_module4(state)
+    run_module5(state)
+
+    base = state.module5_scenario_bundle.results_by_scenario["base"]
+    aw_groups = [g for g in base.near_degenerate_groups if g["goal"] == "aw"]
+    assert aw_groups, (
+        f"Expected near-degenerate group for AW across FB/IG, got: "
+        f"{base.near_degenerate_groups}"
+    )
+    assert set(aw_groups[0]["platforms"]) == {"fb", "ig"}
+
+
 def test_module7_policy_thresholds_change_classification() -> None:
     """A custom Module7Policy should produce different classifications/
     confidence scores than the defaults, proving the thresholds are

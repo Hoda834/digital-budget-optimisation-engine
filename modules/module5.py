@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import logging
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
-
-import math
 
 import pulp
 
 from core.wizard_state import WizardState, FlowStateError
 from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE
+
+
+_LOG = logging.getLogger(__name__)
 
 
 class Module5ValidationError(Exception):
@@ -52,6 +55,19 @@ class Module5LPInput:
 
 
 @dataclass
+class Module5BindingConstraint:
+    """A constraint the LP hit (slack ≈ 0).  These are the constraints that
+    are *actually shaping* the allocation — releasing one of them would let
+    the optimiser do better.
+    """
+    name: str
+    kind: str           # "budget_cap" | "min_platform" | "min_goal"
+    target: Optional[str] = None  # platform code or goal code, when applicable
+    rhs: float = 0.0    # the limit the LP hit
+    shadow_price: float = 0.0  # marginal objective value per unit relaxation
+
+
+@dataclass
 class Module5LPResult:
     budget_per_platform_goal: Dict[str, Dict[str, float]]
     budget_per_platform: Dict[str, float]
@@ -69,6 +85,20 @@ class Module5LPResult:
     # £ amount held back from the LP as a test-and-learn reserve.  Reported
     # alongside the allocation so the user sees: total = optimised + reserve.
     test_and_learn_reserve: float = 0.0
+    # ── Solver diagnostics ──────────────────────────────────────────────────
+    # Which constraints the LP actually hit (slack ≤ tolerance).  This is the
+    # auditable "why did the optimiser stop here?" answer.
+    binding_constraints: List[Module5BindingConstraint] = field(default_factory=list)
+    # Shadow prices on every named constraint (binding or not), keyed by name.
+    # Useful for sensitivity analysis: "if I raised the LinkedIn floor by £1,
+    # the objective would change by this much."
+    shadow_prices: Dict[str, float] = field(default_factory=dict)
+    # Groups of (platform, goal) cells whose normalised productivities were
+    # within the degeneracy tolerance (Fix C).  When this list is non-empty,
+    # the allocation between those cells was set by proportional
+    # redistribution, not by the LP — the user should know it's a tie.
+    near_degenerate_groups: List[Dict[str, Any]] = field(default_factory=list)
+    solver_status: str = "Optimal"
 
 
 @dataclass
@@ -583,38 +613,63 @@ def _solve_single_lp(
         for b in range(len(YIELD_BRACKETS))
     )
 
-    # Total budget cap (scenario-scaled).
-    model += pulp.lpSum(
-        x_brackets[p][g][b]
-        for p in platforms
-        for g in valid_goals
-        for b in range(len(YIELD_BRACKETS))
-    ) <= budget_cap
+    # Total budget cap (scenario-scaled).  Named so we can read its shadow
+    # price after solve.
+    model += (
+        pulp.lpSum(
+            x_brackets[p][g][b]
+            for p in platforms
+            for g in valid_goals
+            for b in range(len(YIELD_BRACKETS))
+        )
+        <= budget_cap,
+        "budget_cap",
+    )
 
     # Per-platform minimums.
+    platform_floor_meta: Dict[str, Tuple[str, float]] = {}
     for p in platforms:
         min_p = _safe_float(min_spend_per_platform.get(p, 0.0), 0.0)
         if min_p > 0.0:
-            model += pulp.lpSum(
-                x_brackets[p][g][b]
-                for g in valid_goals
-                for b in range(len(YIELD_BRACKETS))
-            ) >= min_p
+            name = f"min_platform_{p}"
+            model += (
+                pulp.lpSum(
+                    x_brackets[p][g][b]
+                    for g in valid_goals
+                    for b in range(len(YIELD_BRACKETS))
+                )
+                >= min_p,
+                name,
+            )
+            platform_floor_meta[name] = (p, min_p)
 
     # Per-goal minimums.
+    goal_floor_meta: Dict[str, Tuple[str, float]] = {}
     for g in valid_goals:
         min_g = _safe_float(min_budget_per_goal.get(g, 0.0), 0.0)
         if min_g > 0.0:
-            model += pulp.lpSum(
-                x_brackets[p][g][b]
-                for p in platforms
-                for b in range(len(YIELD_BRACKETS))
-            ) >= min_g
+            name = f"min_goal_{g}"
+            model += (
+                pulp.lpSum(
+                    x_brackets[p][g][b]
+                    for p in platforms
+                    for b in range(len(YIELD_BRACKETS))
+                )
+                >= min_g,
+                name,
+            )
+            goal_floor_meta[name] = (g, min_g)
 
     model.solve(pulp.PULP_CBC_CMD(msg=False))
 
     status = pulp.LpStatus.get(model.status, "Unknown")
     if status not in ("Optimal", "Feasible"):
+        _LOG.error(
+            "LP solve failed: status=%s budget_cap=%.2f sum_min_platform=%.2f sum_min_goal=%.2f",
+            status, budget_cap,
+            sum(min_spend_per_platform.values()),
+            sum(min_budget_per_goal.values()),
+        )
         raise Module5ValidationError(f"LP solve failed with status: {status}")
 
     budget_per_platform_goal: Dict[str, Dict[str, float]] = {}
@@ -651,6 +706,7 @@ def _solve_single_lp(
     # platforms have the same goal and their normalised productivities are within
     # 2 % of each other, redistribute the total goal budget proportionally so the
     # allocation reflects relative efficiency rather than solver tie-breaking.
+    near_degenerate_groups: List[Dict[str, Any]] = []
     for g in valid_goals:
         active = {
             p: _safe_float(r_pg.get(p, {}).get(g, 0.0), 0.0)
@@ -668,6 +724,17 @@ def _solve_single_lp(
         if total_r > 0.0 and total_g > 0.0:
             for p in active:
                 budget_per_platform_goal[p][g] = total_g * (active[p] / total_r)
+            near_degenerate_groups.append({
+                "goal": g,
+                "platforms": list(active.keys()),
+                "max_relative_gap": (max_r - min_r) / max_r,
+            })
+            _LOG.info(
+                "Near-degenerate cell group for goal=%s across platforms=%s "
+                "(max_relative_gap=%.4f); redistributed proportionally instead of "
+                "taking the LP's arbitrary corner.",
+                g, list(active.keys()), (max_r - min_r) / max_r,
+            )
 
     # Recompute platform totals after any redistribution.
     for p in platforms:
@@ -680,6 +747,47 @@ def _solve_single_lp(
     objective_value_raw = _safe_float(pulp.value(model.objective), 0.0)
     objective_value = objective_value_raw * float(OBJECTIVE_SCALE)
 
+    # ── Solver diagnostics ─────────────────────────────────────────────────
+    # Walk the named constraints, capture slack + shadow prices, and surface
+    # which ones the LP actually hit.  Tolerance is relative to the RHS so a
+    # floor of £10,000 and a floor of £100 use a sensible threshold each.
+    binding: List[Module5BindingConstraint] = []
+    shadow_prices: Dict[str, float] = {}
+    for cons_name, cons in model.constraints.items():
+        try:
+            pi = _safe_float(getattr(cons, "pi", 0.0) or 0.0, 0.0)
+        except Exception:
+            pi = 0.0
+        shadow_prices[cons_name] = pi
+
+        rhs = -_safe_float(getattr(cons, "constant", 0.0), 0.0)  # PuLP stores -RHS
+        # slack = |lhs - rhs|; CBC sometimes reports tiny non-zero slacks
+        slack = abs(_safe_float(getattr(cons, "slack", 0.0), 0.0))
+        tol = max(1e-4, 1e-3 * max(1.0, abs(rhs)))
+        if slack <= tol:
+            kind = "budget_cap"
+            target: Optional[str] = None
+            if cons_name in platform_floor_meta:
+                kind = "min_platform"
+                target = platform_floor_meta[cons_name][0]
+                rhs = platform_floor_meta[cons_name][1]
+            elif cons_name in goal_floor_meta:
+                kind = "min_goal"
+                target = goal_floor_meta[cons_name][0]
+                rhs = goal_floor_meta[cons_name][1]
+            elif cons_name == "budget_cap":
+                rhs = budget_cap
+            binding.append(Module5BindingConstraint(
+                name=cons_name, kind=kind, target=target, rhs=rhs, shadow_price=pi,
+            ))
+
+    _LOG.info(
+        "LP solved: status=%s objective_raw=%.4f budget_used=%.2f budget_cap=%.2f "
+        "binding=%d degenerate_groups=%d",
+        status, objective_value_raw, total_budget_used, budget_cap,
+        len(binding), len(near_degenerate_groups),
+    )
+
     return Module5LPResult(
         budget_per_platform_goal=budget_per_platform_goal,
         budget_per_platform=budget_per_platform,
@@ -691,6 +799,10 @@ def _solve_single_lp(
         objective_value_raw=objective_value_raw,
         effective_budget_cap=budget_cap,
         cpu_per_goal=cpu_per_goal or {},
+        binding_constraints=binding,
+        shadow_prices=shadow_prices,
+        near_degenerate_groups=near_degenerate_groups,
+        solver_status=status,
     )
 
 
