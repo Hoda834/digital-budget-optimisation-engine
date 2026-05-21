@@ -644,6 +644,79 @@ def test_module5_rejects_invalid_state_carveout() -> None:
         build_module5_input_from_state(state)
 
 
+def test_module5_warns_when_platform_below_effective_minimum() -> None:
+    """LinkedIn's industry-typical learning-phase exit threshold is ~£2k/month.
+    When the LP allocates LI below that — even because the user floor forces
+    a small allocation — Module 5 should surface a warning."""
+    from modules.module2 import run_module2
+    from modules.module3 import finalise_module3_from_inputs
+    from modules.module4 import run_module4
+    from modules.module5 import run_module5, PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH
+
+    state = WizardState()
+    complete_module1_and_advance(
+        state, raw_objectives=["lg"], raw_budget=10000.0, raw_duration_days=30,
+    )
+    # Both platforms compete on the same goal (LG); FB will dominate because
+    # it has 10× the productivity per £.  LI only gets money because of the
+    # forced floor.
+    run_module2(
+        state,
+        selected_platforms=["fb", "li"],
+        priorities_input={
+            "fb": {"priority_1": "lg", "priority_2": None},
+            "li": {"priority_1": "lg", "priority_2": None},
+        },
+    )
+    finalise_module3_from_inputs(
+        state,
+        platform_inputs={
+            "fb": {"budget": 3000.0, "kpis": {"FB_LG_LEADS": 300.0}},  # 0.1 leads/£
+            "li": {"budget": 3000.0, "kpis": {"LI_LG_LEADS": 30.0}},   # 0.01 leads/£
+        },
+    )
+    run_module4(state)
+    # Floor LI at £1,000 — below the £2,000 effective threshold but above zero.
+    # FB has no floor; the LP will minimise LI to exactly £1,000.
+    state.min_spend_per_platform = {"fb": 0.0, "li": 1000.0}
+    run_module5(state)
+
+    base = state.module5_scenario_bundle.results_by_scenario["base"]
+    li_allocated = sum(base.budget_per_platform_goal.get("li", {}).values())
+    li_threshold = PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH["li"]  # 2000 for 30 days
+    assert 0.0 < li_allocated < li_threshold, (
+        f"Test setup expected LI allocated below £{li_threshold:.0f} threshold, "
+        f"got £{li_allocated:.0f}"
+    )
+    assert any("li" in w.lower() for w in base.effective_minimum_warnings), (
+        f"LI was allocated £{li_allocated:.0f} (below £{li_threshold:.0f} threshold) "
+        f"but no warning was surfaced. Warnings: {base.effective_minimum_warnings}"
+    )
+
+
+def test_module5_effective_minimum_scales_with_campaign_duration() -> None:
+    """A 60-day campaign should require twice the per-platform monthly
+    threshold; a 15-day campaign half of it."""
+    from modules.module5 import (
+        build_module5_input_from_state,
+        PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH,
+    )
+
+    state_60 = _run_pipeline_to_module5(campaign_duration_days=60)
+    state_60.module5_finalised = False
+    inp_60 = build_module5_input_from_state(state_60)
+
+    state_15 = _run_pipeline_to_module5(campaign_duration_days=15)
+    state_15.module5_finalised = False
+    inp_15 = build_module5_input_from_state(state_15)
+
+    for p, monthly in PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH.items():
+        if p in inp_60.effective_minimum_per_platform:
+            assert inp_60.effective_minimum_per_platform[p] == pytest.approx(monthly * 2.0)
+        if p in inp_15.effective_minimum_per_platform:
+            assert inp_15.effective_minimum_per_platform[p] == pytest.approx(monthly * 0.5)
+
+
 def test_module5_reports_binding_budget_cap() -> None:
     """With no per-platform / per-goal floors, the only constraint the LP can
     hit is the total budget cap — and it should always hit it for a problem

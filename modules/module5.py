@@ -20,6 +20,21 @@ class Module5ValidationError(Exception):
 
 OBJECTIVE_SCALE = 1000.0
 
+# Industry-typical monthly spend needed for a platform's auction / learning
+# algorithm to leave the learning phase and produce stable performance.  These
+# are *guidelines*, not hard constraints — Module 5 surfaces a warning when
+# an allocation falls below the threshold so the user can choose to raise
+# their floor in Module 2, accept the risk, or drop the platform.
+#
+# Sources: published Meta / LinkedIn / Google guidance for monthly minimums
+# at which their delivery algorithms have enough signal to optimise.
+PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH: Dict[str, float] = {
+    "fb": 1000.0,
+    "ig": 1000.0,
+    "li": 2000.0,  # LinkedIn's "exit learning phase" threshold is the highest
+    "yt": 1500.0,
+}
+
 # Three diminishing-returns brackets per (platform, goal) cell.
 # Each tuple is (cap_fraction_of_total_budget, yield_multiplier).
 # The LP can pour budget into bracket b only after bracket b-1 is full,
@@ -52,6 +67,10 @@ class Module5LPInput:
     # scales with the scenario so the cross-scenario story is internally
     # consistent ("X% of every plan's budget goes to testing").
     test_and_learn_pct: float = 0.0
+    # Per-platform effective spend thresholds (already scaled to campaign
+    # duration).  Allocations below these are flagged as warnings on the
+    # result; the LP is not constrained to respect them.
+    effective_minimum_per_platform: Dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -99,6 +118,13 @@ class Module5LPResult:
     # redistribution, not by the LP — the user should know it's a tie.
     near_degenerate_groups: List[Dict[str, Any]] = field(default_factory=list)
     solver_status: str = "Optimal"
+    # Warnings for platforms whose allocation falls below the industry-typical
+    # effective spend (PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH, scaled by the
+    # campaign duration).  Below this threshold, the platform's auction /
+    # learning algorithm typically has too little signal to optimise; the
+    # campaign delivers but never tunes.  Informational only — the LP isn't
+    # forced to respect these floors unless the user puts them in Module 2.
+    effective_minimum_warnings: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -515,6 +541,20 @@ def build_module5_input_from_state(state: WizardState) -> Module5LPInput:
         else {}
     )
 
+    # Compute effective-minimum thresholds, scaled to campaign duration.
+    # A 60-day campaign should support twice the monthly threshold; a 15-day
+    # campaign half of it.  Defaults to 30-day equivalence when duration is
+    # unknown.
+    campaign_days = _safe_float(getattr(state, "campaign_duration_days", None) or 30.0, 30.0)
+    if campaign_days <= 0.0:
+        campaign_days = 30.0
+    scale = campaign_days / 30.0
+    effective_minimums: Dict[str, float] = {}
+    for p in active_platforms:
+        threshold = PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH.get(p, 0.0) * scale
+        if threshold > 0.0:
+            effective_minimums[p] = threshold
+
     return Module5LPInput(
         valid_goals=list(state.valid_goals),
         total_budget=float(state.total_budget),
@@ -528,6 +568,7 @@ def build_module5_input_from_state(state: WizardState) -> Module5LPInput:
         scenario_goal_multipliers=scenario_goal_multipliers,
         cpu_per_goal=cpu_per_goal,
         test_and_learn_pct=tl_pct,
+        effective_minimum_per_platform=effective_minimums,
     )
 
 
@@ -543,6 +584,7 @@ def _solve_single_lp(
     min_budget_per_goal: Dict[str, float],
     budget_cap: float,
     cpu_per_goal: Optional[Dict[str, Dict[str, Dict[str, float]]]] = None,
+    effective_minimum_per_platform: Optional[Dict[str, float]] = None,
 ) -> Module5LPResult:
     if not valid_goals:
         raise Module5ValidationError("Module 5 LP, valid_goals is empty.")
@@ -781,11 +823,37 @@ def _solve_single_lp(
                 name=cons_name, kind=kind, target=target, rhs=rhs, shadow_price=pi,
             ))
 
+    # ── Effective minimum spend warnings ───────────────────────────────────
+    # Platforms whose allocation falls below the industry-typical effective
+    # threshold typically can't exit the algorithm's learning phase; the
+    # campaign delivers impressions but doesn't optimise.  Surfaced as
+    # warnings (not enforced) so the user can decide whether to lift the
+    # floor in Module 2, drop the platform, or accept the risk.
+    effective_warnings: List[str] = []
+    for p, threshold in (effective_minimum_per_platform or {}).items():
+        if threshold <= 0.0:
+            continue
+        allocated = _safe_float(budget_per_platform.get(p, 0.0), 0.0)
+        # Only warn when the platform got *something* but below the threshold —
+        # a zero allocation means the LP chose to skip it entirely, which is
+        # a separate, intentional outcome.
+        if 0.0 < allocated < threshold:
+            shortfall = threshold - allocated
+            effective_warnings.append(
+                f"{p}: allocated {allocated:.0f} but the industry-typical effective "
+                f"minimum is {threshold:.0f} (short by {shortfall:.0f}). "
+                f"Below this threshold the platform may not exit its learning phase."
+            )
+            _LOG.warning(
+                "Platform %s allocated %.2f below effective minimum %.2f",
+                p, allocated, threshold,
+            )
+
     _LOG.info(
         "LP solved: status=%s objective_raw=%.4f budget_used=%.2f budget_cap=%.2f "
-        "binding=%d degenerate_groups=%d",
+        "binding=%d degenerate_groups=%d effective_warnings=%d",
         status, objective_value_raw, total_budget_used, budget_cap,
-        len(binding), len(near_degenerate_groups),
+        len(binding), len(near_degenerate_groups), len(effective_warnings),
     )
 
     return Module5LPResult(
@@ -803,6 +871,7 @@ def _solve_single_lp(
         shadow_prices=shadow_prices,
         near_degenerate_groups=near_degenerate_groups,
         solver_status=status,
+        effective_minimum_warnings=effective_warnings,
     )
 
 
@@ -824,6 +893,7 @@ def run_module5_lp(input_data: Module5LPInput) -> Module5LPResult:
         min_budget_per_goal=input_data.min_budget_per_goal,
         budget_cap=lp_cap,
         cpu_per_goal=input_data.cpu_per_goal,
+        effective_minimum_per_platform=input_data.effective_minimum_per_platform,
     )
     result.test_and_learn_reserve = input_data.total_budget - lp_cap
     return result
@@ -905,6 +975,7 @@ def run_module5_lp_scenarios(input_data: Module5LPInput) -> Module5ScenarioBundl
             min_budget_per_goal=input_data.min_budget_per_goal,
             budget_cap=budget_cap,
             cpu_per_goal=input_data.cpu_per_goal,
+            effective_minimum_per_platform=input_data.effective_minimum_per_platform,
         )
         result.test_and_learn_reserve = scenario_reserve
         results[scenario_name] = result
