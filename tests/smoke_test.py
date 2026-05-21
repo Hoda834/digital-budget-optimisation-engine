@@ -1740,9 +1740,10 @@ def test_build_forecast_df_roas_uses_total_cell_budget() -> None:
 
 
 def test_build_forecast_df_invalid_goal_values_ignored() -> None:
-    """Non-numeric or negative goal values should be silently ignored
-    rather than raise — the rest of the dict (with valid entries) should
-    still produce revenue columns."""
+    """Non-numeric, negative, or NaN goal values should be silently dropped
+    by build_forecast_df rather than raise.  Verified concretely by
+    asserting the corresponding objective's rows get zero revenue while
+    the valid lg=200.0 entry still drives positive revenue."""
     from app import build_forecast_df
 
     state = _run_pipeline_with_goal_values(goal_values={"lg": 200.0})
@@ -1757,9 +1758,41 @@ def test_build_forecast_df_invalid_goal_values_ignored() -> None:
     )
 
     assert "Expected Revenue" in df.columns  # lg=200 enabled it
-    # Bad entries silently drop; only lg revenue should be positive
+
+    # The valid entry still drives positive revenue
     lg_rows = df[df["Objective"] == "Lead Generation"]
     assert (lg_rows["Expected Revenue"] > 0).any()
+
+    # The negative aw value must have been silently filtered — every AW row's
+    # revenue stays at 0.  A future regression that allowed -5.0 through would
+    # produce *negative* expected revenue (predicted_kpi × -5.0) and fail here.
+    aw_rows = df[df["Objective"] == "Awareness"]
+    if not aw_rows.empty:
+        assert (aw_rows["Expected Revenue"] == 0.0).all(), (
+            "Negative goal value (-5.0) leaked through and produced non-zero "
+            f"revenue on Awareness rows: {aw_rows['Expected Revenue'].tolist()}"
+        )
+
+
+def test_build_forecast_df_all_zero_goal_values_omits_columns() -> None:
+    """When every goal value in the dict is 0 (or any falsy non-positive
+    sentinel), build_forecast_df should behave as if no goal values were
+    provided at all — no Expected Revenue / ROAS columns.  Separately
+    covers the 'dict provided but every entry zero' branch that
+    test_build_forecast_df_omits_revenue_columns_when_no_goal_values
+    (which passes None) doesn't exercise."""
+    from app import build_forecast_df
+
+    state = _run_pipeline_with_goal_values(goal_values=None)
+    fc = state.module6_scenario_result.results_by_scenario["base"]
+
+    df = build_forecast_df(fc, goal_values={"lg": 0.0, "aw": 0.0, "wt": 0.0, "en": 0.0})
+
+    assert "Expected Revenue" not in df.columns, (
+        "All-zero goal_values dict should omit the revenue column, same as "
+        "passing goal_values=None."
+    )
+    assert "ROAS" not in df.columns
 
 
 def test_kpi_meta_includes_kind() -> None:
