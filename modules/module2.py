@@ -6,7 +6,9 @@ from typing import Dict, List, Optional
 from core.wizard_state import WizardState, ALLOWED_PLATFORMS
 
 
-PLATFORMS = ("fb", "ig", "li", "yt")
+# Iteration order for the built-in platforms.  Custom platforms registered on
+# state extend the iteration via _effective_platforms(state) where needed.
+PLATFORMS = ("fb", "ig", "li", "yt", "tt", "pt", "tw", "sn", "rd")
 
 
 @dataclass

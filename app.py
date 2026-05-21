@@ -35,6 +35,11 @@ PLATFORM_NAMES: Dict[str, str] = {
     "ig": "Instagram",
     "li": "LinkedIn",
     "yt": "YouTube",
+    "tt": "TikTok",
+    "pt": "Pinterest",
+    "tw": "X (Twitter)",
+    "sn": "Snapchat",
+    "rd": "Reddit",
 }
 
 GOAL_NAMES: Dict[str, str] = {
@@ -1341,7 +1346,7 @@ def module1_ui(state: WizardState) -> None:
 def module2_ui(state: WizardState) -> None:
     st.header("Platforms and priorities")
 
-    platforms = ["fb", "ig", "li", "yt"]
+    platforms = ["fb", "ig", "li", "yt", "tt", "pt", "tw", "sn", "rd"]
     selected_platforms = st.multiselect(
         "Choose one or more platforms:",
         options=platforms,

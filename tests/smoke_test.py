@@ -797,6 +797,55 @@ def test_using_rank_weights_logs_recommendation(caplog) -> None:
     assert "supply economic values" in text.lower()
 
 
+def test_tiktok_pipeline_end_to_end() -> None:
+    """A new-catalog platform (TikTok) should flow through M1 → M5 → M6 → M7
+    without special-casing, with its own KPI vars and effective minimum."""
+    from modules.module2 import run_module2
+    from modules.module3 import finalise_module3_from_inputs
+    from modules.module4 import run_module4
+    from modules.module5 import (
+        run_module5,
+        PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH,
+    )
+    from modules.module6 import run_module6
+    from modules.module7 import run_module7
+
+    assert "tt" in PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH, "TikTok missing from catalog"
+
+    state = WizardState()
+    complete_module1_and_advance(
+        state, raw_objectives=["aw", "lg"], raw_budget=10000.0, raw_duration_days=30,
+    )
+    run_module2(
+        state,
+        selected_platforms=["tt", "li"],
+        priorities_input={
+            "tt": {"priority_1": "aw", "priority_2": None},
+            "li": {"priority_1": "lg", "priority_2": None},
+        },
+    )
+    finalise_module3_from_inputs(
+        state,
+        platform_inputs={
+            "tt": {"budget": 3000.0, "kpis": {"TT_AW_VIEWS": 500000.0}},
+            "li": {"budget": 3000.0, "kpis": {"LI_LG_LEADS": 80.0}},
+        },
+    )
+    run_module4(state)
+    run_module5(state)
+    run_module6(state)
+
+    base = state.module5_scenario_bundle.results_by_scenario["base"]
+    tt_allocated = sum(base.budget_per_platform_goal.get("tt", {}).values())
+    li_allocated = sum(base.budget_per_platform_goal.get("li", {}).values())
+    assert tt_allocated > 0, "TikTok should receive non-zero allocation"
+    assert li_allocated > 0, "LinkedIn should receive non-zero allocation"
+
+    insights = run_module7(state, state.module5_scenario_bundle,
+                          state.module6_scenario_result.results_by_scenario)
+    assert "base" in insights.scenario_insights
+
+
 def test_seasonality_shifts_allocation_toward_boosted_goal() -> None:
     """A seasonality boost for one goal should pull more LP budget toward
     the platform serving that goal."""

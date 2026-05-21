@@ -15,8 +15,16 @@ PLATFORM_FB = "fb"
 PLATFORM_IG = "ig"
 PLATFORM_LI = "li"
 PLATFORM_YT = "yt"
+PLATFORM_TT = "tt"   # TikTok
+PLATFORM_PT = "pt"   # Pinterest
+PLATFORM_TW = "tw"   # X / Twitter (kept "tw" code for backwards compatibility headroom)
+PLATFORM_SN = "sn"   # Snapchat
+PLATFORM_RD = "rd"   # Reddit
 
-ALLOWED_PLATFORMS: Set[str] = {PLATFORM_FB, PLATFORM_IG, PLATFORM_LI, PLATFORM_YT}
+ALLOWED_PLATFORMS: Set[str] = {
+    PLATFORM_FB, PLATFORM_IG, PLATFORM_LI, PLATFORM_YT,
+    PLATFORM_TT, PLATFORM_PT, PLATFORM_TW, PLATFORM_SN, PLATFORM_RD,
+}
 
 ALLOWED_CURRENCIES: Set[str] = {"GBP", "USD", "EUR"}
 DEFAULT_CURRENCY = "GBP"

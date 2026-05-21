@@ -30,10 +30,22 @@ OBJECTIVE_SCALE = 1000.0
 # Sources: published Meta / LinkedIn / Google guidance for monthly minimums
 # at which their delivery algorithms have enough signal to optimise.
 PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH: Dict[str, float] = {
+    # Meta family — Facebook / Instagram both need ~50 conversions/week per ad set
     "fb": 1000.0,
     "ig": 1000.0,
-    "li": 2000.0,  # LinkedIn's "exit learning phase" threshold is the highest
+    # LinkedIn auction premium + slower learning = highest minimum on the list
+    "li": 2000.0,
     "yt": 1500.0,
+    # TikTok learning phase is similar to Meta but slightly higher to fund
+    # the 7-day attribution window comfortably
+    "tt": 1500.0,
+    # Pinterest, X, Snapchat are smaller-spend markets — algorithm learns
+    # on less data; thresholds reflect typical industry advice rather than
+    # vendor-published numbers (none of these platforms publish hard floors)
+    "pt": 800.0,
+    "tw": 800.0,
+    "sn": 1000.0,
+    "rd": 500.0,
 }
 
 # Three diminishing-returns brackets per (platform, goal) cell.
