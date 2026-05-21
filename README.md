@@ -28,85 +28,115 @@ This project fills these gaps by dividing decision design, optimisation, and int
 
 ### 1. Structured Decision Design (Wizard-Based)
 
-The system guides users through a structured decision flow:
+The wizard collects every input the optimiser needs, with nothing hidden:
 
-* Selection of marketing objectives (Awareness, Engagement, Website Traffic, Lead Generation)
-* Definition of total budget and validation rules
+* Marketing objectives (Awareness, Engagement, Website Traffic, Lead Generation)
+* Total budget, currency, and campaign duration
 * Platform selection with priority ranking per objective
-* Constraint definition (minimum spend per platform, minimum budget per objective)
-* Scenario configuration (conservative, base, optimistic)
+* Per-platform minimum spend and per-objective minimum budget
+* Three scenarios (conservative / base / optimistic) with editable multipliers
+* **Goal value weights** — what £ value the business places on one unit of each KPI (e.g. £200 per lead, £0.001 per impression). When present, drives utility-weighted optimisation instead of rank-based heuristics.
+* **Test-and-learn reserve** — % of every scenario's budget held back for new audiences / creative tests (10–15% is standard strategist practice).
+* **Seasonality multipliers** — per-goal expected productivity vs. historical (e.g. 0.4× for December reach if Q4 CPMs typically inflate).
 
-This approach makes sure the optimisation is based on clear assumptions, not on hidden settings.
+All assumptions are visible on the results page and editable via the **Refine and re-solve** panel — no need to walk the wizard from step 1 to try a different floor or carve-out.
 
 ---
 
 ### 2. Linear Programming Optimisation Engine
 
-At its core, the framework uses Linear Programming (LP) to optimise budget allocation across platform-objective combinations.
+A PuLP/CBC LP allocates budget across platform-objective cells, maximising weighted productivity subject to all declared constraints.
 
-The LP model:
+The LP:
 
-* Maximises a weighted objective function derived from business priorities
-* Respects all budgetary and policy constraints
-* Produces transparent, reproducible allocations
-* Supports multi-scenario evaluation without rewriting the model
-
-This method aligns with how optimisation is actually used in real-world business and strategic situations.
+* **Diminishing-returns brackets** per cell (25% / 35% / 40% of budget at yields 1.0 / 0.65 / 0.35) so a single cell can't absorb the whole plan even when it has the best productivity.
+* **Per-goal productivity normalisation** so cross-objective comparisons are scale-free — the goal weights are the actual control knob.
+* **Data-quality shrinkage** (James-Stein-style) pulls short-history platforms toward the cross-platform mean so a 7-day estimate doesn't get the same authority as a 365-day one.
+* **Named, auditable constraints** — every floor and cap is named, and the LP returns binding constraints + shadow prices so you can see exactly what's shaping the allocation.
 
 ---
 
-### 3. KPI Forecasting Layer
+### 3. Platform Catalogue + CSV Import
 
-Using historical performance ratios, the system forecasts expected KPI outcomes for each scenario:
+Ten built-in platforms with curated KPI configs:
 
-* Forecasts are goal-aligned, not generic
-* Outputs are tied directly to allocated budgets
-* Results are aggregated by platform and KPI for clarity
+| Platform | KPIs (Awareness · Engagement · Traffic · Lead Gen) |
+|---|---|
+| Facebook | Reach · Engagement · Link Clicks · Leads |
+| Instagram | Reach · Engagement Rate · Link Clicks · Leads |
+| LinkedIn | Impressions · Engagement Rate · Clicks · Leads |
+| YouTube | Views · View Rate · Clicks · Conversions |
+| Google (Search + Display) | Impressions · CTR · Clicks · Conversions |
+| TikTok | Video Views · Engagement Rate · Clicks · Leads |
+| Pinterest | Impressions · Saves · Outbound Clicks · Leads |
+| X (Twitter) | Impressions · Engagement Rate · Clicks · Leads |
+| Snapchat | Reach · Engagement Rate · Swipe-ups · Leads |
+| Reddit | Impressions · Engagement Rate · Clicks · Leads |
 
-The forecasting layer is kept simple and easy to understand, avoiding complex models, so results are precise.
+Plus **custom platforms** the user can define on the fly (slug, label, supported objectives, KPI definitions with explicit count/rate kind, monthly effective minimum).
 
----
+**CSV import** for Meta / Google / LinkedIn / TikTok / YouTube — drop the platform's standard export into the form and the parser:
 
-### 4. Scenario Comparison
-
-All scenarios are evaluated side-by-side, allowing decision-makers to assess:
-
-* Trade-offs between risk and return
-* Sensitivity of outcomes to scenario assumptions
-* Stability of allocations across uncertainty levels
-
-This helps decision-makers exercise their judgement rather than relying on a single metric.
-
----
-
-### 5. Decision Interpretation Layer (Module 7)
-
-A dedicated interpretation layer translates numerical results into decision-ready insights.
-
-For each scenario, the system generates:
-
-* An executive summary explaining the allocation logic
-* A classification of the decision as corner-dominant, balanced, or scenario-sensitive
-* A confidence score on a 0 to 100 scale
-* Identification of binding and non-binding policy constraints
-* Two contrasting plans: a performance-first allocation and a risk-managed alternative with an explicit efficiency trade-off
-* Identified risks and practical recommendations
-
-A global stability explanation identifies patterns that persist across scenarios, helping decision-makers identify robust strategies.
-
-This layer uses clear rules and is easy to review, which builds trust.
+* Sniffs encoding (UTF-8, UTF-8-BOM, Latin-1) and delimiter (`,` / `;` / `\t`)
+* Filters totals rows (Google's `Total --`, Meta's summary rows)
+* Normalises rate KPIs from percent-strings or bare-percentage forms into `[0, 1]`
+* Composes canonical KPIs from raw columns with documented rationale (see below)
 
 ---
 
-### 6. Exportable Decision Artefacts
+### 4. KPI Composition (the layer between platform metrics and the LP)
 
-The system produces professional outputs suitable for stakeholders:
+Each platform reports its own metrics — Facebook's "engagement" is a different beast from LinkedIn's. The LP needs *one* number per canonical category, so this layer makes the composition explicit:
+
+* Every canonical KPI declares its **components** (raw columns the platform exports), an **operator** (sum / first / max / mean), and a **rationale** explaining what's included and what's deliberately excluded to avoid double-counting.
+* Example: `FB_EN_ENGAGEMENT = reactions + comments + shares + saves`. Link clicks are explicitly excluded — they're in the Traffic category, so including them here would double-count.
+* When the broken-out columns aren't in the export, the parser falls back to the platform's bundled metric (Meta's "Post engagement") with a prominent warning that surfaces the double-count risk.
+* **User override**: the "Customise composition" panel lets a marketer re-weight components per platform (count saves 3× because they're high-intent, reactions 0.5×, etc.) and recompose.
+
+The composition is auditable — every parsed CSV returns a breakdown showing per-component values, the operator, and which fallback (if any) was taken.
+
+---
+
+### 5. Forecasting Layer with Honest Uncertainty
+
+Module 6 produces per-KPI forecasts from the LP allocation. Confidence bands are **data-driven**:
+
+* If Module 3 has ≥3 historical observations per KPI, the band is the sample coefficient of variation — true noise from data.
+* Otherwise, the band scales by `√(30 / historical_days)` — a 90-day history produces a ~17% band, a 7-day history ~62%.
+* Rate KPIs (engagement rate, CTR) get a point estimate — they're already averages.
+* Seasonality multipliers apply to count-KPI forecasts so the predicted volume matches what the LP optimised against.
+
+---
+
+### 6. Scenario Comparison and Monte Carlo Robustness
+
+* Three scenarios (conservative / base / optimistic) run side-by-side with their own goal multipliers — optimistic raises conversion productivity, conservative raises upper-funnel.
+* Test-and-learn reserve scales per scenario so `lp_used + reserve ≤ scenario_total` always holds.
+* **Opt-in Monte Carlo** re-solves the base LP hundreds of times with productivities perturbed by their observed noise. Flags platforms whose share is sensitive to plausible data perturbation — the platforms whose rank should be treated with caution.
+
+---
+
+### 7. Decision Interpretation Layer (Module 7)
+
+Configurable via `Module7Policy` — every threshold (corner concentration, confidence penalties, Plan B cap) is a named, defaulted field on a frozen dataclass, not a magic literal.
+
+Outputs per scenario:
+
+* Executive summary explaining the allocation logic
+* Classification (Corner-dominant / Concentrated / Balanced / Scenario-sensitive)
+* Confidence score (40–100) penalising concentration, instability, missing forecasts, data-quality flags
+* Binding vs non-binding constraints (with shadow prices)
+* Plan A (performance-first) and Plan B (risk-managed) with the efficiency trade-off explicit
+* Risks and recommendations
+* **Forecast caveat** — every output carries a paragraph about attribution bias, last-click over-crediting, and the absence of incrementality modelling. The tool is honest about its own epistemic limits.
+
+---
+
+### 8. Exportable Decision Artefacts
 
 * PDF decision reports with structured summaries and tables
 * Excel files containing all allocation and forecast data
 * Clear separation between inputs, assumptions, and results
-
-These outputs are made to help with accountability, review, and oversight.
 
 ---
 
@@ -122,6 +152,21 @@ The system is built to be modular and easy to expand, with each decision layer w
 
 ---
 
+## What This Tool Is (and Isn't)
+
+**It is** a decision-support framework for media-mix planning: given declared constraints (budget, floors, goal values, seasonality), it produces an auditable allocation across platform-objective cells, with diagnostics for *why* the optimiser stopped there and how robust the recommendation is.
+
+**It isn't** a marketing optimisation engine in the operator sense. Specifically:
+
+* The CSV import is a last-mile parser, not an ETL pipeline. There are no platform-API connectors, no persistent staging, no scheduled refresh.
+* Allocations are produced at the platform-objective level, not at the campaign / ad-set / creative level. The hard part of paid media starts *after* the channel split.
+* The LP inherits whatever attribution is in your KPIs. If your platform-reported numbers over-credit Meta or under-credit Search (last-click bias), the LP will inherit that. Incrementality (would these conversions have happened anyway?) is not modelled.
+* "Productivity" is a sample mean — there is no Bayesian recalibration between runs, no learning from outcomes, no causal estimation.
+
+For the audiences this is designed for (strategists, agency planning leads, in-house quarterly planning, decision-science teaching), the scope is right-sized. For continuous budget optimisation against live platform data, you'd want a different product (Northbeam, Triple Whale, Funnel.io class).
+
+---
+
 ## Running the App
 
 ```bash
@@ -130,6 +175,14 @@ streamlit run app.py
 ```
 
 The application opens in your browser at `http://localhost:8501`.
+
+A quick way to verify the pipeline without the UI:
+
+```bash
+PYTHONPATH=. python tests/behavioural_check.py
+```
+
+That runs 10+ realistic scenarios (B2B SaaS, leads-only, engagement-only, with and without goal values, with and without test-and-learn reserve, with and without seasonality) and prints the full M1→M7 output for each.
 
 ---
 
@@ -142,6 +195,8 @@ pip install pytest
 pytest -q
 ```
 
+The suite covers 141 cases across two files — `tests/smoke_test.py` (happy-path and feature regressions) and `tests/edge_cases.py` (encoding, malformed input, infeasibility, custom platforms, rate-only campaigns, multi-component composition, Monte Carlo, all-platforms stress).
+
 The same command runs automatically on every push and pull request via GitHub Actions.
 
 ---
@@ -150,22 +205,29 @@ The same command runs automatically on every push and pull request via GitHub Ac
 
 ```text
 .
-├── app.py                  # UI orchestration and workflow control
+├── app.py                       # Streamlit UI + wizard orchestration
 ├── core/
-│   ├── wizard_state.py     # State management and step gating
-│   └── kpi_config.py       # KPI definitions and mappings
+│   ├── wizard_state.py          # State machine, custom platforms, goal values,
+│   │                            #   carve-out, seasonality
+│   ├── kpi_config.py            # Built-in + custom platform KPI catalogue
+│   └── csv_import.py            # CSV parsing + composition layer
 ├── modules/
-│   ├── module1.py          # Objective selection and budget setup
-│   ├── module2.py          # Platform selection and weighting
-│   ├── module3.py          # Historical data ingestion
-│   ├── module4.py          # Constraint preparation
-│   ├── module5.py          # LP-based optimisation
-│   ├── module6.py          # KPI forecasting and validation
-│   └── module7.py          # Decision insight and interpretation
-├── docs/                   # Detailed design and modelling documentation
-├── tests/                  # Test suite
-├── LICENSE                 # MIT License
-├── CITATION.cff            # Citation metadata
+│   ├── module1.py               # Objective, budget, currency, duration,
+│   │                            #   goal values, carve-out, seasonality
+│   ├── module2.py               # Platform selection + priority ranks
+│   ├── module3.py               # Historical KPIs (manual or via CSV)
+│   ├── module4.py               # Cost-per-unit + outlier sweep
+│   ├── module5.py               # LP with shrinkage, Monte Carlo, diagnostics
+│   ├── module6.py               # Forecasts with data-driven confidence bands
+│   └── module7.py               # Insights + Module7Policy
+├── docs/                        # Design + modelling documentation
+├── tests/
+│   ├── smoke_test.py            # Happy-path + feature regressions
+│   ├── edge_cases.py            # Adversarial: encoding, malformed, infeasible
+│   └── behavioural_check.py     # Realistic scenarios printed end-to-end
+├── .github/workflows/tests.yml  # CI runs pytest on every push
+├── LICENSE
+├── CITATION.cff
 ├── requirements.txt
 └── README.md
 ```
