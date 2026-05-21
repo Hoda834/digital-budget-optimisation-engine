@@ -641,6 +641,15 @@ def module3_ui(state: WizardState) -> None:
         "Count KPIs (reach, leads, clicks) are totals; rate KPIs (engagement rate) are percentages. "
         "Decimals are fine throughout."
     )
+    st.info(
+        "**How your numbers are used.** Values are compared *relative to other platforms* "
+        "within the same objective — doubling every platform's reach won't shift the "
+        "allocation, only their ranking does.  Platforms with shorter historical windows "
+        "are partially pooled toward the cross-platform average: the LP trusts a 90-day "
+        "estimate more than a 7-day one.  If you want your raw numbers honoured without "
+        "pooling, give each platform a long history (180+ days).",
+        icon="ℹ️",
+    )
 
     default_days = int(getattr(state, "campaign_duration_days", None) or 30)
     catalog = effective_kpi_config(state)
