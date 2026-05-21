@@ -31,6 +31,7 @@ def _run(
     platform_inputs: Dict[str, Dict],
     duration: int = 30,
     goal_values: Dict[str, float] = None,
+    test_and_learn_pct: float = None,
 ) -> None:
     print(f"\n{SEP}\n{title}\n{SEP}")
     print(f"  Objectives : {objectives}")
@@ -38,6 +39,9 @@ def _run(
     print(f"  Priorities : {priorities}")
     if goal_values:
         print(f"  Goal values: {goal_values}")
+    if test_and_learn_pct:
+        print(f"  Test-and-learn reserve: {test_and_learn_pct*100:.0f}% "
+              f"(£{total_budget * test_and_learn_pct:,.0f})")
     print(f"  Platform historical inputs:")
     for p, pin in platform_inputs.items():
         print(f"    {p}: £{pin['budget']:,.0f} spent → {pin['kpis']}")
@@ -49,6 +53,7 @@ def _run(
         raw_budget=total_budget,
         raw_duration_days=duration,
         raw_goal_values=goal_values,
+        raw_test_and_learn_pct=test_and_learn_pct,
     )
     run_module2(state, selected_platforms=platforms, priorities_input=priorities)
     finalise_module3_from_inputs(state, platform_inputs=platform_inputs)
@@ -71,6 +76,9 @@ def _run(
         print(f"    {p}: £{platform_total:,.0f}   → {breakdown}")
     print(f"    TOTAL ALLOCATED: £{base.total_budget_used:,.0f}  "
           f"(cap = £{base.effective_budget_cap:,.0f})")
+    if base.test_and_learn_reserve > 0.0:
+        print(f"    TEST-AND-LEARN RESERVE: £{base.test_and_learn_reserve:,.0f}  "
+              f"(held back from LP for new audiences / creative tests)")
 
     print("\n  Scenario totals:")
     for name in ("conservative", "base", "optimistic"):
@@ -342,6 +350,46 @@ def case_realistic_mixed_with_goal_values() -> None:
     )
 
 
+def case_realistic_mixed_with_test_and_learn() -> None:
+    _run(
+        "CASE 5C: SAME B2B MIX + goal values + 12% test-and-learn carve-out",
+        objectives=["aw", "en", "lg"],
+        total_budget=20000.0,
+        platforms=["fb", "ig", "li"],
+        priorities={
+            "fb": {"priority_1": "aw", "priority_2": "en"},
+            "ig": {"priority_1": "en", "priority_2": "aw"},
+            "li": {"priority_1": "lg", "priority_2": "en"},
+        },
+        goal_values={"lg": 200.0, "en": 0.20, "aw": 0.0005},
+        test_and_learn_pct=0.12,
+        platform_inputs={
+            "fb": {
+                "budget": 5000.0,
+                "kpis": {
+                    "FB_AW_REACH": 500000.0,
+                    "FB_AW_IMPRESSION": 1200000.0,
+                    "FB_EN_ENGAGEMENT": 8000.0,
+                },
+            },
+            "ig": {
+                "budget": 4000.0,
+                "kpis": {
+                    "IG_AW_REACH": 200000.0,
+                    "IG_EN_ENGRATERATE": 0.05,
+                },
+            },
+            "li": {
+                "budget": 5000.0,
+                "kpis": {
+                    "LI_LG_LEADS": 80.0,
+                    "LI_EN_ENGRATERATE": 0.025,
+                },
+            },
+        },
+    )
+
+
 if __name__ == "__main__":
     case_awareness_only()
     case_leads_only()
@@ -352,4 +400,5 @@ if __name__ == "__main__":
     case_same_kpi_different_budget()
     case_realistic_mixed()
     case_realistic_mixed_with_goal_values()
+    case_realistic_mixed_with_test_and_learn()
     print(f"\n{SEP}\nAll behavioural cases completed.\n{SEP}")

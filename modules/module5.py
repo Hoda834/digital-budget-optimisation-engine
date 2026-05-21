@@ -58,6 +58,9 @@ class Module5LPResult:
     # itself (the LP needs yields, which are the reciprocals); exposed here so
     # downstream modules and the UI can present both views.
     cpu_per_goal: Dict[str, Dict[str, Dict[str, float]]] = field(default_factory=dict)
+    # £ amount held back from the LP as a test-and-learn reserve.  Reported
+    # alongside the allocation so the user sees: total = optimised + reserve.
+    test_and_learn_reserve: float = 0.0
 
 
 @dataclass
@@ -441,11 +444,26 @@ def build_module5_input_from_state(state: WizardState) -> Module5LPInput:
         for p in active_platforms
     }
 
+    # Apply the test-and-learn carve-out before the LP runs.  The LP only ever
+    # sees the optimisation budget; the reserve is reported separately so the
+    # user can see the full split (optimised + reserved = declared total).
+    tl_pct = _safe_float(getattr(state, "test_and_learn_pct", 0.0), 0.0)
+    if tl_pct < 0.0 or tl_pct >= 0.5:
+        tl_pct = 0.0
+    raw_total = float(state.total_budget)
+    optimisation_budget = raw_total * (1.0 - tl_pct)
+    if optimisation_budget <= 1.0:
+        raise Module5ValidationError(
+            f"Optimisation budget after test-and-learn carve-out is too small "
+            f"({optimisation_budget:.2f}). Reduce test_and_learn_pct or raise "
+            f"total_budget."
+        )
+
     min_spend_per_platform, min_budget_per_goal, scenario_multipliers, scenario_goal_multipliers = _extract_policy_from_state(
         state=state,
         valid_goals=list(state.valid_goals),
         active_platforms=active_platforms,
-        total_budget=float(state.total_budget),
+        total_budget=optimisation_budget,
     )
 
     module4_result = getattr(state, "module4_result", None)
@@ -458,7 +476,7 @@ def build_module5_input_from_state(state: WizardState) -> Module5LPInput:
 
     return Module5LPInput(
         valid_goals=list(state.valid_goals),
-        total_budget=float(state.total_budget),
+        total_budget=optimisation_budget,
         system_goal_weights=system_goal_weights,
         platform_goal_weights=platform_goal_weights,
         r_pg=r_pg,
@@ -755,6 +773,16 @@ def run_module5(state: WizardState) -> WizardState:
 
     lp_input = build_module5_input_from_state(state)
     bundle = run_module5_lp_scenarios(lp_input)
+
+    # Tag each scenario's result with the £ amount that was held back from the LP.
+    # lp_input.total_budget is already the post-carve-out optimisation budget; the
+    # difference vs state.total_budget is the reserve.
+    raw_total = _safe_float(state.total_budget, 0.0)
+    reserve = max(0.0, raw_total - lp_input.total_budget)
+    if reserve > 0.0:
+        for res in bundle.results_by_scenario.values():
+            res.test_and_learn_reserve = reserve
+
     base_result = bundle.get_base()
 
     state.complete_module5_and_advance(

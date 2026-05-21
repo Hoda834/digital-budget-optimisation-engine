@@ -50,6 +50,14 @@ class WizardState:
     # instead of from priority-frequency.
     goal_value_per_unit: Dict[str, float] = field(default_factory=dict)
 
+    # Fraction of the total budget held back from optimisation as a
+    # test-and-learn reserve (new audiences, creative tests, emerging
+    # placements).  Module 5 optimises (1 - test_and_learn_pct) × total_budget
+    # and surfaces the held-back amount separately.  Standard strategist
+    # practice is 10–15%; capped at 50% so the LP always has something to
+    # allocate.
+    test_and_learn_pct: float = 0.0
+
     system_goal_weights: Dict[str, float] = field(default_factory=dict)
 
     platform_priorities: Dict[str, Any] = field(default_factory=dict)
@@ -94,6 +102,7 @@ class WizardState:
         currency: str = DEFAULT_CURRENCY,
         campaign_duration_days: Optional[int] = None,
         goal_value_per_unit: Optional[Dict[str, float]] = None,
+        test_and_learn_pct: Optional[float] = None,
     ) -> None:
         self._ensure_step(expected_step=1)
         if self.module1_finalised:
@@ -135,6 +144,18 @@ class WizardState:
                 if fv > 0:
                     cleaned[gk] = fv
             self.goal_value_per_unit = cleaned
+
+        if test_and_learn_pct is not None:
+            try:
+                tl = float(test_and_learn_pct)
+            except (TypeError, ValueError):
+                raise ValueError("test_and_learn_pct must be numeric.")
+            if tl < 0.0 or tl >= 0.5:
+                raise ValueError(
+                    "test_and_learn_pct must be in [0.0, 0.5). "
+                    f"Got {tl}. A 10–15% carve-out is standard practice."
+                )
+            self.test_and_learn_pct = tl
 
         self.module1_finalised = True
         self.current_step = 2

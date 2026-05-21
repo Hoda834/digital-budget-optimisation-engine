@@ -500,6 +500,84 @@ def test_goal_value_weights_shift_allocation_toward_high_value_goal() -> None:
     )
 
 
+def test_test_and_learn_carveout_reduces_lp_budget() -> None:
+    """A 10% test-and-learn carve-out should cap LP spend at 90% of the
+    declared total and surface the reserved £ amount on every scenario."""
+    from modules.module2 import run_module2
+    from modules.module3 import finalise_module3_from_inputs
+    from modules.module4 import run_module4
+    from modules.module5 import run_module5
+
+    def _alloc(carve_out_pct=None) -> WizardState:
+        s = WizardState()
+        complete_module1_and_advance(
+            s,
+            raw_objectives=["aw", "lg"],
+            raw_budget=10000.0,
+            raw_duration_days=30,
+            raw_test_and_learn_pct=carve_out_pct,
+        )
+        run_module2(
+            s,
+            selected_platforms=["fb", "li"],
+            priorities_input={
+                "fb": {"priority_1": "aw", "priority_2": None},
+                "li": {"priority_1": "lg", "priority_2": None},
+            },
+        )
+        finalise_module3_from_inputs(
+            s,
+            platform_inputs={
+                "fb": {"budget": 4000.0, "kpis": {"FB_AW_REACH": 200000.0}},
+                "li": {"budget": 3000.0, "kpis": {"LI_LG_LEADS": 80.0}},
+            },
+        )
+        run_module4(s)
+        run_module5(s)
+        return s
+
+    no_carve = _alloc(carve_out_pct=None)
+    with_carve = _alloc(carve_out_pct=0.10)
+
+    base_no = no_carve.module5_scenario_bundle.results_by_scenario["base"]
+    base_yes = with_carve.module5_scenario_bundle.results_by_scenario["base"]
+
+    # No carve-out → reserve is zero, LP can use the full £10k
+    assert base_no.test_and_learn_reserve == pytest.approx(0.0)
+
+    # 10% carve-out → £1,000 reserve, LP cap is £9,000
+    assert base_yes.test_and_learn_reserve == pytest.approx(1000.0)
+    assert base_yes.total_budget_used <= 9000.0 + 1e-6
+    assert base_yes.effective_budget_cap == pytest.approx(9000.0)
+
+
+def test_test_and_learn_carveout_rejects_out_of_range() -> None:
+    """Carve-out >= 50% must be rejected; the LP would have nothing meaningful
+    to allocate against."""
+    from modules.module1 import Module1ValidationError
+
+    state = WizardState()
+    with pytest.raises(Module1ValidationError, match="below 50%"):
+        complete_module1_and_advance(
+            state,
+            raw_objectives=["aw"],
+            raw_budget=10000.0,
+            raw_test_and_learn_pct=0.60,
+        )
+
+
+def test_test_and_learn_carveout_accepts_percentage_string() -> None:
+    """Percentage strings like '15%' should be parsed to fractions."""
+    state = WizardState()
+    complete_module1_and_advance(
+        state,
+        raw_objectives=["aw"],
+        raw_budget=10000.0,
+        raw_test_and_learn_pct="15%",
+    )
+    assert state.test_and_learn_pct == pytest.approx(0.15)
+
+
 def test_module6_count_kpi_has_confidence_band() -> None:
     """Module 6 must surface a ±band on every count-KPI forecast so the
     output cannot be mistaken for a precise commitment."""

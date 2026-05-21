@@ -62,6 +62,10 @@ class Module1Result:
     # £ value the user assigns to one unit of each goal's KPI.
     # e.g. {"lg": 100.0, "aw": 0.001} = a lead is worth £100, an impression £0.001.
     goal_value_per_unit: Dict[str, float] = field(default_factory=dict)
+    # Fraction of total_budget held back from optimisation as a test-and-learn
+    # reserve.  0.10 = "reserve 10% for new audiences / creative tests"; the LP
+    # in Module 5 only optimises the remaining 90%.
+    test_and_learn_pct: float = 0.0
 
 
 def _normalise_objectives(raw_objectives: Sequence[str]) -> List[str]:
@@ -257,6 +261,52 @@ def _parse_goal_values(
     return cleaned
 
 
+def _parse_test_and_learn_pct(raw_value: Any) -> float:
+    """Parse a test-and-learn carve-out fraction.
+
+    Accepts None, fractions in [0, 0.5) (e.g. 0.10 = 10%), or percentage strings
+    like "10%", "12.5 %", "15".  Returns a float in [0, 0.5).  Values >= 0.5
+    are rejected so the LP always has something meaningful to allocate.
+    """
+    if raw_value is None:
+        return 0.0
+
+    if isinstance(raw_value, str):
+        token = raw_value.strip().rstrip("%").strip()
+        if not token:
+            return 0.0
+        try:
+            num = float(token)
+        except ValueError:
+            raise Module1ValidationError(
+                f"Test-and-learn carve-out must be a percentage like '10%' or a "
+                f"fraction like 0.10, got {raw_value!r}."
+            )
+        # "10" without a % sign is ambiguous; treat anything >= 1 as a percentage.
+        if num >= 1.0 or raw_value.strip().endswith("%"):
+            num = num / 100.0
+    else:
+        try:
+            num = float(raw_value)
+        except (TypeError, ValueError):
+            raise Module1ValidationError(
+                f"Test-and-learn carve-out must be numeric, got {raw_value!r}."
+            )
+
+    if math.isnan(num) or math.isinf(num):
+        raise Module1ValidationError("Test-and-learn carve-out must be finite.")
+    if num < 0.0:
+        raise Module1ValidationError(
+            f"Test-and-learn carve-out must be non-negative, got {num}."
+        )
+    if num >= 0.5:
+        raise Module1ValidationError(
+            f"Test-and-learn carve-out must be below 50% (got {num*100:.1f}%). "
+            f"A 10–15% reserve is standard practice."
+        )
+    return num
+
+
 def _validate_budget(numeric_budget: float) -> None:
     if numeric_budget <= 1:
         raise Module1ValidationError(
@@ -276,6 +326,7 @@ def run_module_1(
     raw_currency: Any = None,
     raw_duration_days: Any = None,
     raw_goal_values: Any = None,
+    raw_test_and_learn_pct: Any = None,
 ) -> Module1Result:
     normalised_objectives = _normalise_objectives(raw_objectives)
     _validate_objectives(normalised_objectives)
@@ -286,6 +337,7 @@ def run_module_1(
     currency = _parse_currency(raw_currency, fallback=detected_currency)
     campaign_duration_days = _parse_duration(raw_duration_days)
     goal_values = _parse_goal_values(raw_goal_values, normalised_objectives)
+    test_and_learn_pct = _parse_test_and_learn_pct(raw_test_and_learn_pct)
 
     return Module1Result(
         selected_objectives=normalised_objectives,
@@ -293,6 +345,7 @@ def run_module_1(
         currency=currency,
         campaign_duration_days=campaign_duration_days,
         goal_value_per_unit=goal_values,
+        test_and_learn_pct=test_and_learn_pct,
     )
 
 
@@ -303,6 +356,7 @@ def complete_module1_and_advance(
     raw_currency: Any = None,
     raw_duration_days: Any = None,
     raw_goal_values: Any = None,
+    raw_test_and_learn_pct: Any = None,
 ) -> WizardState:
     if state.module1_finalised:
         raise FlowStateError(
@@ -316,7 +370,12 @@ def complete_module1_and_advance(
         )
 
     result = run_module_1(
-        raw_objectives, raw_budget, raw_currency, raw_duration_days, raw_goal_values
+        raw_objectives,
+        raw_budget,
+        raw_currency,
+        raw_duration_days,
+        raw_goal_values,
+        raw_test_and_learn_pct,
     )
 
     state.complete_module1_and_advance(
@@ -325,6 +384,7 @@ def complete_module1_and_advance(
         currency=result.currency,
         campaign_duration_days=result.campaign_duration_days,
         goal_value_per_unit=result.goal_value_per_unit,
+        test_and_learn_pct=result.test_and_learn_pct,
     )
 
     return state
