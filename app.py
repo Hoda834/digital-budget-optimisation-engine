@@ -696,8 +696,7 @@ def module3_ui(state: WizardState) -> None:
                                 f"Matched {len(matched)} column"
                                 f"{'s' if len(matched) != 1 else ''} "
                                 f"from {parsed.get('row_count', 0)} row"
-                                f"{'s' if parsed.get('row_count', 0) != 1 else ''}: "
-                                + ", ".join(f"{k} ← {v}" for k, v in matched.items())
+                                f"{'s' if parsed.get('row_count', 0) != 1 else ''}."
                             )
                         if parsed.get("missing_kpis"):
                             st.info(
@@ -707,6 +706,106 @@ def module3_ui(state: WizardState) -> None:
                             )
 
             csv_defaults = st.session_state.get(csv_defaults_key, {}) or {}
+
+            # ── KPI composition breakdown (auditable view) ────────────────
+            # Show how each canonical KPI was built from the raw CSV
+            # columns so the user can audit the LP's input.  Marketers can
+            # also use the "Customise composition" panel below to override
+            # the default aggregation rules.
+            breakdown = (csv_defaults.get("kpi_breakdown") or {}) if csv_defaults else {}
+            if breakdown:
+                with st.expander("How your KPIs were composed", expanded=False):
+                    st.caption(
+                        "Each canonical KPI is built from one or more raw columns "
+                        "in your CSV.  This view shows the components and the "
+                        "operator (sum / first / max) used to combine them."
+                    )
+                    for var, bd in breakdown.items():
+                        components = bd.get("components", [])
+                        op = bd.get("operator", "first")
+                        total = bd.get("value", 0.0)
+                        rationale = bd.get("rationale", "")
+                        used_fallback = bd.get("used_fallback", False)
+
+                        st.markdown(f"**{var}** = `{total:,.2f}` (operator: `{op}`)")
+                        for c in components:
+                            col_name = c.get("column", "?")
+                            cval = c.get("value", 0.0)
+                            st.caption(f"  • {col_name}: {cval:,.2f}")
+                        if rationale:
+                            if used_fallback:
+                                st.warning(rationale, icon="⚠️")
+                            else:
+                                st.caption(f"_{rationale}_")
+                        st.markdown("---")
+
+            # ── Composition override (Option C) ──────────────────────────
+            # Per-component weight editor.  The composed value is recomputed
+            # live from the weights and replaces csv_defaults['kpis'][var]
+            # so the form's number_input below picks up the new value.
+            overrides_key = f"_csv_overrides_{platform}"
+            if breakdown:
+                with st.expander("Customise composition (advanced)",
+                                 expanded=False):
+                    st.caption(
+                        "Re-weight the components that build each canonical "
+                        "KPI.  Useful if you want to count saves more than "
+                        "reactions, or exclude a component entirely (weight = 0)."
+                    )
+                    overrides = st.session_state.get(overrides_key, {}) or {}
+                    new_overrides: Dict[str, Dict[str, float]] = {}
+                    for var, bd in breakdown.items():
+                        components = bd.get("components", [])
+                        if len(components) < 2:
+                            continue  # nothing to re-weight on a single-component KPI
+
+                        st.markdown(f"**{var}** weights:")
+                        var_overrides = overrides.get(var, {})
+                        new_var_overrides: Dict[str, float] = {}
+                        ccols = st.columns(min(len(components), 4))
+                        for i, c in enumerate(components):
+                            col_name = c.get("column", f"comp_{i}")
+                            with ccols[i % len(ccols)]:
+                                w = st.number_input(
+                                    col_name,
+                                    min_value=0.0, max_value=10.0,
+                                    value=float(var_overrides.get(col_name, 1.0)),
+                                    step=0.5,
+                                    key=f"_cw_{platform}_{var}_{i}",
+                                )
+                                new_var_overrides[col_name] = float(w)
+                        new_overrides[var] = new_var_overrides
+
+                    if st.button(
+                        f"Apply composition weights for {platform_name}",
+                        key=f"_apply_overrides_{platform}",
+                    ):
+                        st.session_state[overrides_key] = new_overrides
+                        # Recompose KPI values in csv_defaults so the form
+                        # below picks them up on rerun.
+                        for var, weights in new_overrides.items():
+                            components = breakdown.get(var, {}).get("components", [])
+                            if not components:
+                                continue
+                            op = breakdown[var].get("operator", "first")
+                            vals = []
+                            for c in components:
+                                col_name = c.get("column")
+                                w = float(weights.get(col_name, 1.0))
+                                vals.append(float(c.get("value", 0.0)) * w)
+                            if not vals:
+                                continue
+                            if op == "sum":
+                                recomposed = sum(vals)
+                            elif op == "max":
+                                recomposed = max(vals)
+                            elif op == "mean":
+                                recomposed = sum(vals) / len(vals)
+                            else:
+                                recomposed = vals[0]
+                            csv_defaults["kpis"][var] = recomposed
+                        st.session_state[csv_defaults_key] = csv_defaults
+                        safe_rerun()
 
             col_days, col_budget = st.columns([1, 2])
             with col_days:

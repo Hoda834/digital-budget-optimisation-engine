@@ -722,6 +722,104 @@ def test_pipeline_with_custom_platform_then_csv_for_builtin():
     assert sum(base.budget_per_platform_goal.get("fb", {}).values()) > 0
 
 
+def test_composition_sums_engagement_components_excluding_clicks():
+    """A Meta CSV with separate Reactions/Comments/Shares/Saves columns
+    should sum them into FB_EN_ENGAGEMENT, deliberately NOT including the
+    Link Clicks column (which lives in FB_WT_CLICKS)."""
+    csv = (
+        b"Campaign,Reach,Reactions,Comments,Shares,Saves,Link clicks,Amount spent\n"
+        b"Camp A,100000,4000,1500,1500,1500,3000,2000\n"
+    )
+    result = parse_platform_csv(csv, "fb")
+    assert "error" not in result
+    # Engagement = 4000 + 1500 + 1500 + 1500 = 8500 — clicks NOT included
+    assert result["kpis"]["FB_EN_ENGAGEMENT"] == pytest.approx(8500.0)
+    # Clicks still extracted separately into WT
+    assert result["kpis"]["FB_WT_CLICKS"] == pytest.approx(3000.0)
+
+
+def test_composition_falls_back_to_bundled_with_warning():
+    """A CSV that only has Meta's bundled 'Post engagement' column should
+    still produce a value, but the breakdown must flag used_fallback=True
+    and the rationale must warn about the double-count risk."""
+    csv = (
+        b"Reach,Post engagement,Link clicks,Amount spent\n"
+        b"100000,12000,3000,2000\n"
+    )
+    result = parse_platform_csv(csv, "fb")
+    # Falls back to the bundled value
+    assert result["kpis"]["FB_EN_ENGAGEMENT"] == pytest.approx(12000.0)
+    bd = result["kpi_breakdown"]["FB_EN_ENGAGEMENT"]
+    assert bd["used_fallback"] is True
+    assert "double-count" in bd["rationale"].lower() or \
+           "double counting" in bd["rationale"].lower()
+
+
+def test_composition_breakdown_shows_components():
+    """The breakdown should expose the per-component values so the UI can
+    display 'engagement = reactions(4000) + comments(1500) + ...'."""
+    csv = (
+        b"Reactions,Comments,Shares,Saves,Amount spent\n"
+        b"4000,1500,1500,1500,2000\n"
+    )
+    result = parse_platform_csv(csv, "fb")
+    components = result["kpi_breakdown"]["FB_EN_ENGAGEMENT"]["components"]
+    assert len(components) == 4
+    values = [c["value"] for c in components]
+    assert values == [4000.0, 1500.0, 1500.0, 1500.0]
+    # Operator should be 'sum'
+    assert result["kpi_breakdown"]["FB_EN_ENGAGEMENT"]["operator"] == "sum"
+
+
+def test_composition_partial_components_produce_partial_sum():
+    """If only some component columns are present (e.g. Reactions + Comments
+    but no Shares / Saves), the engagement sum should reflect only what
+    was found — not zero, not the bundled fallback."""
+    csv = b"Reactions,Comments,Amount spent\n4000,1500,2000\n"
+    result = parse_platform_csv(csv, "fb")
+    assert result["kpis"]["FB_EN_ENGAGEMENT"] == pytest.approx(5500.0)
+    bd = result["kpi_breakdown"]["FB_EN_ENGAGEMENT"]
+    assert bd["used_fallback"] is False
+    assert len(bd["components"]) == 2
+
+
+def test_composition_recompose_with_user_weights():
+    """Simulate the Option C override: take the parsed breakdown, apply
+    per-component weights, recompose with the same operator."""
+    csv = (
+        b"Reactions,Comments,Shares,Saves,Amount spent\n"
+        b"4000,1500,1500,1500,2000\n"
+    )
+    parsed = parse_platform_csv(csv, "fb")
+    components = parsed["kpi_breakdown"]["FB_EN_ENGAGEMENT"]["components"]
+    operator = parsed["kpi_breakdown"]["FB_EN_ENGAGEMENT"]["operator"]
+
+    # User says: weight saves and shares 3× (high-intent signals),
+    # reactions 0.5× (low-intent), comments unchanged.
+    weights = {
+        components[0]["column"]: 0.5,  # Reactions: low intent
+        components[1]["column"]: 1.0,  # Comments
+        components[2]["column"]: 3.0,  # Shares: high intent
+        components[3]["column"]: 3.0,  # Saves: high intent
+    }
+    weighted = [
+        float(c["value"]) * weights[c["column"]] for c in components
+    ]
+    expected = sum(weighted) if operator == "sum" else weighted[0]
+    # 0.5*4000 + 1*1500 + 3*1500 + 3*1500 = 2000 + 1500 + 4500 + 4500 = 12500
+    assert expected == pytest.approx(12500.0)
+
+
+def test_composition_rationale_explains_dedup_choice():
+    """The rationale text should explicitly mention why link clicks are
+    excluded — that's the dedup the user needs to see."""
+    from core.csv_import import get_composition
+    comp = get_composition("fb", "FB_EN_ENGAGEMENT")
+    assert comp is not None
+    text = comp.rationale.lower()
+    assert "link click" in text or "double-count" in text
+
+
 def test_csv_meta_export_with_total_row():
     """Meta sometimes adds a 'Results from ad sets' summary row; ensure
     that doesn't double-count."""
