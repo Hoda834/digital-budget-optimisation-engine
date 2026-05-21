@@ -644,6 +644,66 @@ def test_module5_rejects_invalid_state_carveout() -> None:
         build_module5_input_from_state(state)
 
 
+def test_module7_policy_thresholds_change_classification() -> None:
+    """A custom Module7Policy should produce different classifications/
+    confidence scores than the defaults, proving the thresholds are
+    actually externalised (not just renamed)."""
+    from modules.module7 import run_module7, Module7Policy
+
+    state = _run_pipeline_to_module5()
+    from modules.module6 import run_module6
+    run_module6(state)
+    bundle = state.module5_scenario_bundle
+    fc_by_scenario = _get_module6_by_scenario(state)
+
+    default = run_module7(state, bundle, fc_by_scenario)
+    # A policy that calls anything above 30% concentration "Corner-dominant"
+    # and penalises it heavily should produce different output for the same input.
+    strict = Module7Policy(
+        corner_concentration=0.30,
+        balanced_concentration=0.20,
+        confidence_high_concentration=0.30,
+        confidence_high_concentration_penalty=40,
+    )
+    strict_insight = run_module7(state, bundle, fc_by_scenario, policy=strict)
+
+    # At least one scenario must classify or score differently under the
+    # tightened policy.
+    diffs = 0
+    for name in default.scenario_insights:
+        d = default.scenario_insights[name]
+        s = strict_insight.scenario_insights[name]
+        if (d.classification != s.classification
+                or d.confidence_score != s.confidence_score):
+            diffs += 1
+    assert diffs > 0, (
+        "Custom Module7Policy did not change any scenario's classification or "
+        "confidence — thresholds may not be fully externalised."
+    )
+
+
+def test_module7_default_policy_preserves_existing_behaviour() -> None:
+    """Calling run_module7 with no policy must produce byte-identical output
+    to passing Module7Policy() — the defaults are the contract."""
+    from modules.module7 import run_module7, Module7Policy
+
+    state = _run_pipeline_to_module5()
+    from modules.module6 import run_module6
+    run_module6(state)
+    bundle = state.module5_scenario_bundle
+    fc_by_scenario = _get_module6_by_scenario(state)
+
+    implicit = run_module7(state, bundle, fc_by_scenario)
+    explicit = run_module7(state, bundle, fc_by_scenario, policy=Module7Policy())
+
+    for name in implicit.scenario_insights:
+        a = implicit.scenario_insights[name]
+        b = explicit.scenario_insights[name]
+        assert a.classification == b.classification
+        assert a.confidence_score == b.confidence_score
+        assert a.binding_constraints == b.binding_constraints
+
+
 def test_module6_band_uses_observations_when_present() -> None:
     """With ≥3 historical observations, the band should equal the sample
     coefficient of variation, not the flat default."""

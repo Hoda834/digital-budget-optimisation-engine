@@ -24,6 +24,57 @@ GOAL_NAMES: Dict[str, str] = {
 }
 
 
+@dataclass(frozen=True)
+class Module7Policy:
+    """Tunable thresholds for Module 7's classification, confidence scoring,
+    and Plan B construction.  Defaults preserve the original hardcoded values
+    so existing callers see no behaviour change.
+
+    Pass a custom instance to ``run_module7`` to make the interpretation layer
+    sensitive to a different business policy — e.g. a tighter
+    ``corner_concentration`` for risk-averse organisations, or a lower
+    ``plan_b_top_platform_cap`` for clients that demand more diversification.
+    """
+    # ── Classification thresholds ───────────────────────────────────────────
+    # Top-platform share at or above which we call the allocation
+    # "Corner-dominant" (extreme concentration on one platform).
+    corner_concentration: float = 0.90
+    # Top-platform share at or below which a multi-platform allocation
+    # counts as "Balanced" (between this and corner_concentration is
+    # "Concentrated").
+    balanced_concentration: float = 0.75
+    # Maximum number of funded (>0) platform-goal cells for a corner solution.
+    corner_max_nonzero_cells: int = 2
+
+    # ── Confidence-score penalties ─────────────────────────────────────────
+    # Concentration breakpoints and the deductions applied at each.
+    confidence_high_concentration: float = 0.90
+    confidence_high_concentration_penalty: int = 20
+    confidence_med_concentration: float = 0.80
+    confidence_med_concentration_penalty: int = 12
+    confidence_few_cells_penalty: int = 8
+    confidence_unstable_scenarios_penalty: int = 10
+    confidence_missing_forecast_penalty: int = 18
+    confidence_dq_issue_penalty: int = 12
+    confidence_floor: int = 40
+
+    # ── Data-quality heuristics ────────────────────────────────────────────
+    # Fraction of count-KPI forecast rows below dq_small_kpi_threshold that
+    # triggers the "small values" data-quality flag.
+    dq_small_kpi_share: float = 0.50
+    dq_small_kpi_threshold: float = 5.0
+
+    # ── Plan B (risk-managed) ──────────────────────────────────────────────
+    # Cap on the top platform's share when constructing the risk-managed
+    # alternative plan.  Lower = more diversification, larger trade-off.
+    plan_b_top_platform_cap: float = 0.70
+    # Trade-off (%) above which Plan B is worth surfacing prominently.
+    plan_b_meaningful_tradeoff_pct: float = 5.0
+
+
+_DEFAULT_POLICY = Module7Policy()
+
+
 @dataclass
 class PlanOutput:
     allocation: Dict[str, Dict[str, float]]
@@ -231,22 +282,31 @@ def _constraints(state: WizardState, lp: Module5LPResult) -> Tuple[List[str], Li
     return b, nb
 
 
-def _classification(bundle: Module5ScenarioBundle, lp: Module5LPResult) -> str:
+def _classification(
+    bundle: Module5ScenarioBundle,
+    lp: Module5LPResult,
+    policy: Module7Policy = _DEFAULT_POLICY,
+) -> str:
     if not _allocations_identical(bundle):
         return "Scenario-sensitive"
     pt = _platform_totals(lp)
     pr = _ratio(pt)
     nz = _nonzero_allocations(lp)
-    # Corner-dominant: a literal corner solution (≤2 funded cells) or extreme
-    # concentration (≥90 %). A 3-platform 80/10/10 split does NOT qualify.
-    if nz <= 2 or pr >= 0.90:
+    # Corner-dominant: a literal corner solution (few funded cells) or extreme
+    # concentration. A 3-platform 80/10/10 split does NOT qualify under the
+    # default 0.90 corner_concentration threshold.
+    if nz <= policy.corner_max_nonzero_cells or pr >= policy.corner_concentration:
         return "Corner-dominant"
-    if nz >= 3 and pr <= 0.75:
+    if nz >= 3 and pr <= policy.balanced_concentration:
         return "Balanced"
-    return "Concentrated"  # moderate concentration: 75–90 % to one platform
+    return "Concentrated"
 
 
-def _data_quality_note(lp: Module5LPResult, fc: Optional[Module6Result]) -> Optional[str]:
+def _data_quality_note(
+    lp: Module5LPResult,
+    fc: Optional[Module6Result],
+    policy: Module7Policy = _DEFAULT_POLICY,
+) -> Optional[str]:
     issues: List[str] = []
 
     if fc is None or not getattr(fc, "rows", None):
@@ -260,9 +320,9 @@ def _data_quality_note(lp: Module5LPResult, fc: Optional[Module6Result]) -> Opti
             if getattr(r, "kpi_kind", None) == KIND_RATE:
                 continue
             total += 1
-            if _f(getattr(r, "predicted_kpi", 0.0)) < 5.0:
+            if _f(getattr(r, "predicted_kpi", 0.0)) < policy.dq_small_kpi_threshold:
                 small += 1
-        if total > 0 and small / float(total) >= 0.50:
+        if total > 0 and small / float(total) >= policy.dq_small_kpi_share:
             issues.append("Many forecast KPI values are very small, which may indicate unit or scaling issues in the input data.")
 
     rpg = getattr(lp, "r_pg", None)
@@ -275,34 +335,40 @@ def _data_quality_note(lp: Module5LPResult, fc: Optional[Module6Result]) -> Opti
     return None
 
 
-def _confidence(lp: Module5LPResult, bundle: Module5ScenarioBundle, fc: Optional[Module6Result], dq_note: Optional[str]) -> int:
+def _confidence(
+    lp: Module5LPResult,
+    bundle: Module5ScenarioBundle,
+    fc: Optional[Module6Result],
+    dq_note: Optional[str],
+    policy: Module7Policy = _DEFAULT_POLICY,
+) -> int:
     score = 100
 
     pt = _platform_totals(lp)
     pr = _ratio(pt)
     nz = _nonzero_allocations(lp)
 
-    if pr >= 0.90:
-        score -= 20
-    elif pr >= 0.80:
-        score -= 12
+    if pr >= policy.confidence_high_concentration:
+        score -= policy.confidence_high_concentration_penalty
+    elif pr >= policy.confidence_med_concentration:
+        score -= policy.confidence_med_concentration_penalty
 
-    if nz <= 2:
-        score -= 8
+    if nz <= policy.corner_max_nonzero_cells:
+        score -= policy.confidence_few_cells_penalty
 
     if not _allocations_identical(bundle):
-        score -= 10
+        score -= policy.confidence_unstable_scenarios_penalty
 
     if fc is None or not getattr(fc, "rows", None):
         # Missing forecast is a single root cause — don't also deduct for the
         # dq_note that was itself triggered by the missing forecast.
-        score -= 18
+        score -= policy.confidence_missing_forecast_penalty
     elif dq_note:
         # Only penalise for data-quality issues when the forecast actually exists.
-        score -= 12
+        score -= policy.confidence_dq_issue_penalty
 
-    if score < 40:
-        score = 40
+    if score < policy.confidence_floor:
+        score = policy.confidence_floor
     if score > 100:
         score = 100
 
@@ -486,6 +552,7 @@ def _risks_recs(
     stability_text: str,
     dq_note: Optional[str],
     plan_b: Optional[PlanOutput],
+    policy: Module7Policy = _DEFAULT_POLICY,
 ) -> Tuple[List[str], List[str]]:
     risks: List[str] = []
     recs: List[str] = []
@@ -510,7 +577,7 @@ def _risks_recs(
         risks.append("Overall confidence is moderate to low.")
         recs.append("Use this allocation as a starting point and validate with a short test cycle before committing the full budget.")
 
-    if plan_b and plan_b.tradeoff_percent is not None and plan_b.tradeoff_percent >= 5.0:
+    if plan_b and plan_b.tradeoff_percent is not None and plan_b.tradeoff_percent >= policy.plan_b_meaningful_tradeoff_pct:
         recs.append("Expect some efficiency loss when diversifying. The trade off is reported in Plan B.")
 
     return risks, recs
@@ -565,7 +632,9 @@ def run_module7(
     bundle: Module5ScenarioBundle,
     forecasts: Optional[Dict[str, Module6Result]] = None,
     decision_mode: str = "Performance first",
+    policy: Optional[Module7Policy] = None,
 ) -> Module7BundleInsight:
+    pol = policy or _DEFAULT_POLICY
     out = Module7BundleInsight()
 
     stability_text = _stability_text(bundle)
@@ -576,9 +645,9 @@ def run_module7(
     for s_name, lp in (bundle.results_by_scenario or {}).items():
         fc = forecasts.get(s_name) if forecasts else None
 
-        classification = _classification(bundle, lp)
-        dq_note = _data_quality_note(lp, fc)
-        confidence = _confidence(lp, bundle, fc, dq_note)
+        classification = _classification(bundle, lp, pol)
+        dq_note = _data_quality_note(lp, fc, pol)
+        confidence = _confidence(lp, bundle, fc, dq_note, pol)
 
         bindings, non_bindings = _constraints(state, lp)
 
@@ -591,11 +660,11 @@ def run_module7(
         plan_a = _plan_a(lp)
         plan_b = None
         if decision_mode.strip().lower() == "risk managed":
-            plan_b = _plan_b_risk_managed(state, lp, cap_top_platform_share=0.70)
+            plan_b = _plan_b_risk_managed(state, lp, cap_top_platform_share=pol.plan_b_top_platform_cap)
         elif classification == "Corner-dominant":
-            plan_b = _plan_b_risk_managed(state, lp, cap_top_platform_share=0.70)
+            plan_b = _plan_b_risk_managed(state, lp, cap_top_platform_share=pol.plan_b_top_platform_cap)
 
-        risks, recs = _risks_recs(classification, confidence, stability_text, dq_note, plan_b)
+        risks, recs = _risks_recs(classification, confidence, stability_text, dq_note, plan_b, pol)
 
         executive = _summary_text(
             scenario_name=str(s_name).capitalize(),
