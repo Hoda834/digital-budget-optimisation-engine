@@ -185,23 +185,78 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             components=(("number of days", "days"),), operator="first",
         ),
     },
-    # ── Google (Search + Display) ──────────────────────────────────────────
-    "go": {
-        "GO_AW_IMPRESSION": KPIComposition(
+    # ── Google Search ──────────────────────────────────────────────────────
+    # Filter your Google Ads export to campaign type = Search before
+    # uploading, then attribute the file to this platform.  Column
+    # mappings are identical across Search / Display / PMax because
+    # Google Ads reports the same metric set — the differentiation comes
+    # from the productivity numbers in Module 3.
+    "go_search": {
+        "GO_SEARCH_AW_IMPRESSION": KPIComposition(
             components=(("impr.", "impressions", "impression"),), operator="first",
-            rationale="Total impressions across Search + Display.",
+            rationale="Search-only impressions (export filtered to Search campaigns).",
         ),
-        "GO_EN_CTR": KPIComposition(
+        "GO_SEARCH_EN_CTR": KPIComposition(
             components=(("ctr",),), operator="mean",
-            rationale="Click-through rate, reported as a single percentage.",
+            rationale="Search CTR — usually much higher than Display because of keyword intent.",
         ),
-        "GO_WT_CLICKS": KPIComposition(
+        "GO_SEARCH_WT_CLICKS": KPIComposition(
             components=(("clicks", "click"),), operator="first",
-            rationale="Total clicks on Search/Display ads.",
+            rationale="Clicks on Search ads.",
         ),
-        "GO_LG_CONVERSIONS": KPIComposition(
+        "GO_SEARCH_LG_CONVERSIONS": KPIComposition(
             components=(("conversions", "conv."),), operator="first",
-            rationale="Google's reported conversions (whatever event you tagged).",
+            rationale="Conversions from Search campaigns (whatever event you tagged).",
+        ),
+        _BUDGET: KPIComposition(
+            components=(("cost", "spend"),), operator="first",
+        ),
+        _DAYS: KPIComposition(
+            components=(("number of days", "days"),), operator="first",
+        ),
+    },
+    # ── Google Display Network ─────────────────────────────────────────────
+    "go_display": {
+        "GO_DISPLAY_AW_IMPRESSION": KPIComposition(
+            components=(("impr.", "impressions", "impression"),), operator="first",
+            rationale="Display Network impressions (filter your export to Display campaigns).",
+        ),
+        "GO_DISPLAY_EN_CTR": KPIComposition(
+            components=(("ctr",),), operator="mean",
+            rationale="Display CTR — typically much lower than Search (~0.2–0.5%).",
+        ),
+        "GO_DISPLAY_WT_CLICKS": KPIComposition(
+            components=(("clicks", "click"),), operator="first",
+            rationale="Clicks on Display ads (including responsive display).",
+        ),
+        "GO_DISPLAY_LG_CONVERSIONS": KPIComposition(
+            components=(("conversions", "conv."),), operator="first",
+            rationale="Conversions from Display campaigns.",
+        ),
+        _BUDGET: KPIComposition(
+            components=(("cost", "spend"),), operator="first",
+        ),
+        _DAYS: KPIComposition(
+            components=(("number of days", "days"),), operator="first",
+        ),
+    },
+    # ── Google Performance Max ─────────────────────────────────────────────
+    "go_pmax": {
+        "GO_PMAX_AW_IMPRESSION": KPIComposition(
+            components=(("impr.", "impressions", "impression"),), operator="first",
+            rationale="PMax impressions blended across Search / Display / YouTube / Shopping / Maps.",
+        ),
+        "GO_PMAX_EN_CTR": KPIComposition(
+            components=(("ctr",),), operator="mean",
+            rationale="PMax CTR — a blended figure; treat as a directional signal only.",
+        ),
+        "GO_PMAX_WT_CLICKS": KPIComposition(
+            components=(("clicks", "click"),), operator="first",
+            rationale="Total PMax clicks across all surfaces.",
+        ),
+        "GO_PMAX_LG_CONVERSIONS": KPIComposition(
+            components=(("conversions", "conv."),), operator="first",
+            rationale="PMax conversions — Smart Bidding optimises for this directly.",
         ),
         _BUDGET: KPIComposition(
             components=(("cost", "spend"),), operator="first",
@@ -267,7 +322,8 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
 
 _RATE_KPIS = {
     "IG_EN_ENGRATERATE", "LI_EN_ENGRATERATE",
-    "GO_EN_CTR", "TT_EN_ENGRATERATE", "YT_EN_ENGRATERATE",
+    "GO_SEARCH_EN_CTR", "GO_DISPLAY_EN_CTR", "GO_PMAX_EN_CTR",
+    "TT_EN_ENGRATERATE", "YT_EN_ENGRATERATE",
 }
 
 

@@ -919,16 +919,17 @@ def test_csv_import_parses_meta_export() -> None:
 
 def test_csv_import_handles_google_ctr_as_percentage() -> None:
     """Google exports CTR as '4.50%' or sometimes 0.045 — parser must
-    normalise both to a fraction in [0, 1]."""
+    normalise both to a fraction in [0, 1].  Exercised against the
+    go_search slot (same CSV shape across Search / Display / PMax)."""
     from core.csv_import import parse_platform_csv
 
     csv_pct = (
         "Campaign,Impressions,Clicks,CTR,Conversions,Cost\n"
         "Camp,1000000,45000,4.50%,300,2500\n"
     )
-    result = parse_platform_csv(csv_pct.encode("utf-8"), "go")
-    assert result["kpis"]["GO_EN_CTR"] == pytest.approx(0.045)
-    assert result["kpis"]["GO_LG_CONVERSIONS"] == pytest.approx(300.0)
+    result = parse_platform_csv(csv_pct.encode("utf-8"), "go_search")
+    assert result["kpis"]["GO_SEARCH_EN_CTR"] == pytest.approx(0.045)
+    assert result["kpis"]["GO_SEARCH_LG_CONVERSIONS"] == pytest.approx(300.0)
     assert result["budget"] == pytest.approx(2500.0)
 
 
@@ -954,8 +955,10 @@ def test_csv_import_reports_missing_kpis() -> None:
 
 
 def test_google_pipeline_end_to_end() -> None:
-    """Google (Search + Display) — typically the #1 paid-media channel for
-    UK marketers — should flow through M1 → M7 just like a Meta platform."""
+    """Google Search — typically the #1 paid-media channel for UK
+    marketers — should flow through M1 → M7 just like a Meta platform.
+    Verifies that the three Google surfaces (Search / Display / PMax)
+    each have their own catalogue, minimum, and platform code."""
     from modules.module2 import run_module2
     from modules.module3 import finalise_module3_from_inputs
     from modules.module4 import run_module4
@@ -967,10 +970,16 @@ def test_google_pipeline_end_to_end() -> None:
     from modules.module7 import run_module7
     from core.kpi_config import KPI_CONFIG
 
-    assert "go" in PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH, "Google missing from minimums table"
+    for code in ("go_search", "go_display", "go_pmax"):
+        assert code in PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH, (
+            f"{code} missing from minimums table"
+        )
     catalog = KPI_CONFIG
-    go_vars = {row["var"] for row in catalog if row["platform"] == "go"}
-    assert {"GO_AW_IMPRESSION", "GO_EN_CTR", "GO_WT_CLICKS", "GO_LG_CONVERSIONS"} <= go_vars
+    search_vars = {row["var"] for row in catalog if row["platform"] == "go_search"}
+    assert {
+        "GO_SEARCH_AW_IMPRESSION", "GO_SEARCH_EN_CTR",
+        "GO_SEARCH_WT_CLICKS", "GO_SEARCH_LG_CONVERSIONS",
+    } <= search_vars
 
     state = WizardState()
     complete_module1_and_advance(
@@ -978,17 +987,18 @@ def test_google_pipeline_end_to_end() -> None:
     )
     run_module2(
         state,
-        selected_platforms=["go", "fb"],
+        selected_platforms=["go_search", "fb"],
         priorities_input={
-            "go": {"priority_1": "lg", "priority_2": "wt"},
+            "go_search": {"priority_1": "lg", "priority_2": "wt"},
             "fb": {"priority_1": "lg", "priority_2": None},
         },
     )
     finalise_module3_from_inputs(
         state,
         platform_inputs={
-            "go": {"budget": 3000.0, "historical_days": 90,
-                   "kpis": {"GO_LG_CONVERSIONS": 120.0, "GO_WT_CLICKS": 4500.0}},
+            "go_search": {"budget": 3000.0, "historical_days": 90,
+                          "kpis": {"GO_SEARCH_LG_CONVERSIONS": 120.0,
+                                   "GO_SEARCH_WT_CLICKS": 4500.0}},
             "fb": {"budget": 3000.0, "historical_days": 90,
                    "kpis": {"FB_LG_LEADS": 90.0}},
         },
@@ -998,8 +1008,8 @@ def test_google_pipeline_end_to_end() -> None:
     run_module6(state)
 
     base = state.module5_scenario_bundle.results_by_scenario["base"]
-    go_allocated = sum(base.budget_per_platform_goal.get("go", {}).values())
-    assert go_allocated > 0, "Google should receive non-zero allocation"
+    go_allocated = sum(base.budget_per_platform_goal.get("go_search", {}).values())
+    assert go_allocated > 0, "Google Search should receive non-zero allocation"
 
     insights = run_module7(state, state.module5_scenario_bundle,
                           state.module6_scenario_result.results_by_scenario)
@@ -1544,3 +1554,171 @@ def test_module6_rate_kpi_not_multiplied_by_budget() -> None:
         "Multiplying by budget would give wrong units."
     )
     assert row.predicted_kpi != pytest.approx(0.045 * 3000.0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Google split: Search / Display / PMax (Item 4 of the audit)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_google_search_and_display_are_separate_platforms_in_catalogue() -> None:
+    """The aggregate 'go' code no longer exists — three distinct surfaces
+    (go_search / go_display / go_pmax) replace it.  Each has its own KPI
+    catalogue rows and its own monthly effective minimum, since their
+    auctions and learning phases behave very differently."""
+    from core.kpi_config import KPI_CONFIG
+    from modules.module5 import PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH
+    from core.wizard_state import ALLOWED_PLATFORMS
+
+    # No aggregate 'go' should leak through
+    assert "go" not in ALLOWED_PLATFORMS
+    assert "go" not in PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH
+
+    # Three distinct codes exist
+    for code in ("go_search", "go_display", "go_pmax"):
+        assert code in ALLOWED_PLATFORMS, f"{code} missing from ALLOWED_PLATFORMS"
+        assert code in PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH
+
+    # Each surface has its own 4-KPI row block in the catalogue
+    for code in ("go_search", "go_display", "go_pmax"):
+        rows = [r for r in KPI_CONFIG if r["platform"] == code]
+        assert len(rows) == 4, f"{code} should have 4 KPI rows (AW/EN/WT/LG), got {len(rows)}"
+
+    # Effective minimums differ across the three — they're calibrated separately
+    mins = {
+        c: PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH[c]
+        for c in ("go_search", "go_display", "go_pmax")
+    }
+    assert len(set(mins.values())) == 3, (
+        f"Search / Display / PMax should have three distinct minimums, "
+        f"got {mins}.  Distinct values are the calibration story for splitting them."
+    )
+    # PMax > Search > Display ordering reflects published Google guidance:
+    # PMax needs ~50 conversions for Smart Bidding; Display learns on less.
+    assert mins["go_pmax"] > mins["go_search"] > mins["go_display"]
+
+
+def test_google_search_outranks_google_display_on_lead_gen() -> None:
+    """When Search reports 10× higher lead-gen productivity than Display
+    on the same budget, the LP should reward Search with substantially
+    more allocation.  This is the audit's headline justification for
+    splitting them — lumped into one cell, the optimiser couldn't make
+    this distinction."""
+    from modules.module2 import run_module2
+    from modules.module3 import finalise_module3_from_inputs
+    from modules.module4 import run_module4
+    from modules.module5 import run_module5
+
+    s = WizardState()
+    complete_module1_and_advance(
+        s,
+        raw_objectives=["lg"],
+        raw_budget=10000.0,
+        raw_duration_days=30,
+        raw_goal_values={"lg": 100.0},
+    )
+    run_module2(
+        s,
+        selected_platforms=["go_search", "go_display"],
+        priorities_input={
+            "go_search":  {"priority_1": "lg", "priority_2": None},
+            "go_display": {"priority_1": "lg", "priority_2": None},
+        },
+    )
+    finalise_module3_from_inputs(
+        s,
+        platform_inputs={
+            # Same £3k spent — Search drove 300 conversions, Display drove 30.
+            # 10× productivity gap is realistic for B2B lead-gen.
+            "go_search":  {"budget": 3000.0, "historical_days": 60,
+                           "kpis": {"GO_SEARCH_LG_CONVERSIONS": 300.0}},
+            "go_display": {"budget": 3000.0, "historical_days": 60,
+                           "kpis": {"GO_DISPLAY_LG_CONVERSIONS": 30.0}},
+        },
+    )
+    run_module4(s)
+    run_module5(s)
+
+    base = s.module5_scenario_bundle.results_by_scenario["base"]
+    search_alloc  = sum(base.budget_per_platform_goal.get("go_search",  {}).values())
+    display_alloc = sum(base.budget_per_platform_goal.get("go_display", {}).values())
+
+    assert search_alloc > display_alloc, (
+        f"With Search producing 10× more conversions/£, the LP should allocate "
+        f"more to Search than Display, got Search={search_alloc:.0f}, "
+        f"Display={display_alloc:.0f}."
+    )
+
+
+def test_google_pmax_independently_allocatable_alongside_search() -> None:
+    """A marketer running both a Search campaign and a Performance Max
+    campaign should be able to enter both into the optimiser and have
+    each receive a separate allocation reflecting its own productivity.
+    Lumping them into one 'go' cell would force the user to pre-decide
+    the split themselves before the LP saw the numbers."""
+    from modules.module2 import run_module2
+    from modules.module3 import finalise_module3_from_inputs
+    from modules.module4 import run_module4
+    from modules.module5 import run_module5
+    from modules.module6 import run_module6
+
+    s = WizardState()
+    complete_module1_and_advance(
+        s,
+        raw_objectives=["lg"],
+        raw_budget=15000.0,
+        raw_duration_days=30,
+        raw_goal_values={"lg": 100.0},
+    )
+    run_module2(
+        s,
+        selected_platforms=["go_search", "go_pmax"],
+        priorities_input={
+            "go_search": {"priority_1": "lg", "priority_2": None},
+            "go_pmax":   {"priority_1": "lg", "priority_2": None},
+        },
+    )
+    finalise_module3_from_inputs(
+        s,
+        platform_inputs={
+            "go_search": {"budget": 5000.0, "historical_days": 60,
+                          "kpis": {"GO_SEARCH_LG_CONVERSIONS": 150.0}},
+            "go_pmax":   {"budget": 6000.0, "historical_days": 60,
+                          "kpis": {"GO_PMAX_LG_CONVERSIONS": 220.0}},
+        },
+    )
+    run_module4(s)
+    run_module5(s)
+    run_module6(s)
+
+    base = s.module5_scenario_bundle.results_by_scenario["base"]
+    assert "go_search" in base.budget_per_platform_goal
+    assert "go_pmax"   in base.budget_per_platform_goal
+    # Both receive non-zero allocation
+    assert sum(base.budget_per_platform_goal["go_search"].values()) > 0
+    assert sum(base.budget_per_platform_goal["go_pmax"].values()) > 0
+
+
+def test_csv_export_works_for_each_google_surface() -> None:
+    """Each Google surface needs its own CSV-template download so a user
+    can populate Search numbers separately from Display from PMax,
+    regardless of which surface their export was filtered to."""
+    from core.csv_import import generate_csv_template, SUPPORTED_PLATFORMS
+
+    for code in ("go_search", "go_display", "go_pmax"):
+        assert code in SUPPORTED_PLATFORMS, f"CSV not supported for {code}"
+        template_bytes = generate_csv_template(code)
+        assert template_bytes, f"Empty template for {code}"
+        header = template_bytes.decode("utf-8").split("\n", 1)[0].lower()
+        # All three Google surfaces share the same column shape — that's by
+        # design (Google Ads exports look identical regardless of campaign
+        # type; the user filters server-side before exporting).  The
+        # 'impressions' column appears as 'impr.' in Google's export, so
+        # accept either form.
+        assert "impr" in header, (
+            f"{code} template missing impressions column. Header: {header}"
+        )
+        for needle in ("ctr", "click", "conversion", "cost"):
+            assert needle in header, (
+                f"{code} template missing {needle!r} column. Header: {header}"
+            )

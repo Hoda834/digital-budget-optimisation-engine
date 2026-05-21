@@ -57,16 +57,16 @@ def test_csv_semicolon_delimiter_is_sniffed():
 def test_csv_with_bom_prefix():
     """Google sometimes prefixes UTF-8 BOM; should be stripped."""
     csv = "﻿Impressions,Clicks,Conversions,Cost\n1000,50,5,200\n".encode("utf-8")
-    result = parse_platform_csv(csv, "go")
+    result = parse_platform_csv(csv, "go_search")
     assert "error" not in result
-    assert result["kpis"].get("GO_LG_CONVERSIONS") == pytest.approx(5.0)
+    assert result["kpis"].get("GO_SEARCH_LG_CONVERSIONS") == pytest.approx(5.0)
 
 
 def test_csv_latin1_encoding_falls_back():
     """Some Windows exports use Latin-1 not UTF-8."""
     # 'Coût' (cost in French) — non-ASCII in Latin-1
     csv = "Impressions,Clicks,Conversions,Cost\n1000,50,5,200\n".encode("latin-1")
-    result = parse_platform_csv(csv, "go")
+    result = parse_platform_csv(csv, "go_search")
     assert "error" not in result
 
 
@@ -89,9 +89,9 @@ def test_csv_with_currency_symbols():
 def test_csv_google_ctr_decimal_form():
     """When Google exports CTR as decimal (0.045), parse to 0.045, not 0.00045."""
     csv = b"Impressions,Clicks,CTR,Conversions,Cost\n100000,4500,0.045,300,1000\n"
-    result = parse_platform_csv(csv, "go")
+    result = parse_platform_csv(csv, "go_search")
     # CTR provided as decimal — should remain 0.045 (NOT divide by 100 again)
-    assert result["kpis"]["GO_EN_CTR"] == pytest.approx(0.045)
+    assert result["kpis"]["GO_SEARCH_EN_CTR"] == pytest.approx(0.045)
 
 
 def test_csv_thousand_separator_in_numbers():
@@ -109,8 +109,10 @@ def test_csv_extra_irrelevant_columns_ignored():
 
 
 def test_csv_supported_platforms_covers_key_marketers():
-    """The platforms a real marketer most needs CSV import for must be supported."""
-    for p in ("fb", "ig", "li", "go", "tt", "yt"):
+    """The platforms a real marketer most needs CSV import for must be supported.
+    Google is split into Search / Display / PMax — Search is the most common
+    paid-media surface, so it must be on this list."""
+    for p in ("fb", "ig", "li", "go_search", "go_display", "go_pmax", "tt", "yt"):
         assert p in SUPPORTED_PLATFORMS, f"{p!r} missing from CSV support"
 
 
@@ -120,11 +122,11 @@ def test_csv_google_ctr_bare_percentage_form():
     cannot mean 'CTR = 450%' literally.  Rate KPIs must be normalised
     into [0, 1] regardless of presentation."""
     csv = b"Impressions,Clicks,CTR,Conversions,Cost\n100000,4500,4.50,300,1000\n"
-    result = parse_platform_csv(csv, "go")
+    result = parse_platform_csv(csv, "go_search")
     # Should be 0.045 (CTR of 4.5%), not 4.5
-    assert result["kpis"]["GO_EN_CTR"] == pytest.approx(0.045), (
+    assert result["kpis"]["GO_SEARCH_EN_CTR"] == pytest.approx(0.045), (
         f"Bare '4.50' in CTR column should normalise to 0.045, got "
-        f"{result['kpis']['GO_EN_CTR']}"
+        f"{result['kpis']['GO_SEARCH_EN_CTR']}"
     )
 
 
@@ -148,7 +150,7 @@ def test_csv_with_totals_row_doesnt_double_count():
         b"Camp B,500000,2000,100,500\n"
         b'"Total --",1000000,4000,200,1000\n'
     )
-    result = parse_platform_csv(csv, "go")
+    result = parse_platform_csv(csv, "go_search")
     # Expected spend is 500 + 500 = 1000 (NOT 1000 + 1000 = 2000 from
     # naively summing the Total row too).
     assert result["budget"] == pytest.approx(1000.0), (
@@ -506,7 +508,7 @@ def test_csv_wrong_platform_doesnt_crash():
     fields but not crash."""
     csv = b"Impressions,Clicks,CTR,Conversions,Cost\n100000,4500,4.50%,300,1000\n"
     result = parse_platform_csv(csv, "fb")
-    # FB pattern won't match GO_EN_CTR or GO_LG_CONVERSIONS columns; only
+    # FB pattern won't match Google's CTR / Conversions columns; only
     # 'Impressions' (matches FB_AW_IMPRESSION) and 'Cost' (FB _budget) match.
     assert "error" not in result
     assert result["kpis"].get("FB_AW_IMPRESSION") == pytest.approx(100000.0)
@@ -526,13 +528,18 @@ def test_csv_blank_value_cells_dont_zero_aggregate():
     assert result["kpis"].get("FB_AW_IMPRESSION") == pytest.approx(500000.0)
 
 
-def test_pipeline_with_all_nine_builtin_platforms():
+def test_pipeline_with_all_builtin_platforms():
     """Run the full pipeline with every built-in platform selected at once —
-    stress test for the LP and the catalog lookups."""
+    stress test for the LP and the catalog lookups.  Google contributes
+    three distinct surfaces (Search / Display / PMax), so this is now a
+    12-platform stress test rather than 10."""
     s = WizardState()
     complete_module1_and_advance(s, raw_objectives=["aw", "lg"], raw_budget=100000.0,
                                  raw_duration_days=30)
-    builtins = ["fb", "ig", "li", "yt", "tt", "pt", "tw", "sn", "rd", "go"]
+    builtins = [
+        "fb", "ig", "li", "yt", "tt", "pt", "tw", "sn", "rd",
+        "go_search", "go_display", "go_pmax",
+    ]
     run_module2(s, selected_platforms=builtins,
                 priorities_input={p: {"priority_1": "lg", "priority_2": "aw"}
                                   for p in builtins})
@@ -541,7 +548,9 @@ def test_pipeline_with_all_nine_builtin_platforms():
         "fb": "FB_LG_LEADS", "ig": "IG_LG_LEADS", "li": "LI_LG_LEADS",
         "yt": "YT_LG_LEADS", "tt": "TT_LG_LEADS", "pt": "PT_LG_LEADS",
         "tw": "TW_LG_LEADS", "sn": "SN_LG_LEADS", "rd": "RD_LG_LEADS",
-        "go": "GO_LG_CONVERSIONS",
+        "go_search":  "GO_SEARCH_LG_CONVERSIONS",
+        "go_display": "GO_DISPLAY_LG_CONVERSIONS",
+        "go_pmax":    "GO_PMAX_LG_CONVERSIONS",
     }
     inputs = {}
     for p in builtins:
@@ -760,7 +769,7 @@ def test_csv_template_rate_kpis_show_percent_example():
     row value so users immediately see the expected format."""
     from core.csv_import import generate_csv_template
 
-    template = generate_csv_template("go").decode("utf-8")
+    template = generate_csv_template("go_search").decode("utf-8")
     lines = template.split("\n")
     assert len(lines) >= 2
     header_lower = lines[0].lower()

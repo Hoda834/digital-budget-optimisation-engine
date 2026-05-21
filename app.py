@@ -47,7 +47,9 @@ PLATFORM_NAMES: Dict[str, str] = {
     "tw": "X (Twitter)",
     "sn": "Snapchat",
     "rd": "Reddit",
-    "go": "Google (Search + Display)",
+    "go_search": "Google Search",
+    "go_display": "Google Display",
+    "go_pmax": "Google Performance Max",
 }
 
 GOAL_NAMES: Dict[str, str] = {
@@ -1875,7 +1877,10 @@ def _platform_display_name(state: WizardState, code: str) -> str:
 def module2_ui(state: WizardState) -> None:
     st.header("Platforms and priorities")
 
-    platforms = ["fb", "ig", "li", "yt", "tt", "pt", "tw", "sn", "rd", "go"]
+    platforms = [
+        "fb", "ig", "li", "yt", "tt", "pt", "tw", "sn", "rd",
+        "go_search", "go_display", "go_pmax",
+    ]
 
     # Default to previously-selected platforms on rollback so the user
     # doesn't have to re-pick them.
