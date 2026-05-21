@@ -38,12 +38,12 @@ def _run_pipeline_to_module5(
     campaign_duration_days=30,
 ) -> WizardState:
     state = WizardState()
-    state.campaign_duration_days = campaign_duration_days
 
     complete_module1_and_advance(
         state,
         raw_objectives=list(valid_goals),
         raw_budget=total_budget,
+        raw_duration_days=campaign_duration_days,
     )
 
     run_module2(
@@ -318,3 +318,67 @@ def test_module5_attaches_cpu_per_goal_to_results() -> None:
     assert base.cpu_per_goal, "cpu_per_goal should be populated on the LP result"
     for name, res in bundle.results_by_scenario.items():
         assert res.cpu_per_goal == base.cpu_per_goal
+
+
+def test_currency_and_duration_persisted() -> None:
+    state = WizardState()
+    complete_module1_and_advance(
+        state,
+        raw_objectives=["aw"],
+        raw_budget="1.200,50",
+        raw_currency="EUR",
+        raw_duration_days=60,
+    )
+    assert state.currency == "EUR"
+    assert state.total_budget == pytest.approx(1200.50)
+    assert state.campaign_duration_days == 60
+
+
+def test_module1_eu_decimal_budget() -> None:
+    state = WizardState()
+    complete_module1_and_advance(
+        state,
+        raw_objectives=["aw"],
+        raw_budget="1.200,50",
+    )
+    assert state.total_budget == pytest.approx(1200.50)
+
+
+def test_module1_currency_auto_detected_from_symbol() -> None:
+    state = WizardState()
+    complete_module1_and_advance(
+        state,
+        raw_objectives=["aw"],
+        raw_budget="£5000",
+    )
+    assert state.currency == "GBP"
+    assert state.total_budget == pytest.approx(5000.0)
+
+
+def test_module6_rate_kpi_not_multiplied_by_budget() -> None:
+    from modules.module6 import compute_module6_forecast, Module6ForecastRow
+    from modules.module5 import Module5LPResult
+    from core.kpi_config import KIND_RATE, KIND_COUNT
+
+    lp_result = Module5LPResult(
+        budget_per_platform_goal={"ig": {"en": 3000.0}},
+        budget_per_platform={"ig": 3000.0},
+        total_budget_used=3000.0,
+        objective_value=1.0,
+        r_pg={"ig": {"en": 0.045}},
+        combined_weight_pg={"ig": {"en": 1.0}},
+        estimated_kpi_per_platform_goal={"ig": {"en": 135.0}},
+    )
+
+    kpi_ratios = {"ig": {"en": {"IG_EN_ENGRATERATE": 0.045}}}
+    result = compute_module6_forecast(kpi_ratios, lp_result)
+
+    rate_rows = [r for r in result.rows if r.kpi_kind == KIND_RATE]
+    assert len(rate_rows) == 1, "Expected one rate KPI row for IG engagement rate"
+    row = rate_rows[0]
+    # Predicted value must equal the rate itself, NOT rate × budget
+    assert row.predicted_kpi == pytest.approx(0.045), (
+        f"Rate KPI predicted value should be 0.045 (the rate), got {row.predicted_kpi}. "
+        "Multiplying by budget would give wrong units."
+    )
+    assert row.predicted_kpi != pytest.approx(0.045 * 3000.0)

@@ -1,5 +1,7 @@
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Set
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import math
 
 from core.wizard_state import (
@@ -8,11 +10,16 @@ from core.wizard_state import (
     GOAL_EN,
     GOAL_WT,
     GOAL_LG,
+    ALLOWED_CURRENCIES,
+    DEFAULT_CURRENCY,
     FlowStateError,
 )
 
 
 ALLOWED_OBJECTIVES: Set[str] = {GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG}
+
+# Currency symbol → ISO code.  Used to auto-detect currency from budget strings like "£1,200".
+CURRENCY_SYMBOL_TO_CODE: Dict[str, str] = {"£": "GBP", "$": "USD", "€": "EUR"}
 
 # Hard ceiling on total budget. 1e9 covers any plausible single-campaign budget
 # in major currencies; values above this are almost certainly a typo or unit error.
@@ -50,6 +57,8 @@ class Module1ValidationError(Exception):
 class Module1Result:
     selected_objectives: List[str]
     total_budget: float
+    currency: str = DEFAULT_CURRENCY
+    campaign_duration_days: Optional[int] = None
 
 
 def _normalise_objectives(raw_objectives: Sequence[str]) -> List[str]:
@@ -82,45 +91,125 @@ def _validate_objectives(selected_objectives: Sequence[str]) -> None:
         )
 
 
-def _parse_budget(raw_budget: Any) -> float:
+def _parse_numeric_string(value: str) -> float:
+    """Parse a budget string with EU-style decimal/thousands support.
+
+    Examples:
+        "1200"      → 1200.0
+        "1,200"     → 1200.0  (comma = thousands separator, 3 digits after)
+        "1,50"      → 1.5     (comma = decimal separator, 2 digits after)
+        "1,200.50"  → 1200.50 (comma = thousands, period = decimal)
+        "1.200,50"  → 1200.50 (period = thousands, comma = decimal)
+    """
+    # Standard form (no ambiguity)
+    try:
+        return float(value)
+    except ValueError:
+        pass
+
+    # Both comma and period present
+    if "," in value and "." in value:
+        last_comma = value.rfind(",")
+        last_period = value.rfind(".")
+        if last_comma > last_period:
+            # "1.234,56" — period is thousands, comma is decimal
+            cleaned = value.replace(".", "").replace(",", ".")
+        else:
+            # "1,234.56" — comma is thousands, period is decimal
+            cleaned = value.replace(",", "")
+        return float(cleaned)
+
+    # Only comma
+    if "," in value:
+        after = value.rsplit(",", 1)[1]
+        if len(after) <= 2:
+            # "1,50" or "1,5" — comma is decimal separator
+            cleaned = value.replace(",", ".")
+        else:
+            # "1,200" or "1,200,000" — comma is thousands separator
+            cleaned = value.replace(",", "")
+        return float(cleaned)
+
+    raise ValueError(f"Cannot parse numeric value: {value!r}")
+
+
+def _parse_budget(raw_budget: Any) -> Tuple[float, Optional[str]]:
+    """Parse budget input.  Returns (numeric_value, detected_currency_code_or_None)."""
     if isinstance(raw_budget, (int, float)):
-        numeric_budget = float(raw_budget)
-    else:
-        if raw_budget is None:
+        numeric = float(raw_budget)
+        if math.isnan(numeric) or math.isinf(numeric):
             raise Module1ValidationError(
-                "Please enter your total budget as a valid monetary amount "
-                "(for example: 1200 or £1,200.50)."
+                "Your total budget must be a valid finite number."
             )
+        return numeric, None
 
-        value = str(raw_budget).strip()
+    if raw_budget is None:
+        raise Module1ValidationError(
+            "Please enter your total budget as a valid monetary amount "
+            "(for example: 1200 or £1,200.50)."
+        )
 
-        if not value:
-            raise Module1ValidationError(
-                "Please enter your total budget as a valid monetary amount "
-                "(for example: 1200 or £1,200.50)."
-            )
+    value = str(raw_budget).strip()
+    if not value:
+        raise Module1ValidationError(
+            "Please enter your total budget as a valid monetary amount "
+            "(for example: 1200 or £1,200.50)."
+        )
 
-        for symbol in ("£", "$", "€"):
-            if value.startswith(symbol):
-                value = value[len(symbol):].strip()
-                break
+    # Strip leading currency symbol and remember which one
+    detected_currency: Optional[str] = None
+    for symbol, code in CURRENCY_SYMBOL_TO_CODE.items():
+        if value.startswith(symbol):
+            value = value[len(symbol):].strip()
+            detected_currency = code
+            break
 
-        value = value.replace(",", "")
+    try:
+        numeric = _parse_numeric_string(value)
+    except ValueError:
+        raise Module1ValidationError(
+            "Please enter your total budget as a valid monetary amount "
+            "(for example: 1200 or £1,200.50)."
+        )
 
-        try:
-            numeric_budget = float(value)
-        except ValueError:
-            raise Module1ValidationError(
-                "Please enter your total budget as a valid monetary amount "
-                "(for example: 1200 or £1,200.50)."
-            )
-
-    if math.isnan(numeric_budget) or math.isinf(numeric_budget):
+    if math.isnan(numeric) or math.isinf(numeric):
         raise Module1ValidationError(
             "Your total budget must be a valid finite number."
         )
 
-    return numeric_budget
+    return numeric, detected_currency
+
+
+def _parse_currency(raw_currency: Any, fallback: Optional[str] = None) -> str:
+    """Resolve a currency code from user input.
+
+    Accepts ISO codes (GBP, USD, EUR) or currency symbols (£, $, €).
+    Falls back to *fallback* (e.g. auto-detected from the budget string) or
+    DEFAULT_CURRENCY if both are absent or unrecognised.
+    """
+    if raw_currency is None:
+        return fallback or DEFAULT_CURRENCY
+
+    token = str(raw_currency).strip().upper()
+    if token in ALLOWED_CURRENCIES:
+        return token
+    # Accept the symbol form too (£ → GBP etc.)
+    for symbol, code in CURRENCY_SYMBOL_TO_CODE.items():
+        if token == symbol:
+            return code
+    # Unknown input → fall back silently
+    return fallback or DEFAULT_CURRENCY
+
+
+def _parse_duration(raw_duration: Any) -> Optional[int]:
+    """Parse campaign duration in days.  Returns None if input is absent or invalid."""
+    if raw_duration is None:
+        return None
+    try:
+        d = int(float(str(raw_duration).strip()))
+    except (TypeError, ValueError):
+        return None
+    return d if d > 0 else None
 
 
 def _validate_budget(numeric_budget: float) -> None:
@@ -139,16 +228,23 @@ def _validate_budget(numeric_budget: float) -> None:
 def run_module_1(
     raw_objectives: Sequence[str],
     raw_budget: Any,
+    raw_currency: Any = None,
+    raw_duration_days: Any = None,
 ) -> Module1Result:
     normalised_objectives = _normalise_objectives(raw_objectives)
     _validate_objectives(normalised_objectives)
 
-    numeric_budget = _parse_budget(raw_budget)
+    numeric_budget, detected_currency = _parse_budget(raw_budget)
     _validate_budget(numeric_budget)
+
+    currency = _parse_currency(raw_currency, fallback=detected_currency)
+    campaign_duration_days = _parse_duration(raw_duration_days)
 
     return Module1Result(
         selected_objectives=normalised_objectives,
         total_budget=numeric_budget,
+        currency=currency,
+        campaign_duration_days=campaign_duration_days,
     )
 
 
@@ -156,6 +252,8 @@ def complete_module1_and_advance(
     state: WizardState,
     raw_objectives: Sequence[str],
     raw_budget: Any,
+    raw_currency: Any = None,
+    raw_duration_days: Any = None,
 ) -> WizardState:
     if state.module1_finalised:
         raise FlowStateError(
@@ -168,11 +266,13 @@ def complete_module1_and_advance(
             "Module 1 can only be completed when the wizard is at step 1."
         )
 
-    result = run_module_1(raw_objectives, raw_budget)
+    result = run_module_1(raw_objectives, raw_budget, raw_currency, raw_duration_days)
 
     state.complete_module1_and_advance(
         valid_goals=result.selected_objectives,
         total_budget=result.total_budget,
+        currency=result.currency,
+        campaign_duration_days=result.campaign_duration_days,
     )
 
     return state
@@ -211,8 +311,18 @@ def _present_module_1_cli() -> None:
         "(for example: 1200 or £1,200.50): "
     )
 
+    raw_currency = input(
+        "Currency code (GBP/USD/EUR, or leave blank to auto-detect from budget symbol): "
+    ).strip() or None
+
+    raw_duration = input(
+        "Campaign duration in days (positive integer, or leave blank): "
+    ).strip() or None
+
     try:
-        complete_module1_and_advance(state, raw_objectives, raw_budget)
+        complete_module1_and_advance(
+            state, raw_objectives, raw_budget, raw_currency, raw_duration
+        )
     except (Module1ValidationError, FlowStateError) as e:
         print("\nError:", str(e))
         return
@@ -222,6 +332,8 @@ def _present_module_1_cli() -> None:
     print("Module 1 finalised:", state.module1_finalised)
     print("Snapshot valid_goals:", state.valid_goals)
     print("Snapshot total_budget:", state.total_budget)
+    print("Currency:", state.currency)
+    print("Campaign duration:", state.campaign_duration_days)
 
 
 if __name__ == "__main__":

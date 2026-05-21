@@ -36,6 +36,7 @@ class WizardState:
     module4_finalised: bool = False
     module5_finalised: bool = False
     module6_finalised: bool = False
+    module7_finalised: bool = False
 
     valid_goals: List[str] = field(default_factory=list)
     total_budget: Optional[float] = None

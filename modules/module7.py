@@ -165,12 +165,13 @@ def _stability_text(bundle: Module5ScenarioBundle) -> str:
         return "Only one scenario result is available."
     if _allocations_identical(bundle):
         return (
-            "The allocation decision is stable across scenarios. Scenario multipliers scale objective values, "
-            "but they do not change the optimal ranking of channel and objective options in the tested range."
+            "The allocation decision is stable across scenarios. Scenario multipliers change the available "
+            "budget cap, but they do not shift the optimal ranking of channel and objective options in the "
+            "tested range."
         )
     return (
-        "The allocation changes across scenarios. This indicates the scenario assumptions shift the ranking "
-        "between channel and objective options, so the decision is scenario sensitive."
+        "The allocation changes across scenarios. Scenario multipliers change the budget cap, which shifts "
+        "how much can flow into each channel and objective, making the decision scenario-sensitive."
     )
 
 
@@ -265,9 +266,11 @@ def _confidence(lp: Module5LPResult, bundle: Module5ScenarioBundle, fc: Optional
         score -= 10
 
     if fc is None or not getattr(fc, "rows", None):
+        # Missing forecast is a single root cause — don't also deduct for the
+        # dq_note that was itself triggered by the missing forecast.
         score -= 18
-
-    if dq_note:
+    elif dq_note:
+        # Only penalise for data-quality issues when the forecast actually exists.
         score -= 12
 
     if score < 40:
@@ -530,9 +533,6 @@ def _risks_recs(
     if plan_b and plan_b.tradeoff_percent is not None and plan_b.tradeoff_percent >= 5.0:
         recs.append("Expect some efficiency loss when diversifying. The trade off is reported in Plan B.")
 
-    if stability_text:
-        recs.append(stability_text)
-
     return risks, recs
 
 
@@ -652,5 +652,8 @@ def run_module7(
 
     if global_dq:
         out.global_data_quality_note = " ".join(sorted(set(global_dq)))
+
+    state.module7_finalised = True
+    state.current_step = max(state.current_step, 8)
 
     return out
