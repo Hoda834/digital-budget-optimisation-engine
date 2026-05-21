@@ -818,6 +818,37 @@ def module3_ui(state: WizardState) -> None:
             "ratios as upper bounds, not facts."
         )
 
+    # ── Top-of-step CSV template downloads ─────────────────────────────────
+    # Surface the template-download workflow prominently before the user
+    # gets into per-platform forms.  The workflow is: download a template
+    # for each platform you'll use, fill it in (in Excel / Numbers /
+    # Sheets), then upload it in the platform's section below.
+    supported_platforms_for_active = [
+        p for p in (state.active_platforms or []) if p in CSV_SUPPORTED
+    ]
+    if supported_platforms_for_active:
+        st.markdown("### Don't have the data ready? Download a CSV template.")
+        st.caption(
+            "For each platform you've selected, you can download a CSV "
+            "template with the column headers the parser recognises plus "
+            "one example row.  Fill it in your spreadsheet tool, then "
+            "upload it in the platform's section below."
+        )
+        cols = st.columns(min(len(supported_platforms_for_active), 4))
+        for i, p in enumerate(supported_platforms_for_active):
+            with cols[i % len(cols)]:
+                template_bytes = generate_csv_template(p)
+                if template_bytes:
+                    st.download_button(
+                        f"📥 {_platform_display_name(state, p)}",
+                        data=template_bytes,
+                        file_name=f"{p}_template.csv",
+                        mime="text/csv",
+                        key=f"_top_template_{p}",
+                        use_container_width=True,
+                    )
+        st.markdown("---")
+
     default_days = int(getattr(state, "campaign_duration_days", None) or 30)
     catalog = KPI_CONFIG
     m3_inputs: Dict[str, Dict[str, Any]] = {}
