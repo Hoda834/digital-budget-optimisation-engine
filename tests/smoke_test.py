@@ -1603,8 +1603,9 @@ def test_module6_count_kpi_has_confidence_band() -> None:
 
 def test_module7_includes_forecast_caveat() -> None:
     """Every Module 7 output should include the standard caveat about
-    historical-vs-future performance, plus an extension when goal values
-    are missing."""
+    historical-vs-future performance, an extension when goal values are
+    missing, AND the attribution / incrementality disclosure that warns
+    the user the LP is conditional on their attribution model."""
     state = _run_pipeline_to_module5()
     from modules.module6 import run_module6
     from modules.module7 import run_module7
@@ -1615,9 +1616,12 @@ def test_module7_includes_forecast_caveat() -> None:
     insights = run_module7(state, bundle, fc)
 
     assert insights.forecast_caveat
-    assert "historical" in insights.forecast_caveat.lower()
+    text = insights.forecast_caveat.lower()
+    assert "historical" in text
+    assert "attribution" in text
+    assert "incrementality" in text
     # No goal_value_per_unit set → extended note must appear
-    assert "no per-goal economic values" in insights.forecast_caveat.lower()
+    assert "no per-goal economic values" in text
 
 
 def test_module6_rate_kpi_not_multiplied_by_budget() -> None:

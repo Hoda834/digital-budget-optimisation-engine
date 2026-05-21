@@ -652,6 +652,17 @@ def module3_ui(state: WizardState) -> None:
         "pooling, give each platform a long history (180+ days).",
         icon="ℹ️",
     )
+    st.warning(
+        "**Attribution caveat.** The KPIs you enter reflect each platform's own "
+        "attribution model — typically last-click.  Platforms over-credit their own "
+        "conversions: Meta tends to claim leads that Search also influenced; Google "
+        "tends to claim conversions that brand awareness created.  The optimiser "
+        "treats these numbers as truth, so its recommendation is *conditional on "
+        "your attribution model being correct*.  Incrementality — would these "
+        "conversions have happened anyway? — is not modelled.  Treat productivity "
+        "ratios as upper bounds, not facts.",
+        icon="⚠️",
+    )
 
     default_days = int(getattr(state, "campaign_duration_days", None) or 30)
     catalog = effective_kpi_config(state)
@@ -834,6 +845,13 @@ def results_ui(state: WizardState) -> None:
         return
 
     st.markdown("Optimisation method: Linear Programming (LP) to allocate budget across platform and objective.")
+    st.caption(
+        "⚠️ Recommendations inherit the attribution your KPIs came from.  If the "
+        "platform-reported numbers over-credit one channel (a known last-click "
+        "bias), the LP will over-allocate to that channel.  Cross-check against "
+        "incrementality tests (geo lifts, holdout splits) before committing to "
+        "material reallocations."
+    )
 
     df_p, df_g, df_s = _policy_tables(state)
     df_sgm = _scenario_goal_multiplier_table(state)

@@ -120,8 +120,12 @@ _FORECAST_CAVEAT = (
     "Forecasts assume historical KPI ratios will hold over the campaign window. "
     "Actual results commonly differ by 20-40% due to algorithm updates, "
     "seasonality, competitive bidding pressure, audience saturation, and "
-    "creative fatigue. Validate against current platform benchmarks before "
-    "committing the full budget."
+    "creative fatigue. The historical KPIs also reflect each platform's own "
+    "(typically last-click) attribution — Facebook tends to over-claim leads "
+    "that Search also influenced, Search tends to over-claim conversions that "
+    "brand awareness created.  Incrementality is not modelled.  Treat the "
+    "productivity ratios as upper bounds, not measurements, and validate "
+    "against current platform benchmarks before committing the full budget."
 )
 
 _NO_VALUE_WEIGHTS_NOTE = (
