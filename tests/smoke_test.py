@@ -959,6 +959,63 @@ def test_custom_platform_invalid_kind_rejected() -> None:
         )
 
 
+def test_csv_import_parses_meta_export() -> None:
+    """A Meta Ads Manager-style CSV should pre-fill Reach, Impressions,
+    Engagement, Link Clicks, Leads, and Amount Spent without the user
+    typing anything."""
+    from core.csv_import import parse_platform_csv
+
+    csv = (
+        "Campaign name,Reach,Impressions,Post engagement,Link clicks,Leads,Amount spent (GBP)\n"
+        "Campaign A,200000,500000,8000,4500,80,3000\n"
+        "Campaign B,150000,300000,4000,2500,40,2000\n"
+    )
+    result = parse_platform_csv(csv.encode("utf-8"), "fb")
+    assert "error" not in result
+    assert result["budget"] == pytest.approx(5000.0)
+    assert result["kpis"]["FB_AW_REACH"] == pytest.approx(350000.0)
+    assert result["kpis"]["FB_AW_IMPRESSION"] == pytest.approx(800000.0)
+    assert result["kpis"]["FB_EN_ENGAGEMENT"] == pytest.approx(12000.0)
+    assert result["kpis"]["FB_WT_CLICKS"] == pytest.approx(7000.0)
+    assert result["kpis"]["FB_LG_LEADS"] == pytest.approx(120.0)
+
+
+def test_csv_import_handles_google_ctr_as_percentage() -> None:
+    """Google exports CTR as '4.50%' or sometimes 0.045 — parser must
+    normalise both to a fraction in [0, 1]."""
+    from core.csv_import import parse_platform_csv
+
+    csv_pct = (
+        "Campaign,Impressions,Clicks,CTR,Conversions,Cost\n"
+        "Camp,1000000,45000,4.50%,300,2500\n"
+    )
+    result = parse_platform_csv(csv_pct.encode("utf-8"), "go")
+    assert result["kpis"]["GO_EN_CTR"] == pytest.approx(0.045)
+    assert result["kpis"]["GO_LG_CONVERSIONS"] == pytest.approx(300.0)
+    assert result["budget"] == pytest.approx(2500.0)
+
+
+def test_csv_import_unsupported_platform_returns_error() -> None:
+    """Reddit/Snapchat aren't in the CSV-import set — caller should get a
+    helpful error rather than a silent failure."""
+    from core.csv_import import parse_platform_csv
+
+    result = parse_platform_csv(b"x,y\n1,2\n", "rd")
+    assert "error" in result and "not supported" in result["error"].lower()
+
+
+def test_csv_import_reports_missing_kpis() -> None:
+    """A CSV that's missing a column we'd expect should be reported in
+    missing_kpis so the UI can prompt the user to fill it in manually."""
+    from core.csv_import import parse_platform_csv
+
+    # Meta export missing Leads column
+    csv = "Reach,Impressions,Amount spent\n100000,200000,1000\n"
+    result = parse_platform_csv(csv.encode("utf-8"), "fb")
+    assert "FB_LG_LEADS" in result["missing_kpis"]
+    assert result["kpis"].get("FB_AW_REACH") == pytest.approx(100000.0)
+
+
 def test_google_pipeline_end_to_end() -> None:
     """Google (Search + Display) — typically the #1 paid-media channel for
     UK marketers — should flow through M1 → M7 just like a Meta platform."""

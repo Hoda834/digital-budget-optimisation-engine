@@ -16,6 +16,7 @@ from modules.module1 import (
     Module1ValidationError,
 )
 from core.kpi_config import KPI_CONFIG, effective_kpi_config
+from core.csv_import import parse_platform_csv, SUPPORTED_PLATFORMS as CSV_SUPPORTED
 from modules.module3 import finalise_module3_from_inputs
 from modules.module2 import run_module2
 from modules.module4 import run_module4
@@ -659,11 +660,50 @@ def module3_ui(state: WizardState) -> None:
     for platform in state.active_platforms:
         platform_name = _platform_display_name(state, platform)
         with st.expander(platform_name, expanded=True):
+            # ── CSV import (for supported platforms) ──────────────────────
+            # Stored extracted values in session_state so the widgets below
+            # default to them when the user uploads a file.
+            csv_defaults_key = f"_csv_defaults_{platform}"
+            if platform in CSV_SUPPORTED:
+                uploaded = st.file_uploader(
+                    f"Drop a {platform_name} export here to pre-fill (optional)",
+                    type=["csv"],
+                    key=f"_csv_upload_{platform}",
+                    help="Upload the CSV you export from the platform's "
+                         "reporting UI.  Column names are matched heuristically — "
+                         "you can still adjust any value below.",
+                )
+                if uploaded is not None:
+                    parsed = parse_platform_csv(uploaded.getvalue(), platform)
+                    if "error" in parsed:
+                        st.error(parsed["error"])
+                    else:
+                        st.session_state[csv_defaults_key] = parsed
+                        matched = parsed.get("matched_columns", {})
+                        if matched:
+                            st.success(
+                                f"Matched {len(matched)} column"
+                                f"{'s' if len(matched) != 1 else ''} "
+                                f"from {parsed.get('row_count', 0)} row"
+                                f"{'s' if parsed.get('row_count', 0) != 1 else ''}: "
+                                + ", ".join(f"{k} ← {v}" for k, v in matched.items())
+                            )
+                        if parsed.get("missing_kpis"):
+                            st.info(
+                                "Couldn't find columns for: "
+                                + ", ".join(parsed["missing_kpis"])
+                                + ". Enter them manually below."
+                            )
+
+            csv_defaults = st.session_state.get(csv_defaults_key, {}) or {}
+
             col_days, col_budget = st.columns([1, 2])
             with col_days:
                 hist_days = st.number_input(
                     "Historical window (days)",
-                    min_value=1, value=default_days, step=1,
+                    min_value=1,
+                    value=int(csv_defaults.get("historical_days") or default_days),
+                    step=1,
                     key=f"hist_days_{platform}",
                     help="How many days of past performance these numbers cover. "
                          "Confidence bands shrink as the window grows (more data → less noise).",
@@ -671,7 +711,9 @@ def module3_ui(state: WizardState) -> None:
             with col_budget:
                 budget = st.number_input(
                     "Total budget spent in that window",
-                    min_value=1.01, value=1000.0, step=100.0, format="%.2f",
+                    min_value=1.01,
+                    value=float(csv_defaults.get("budget") or 1000.0),
+                    step=100.0, format="%.2f",
                     key=f"budget_{platform}",
                     help="Combined ad spend over the historical window. Decimals OK.",
                 )
@@ -681,6 +723,7 @@ def module3_ui(state: WizardState) -> None:
                 if row["platform"] == platform
                 and row["goal"] in state.goals_by_platform.get(platform, [])
             ]
+            csv_kpis = (csv_defaults.get("kpis") or {}) if csv_defaults else {}
 
             kpi_values: Dict[str, float] = {}
             for kpi_def in kpi_defs:
@@ -690,26 +733,33 @@ def module3_ui(state: WizardState) -> None:
                 goal_code = kpi_def["goal"]
                 goal_name = _GOAL_LABEL.get(goal_code, goal_code)
 
+                csv_val = csv_kpis.get(var)
+
                 if kind == "rate":
                     # Rate KPIs are dimensionless ratios in [0, 1].  Show as a
                     # percent slider — much easier to reason about than typing
                     # "0.045"; store as fraction.
+                    default_pct = float(csv_val) * 100.0 if csv_val else 2.5
+                    default_pct = max(0.0, min(100.0, default_pct))
                     pct = st.slider(
                         f"{goal_name} · {label} (%)",
-                        min_value=0.0, max_value=100.0, value=2.5, step=0.1,
+                        min_value=0.0, max_value=100.0, value=default_pct, step=0.1,
                         key=f"{platform}_{var}",
-                        help=f"Average {label.lower()} as a percentage. Stored as a decimal.",
+                        help=f"Average {label.lower()} as a percentage. Stored as a decimal."
+                             + (" Pre-filled from CSV." if csv_val else ""),
                     )
                     kpi_values[var] = pct / 100.0
                 else:
                     # Count KPIs: total units over the historical window.
                     # Decimals are accepted (some platforms report fractional values).
+                    default_val = float(csv_val) if csv_val else 1000.0
                     val = st.number_input(
                         f"{goal_name} · {label} (total over window)",
-                        min_value=0.0, value=1000.0, step=10.0, format="%.2f",
+                        min_value=0.0, value=default_val, step=10.0, format="%.2f",
                         key=f"{platform}_{var}",
                         help=f"Total {label.lower()} recorded during the historical window. "
-                             f"Decimals OK (e.g. 1500.5 leads if you're averaging across multiple ad sets).",
+                             f"Decimals OK (e.g. 1500.5 leads if you're averaging across multiple ad sets)."
+                             + (" Pre-filled from CSV." if csv_val else ""),
                     )
                     kpi_values[var] = float(val)
 
