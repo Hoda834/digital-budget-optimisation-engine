@@ -867,6 +867,60 @@ def test_module3_string_kpi_value_raises_clean_valueerror():
         })
 
 
+def test_csv_template_round_trips_through_parser():
+    """The template a user downloads, fills in, and re-uploads should
+    parse cleanly into the same canonical KPI structure — no off-by-one
+    column-name mismatches between generator and parser."""
+    from core.csv_import import generate_csv_template, SUPPORTED_PLATFORMS
+
+    for platform in SUPPORTED_PLATFORMS:
+        template = generate_csv_template(platform)
+        assert template, f"No template for {platform!r}"
+        # The example row in the template is a valid CSV that should parse
+        # without errors when fed back into the same parser.
+        parsed = parse_platform_csv(template, platform)
+        assert "error" not in parsed, (
+            f"Template for {platform!r} doesn't round-trip: {parsed.get('error')}"
+        )
+        # At least the budget column matched and produced a number
+        assert parsed.get("budget"), (
+            f"Template for {platform!r} produced no budget value"
+        )
+
+
+def test_csv_template_for_meta_lists_engagement_components():
+    """The FB template should expose Reactions, Comments, Shares, Saves
+    as separate columns (not just one 'Engagement' bucket) so users see
+    the broken-out atoms the composer wants."""
+    from core.csv_import import generate_csv_template
+
+    template = generate_csv_template("fb").decode("utf-8")
+    header = template.split("\n", 1)[0].lower()
+    for needle in ("reaction", "comment", "share", "save"):
+        assert needle in header, (
+            f"FB template missing {needle!r} column. Header: {header}"
+        )
+
+
+def test_csv_template_rate_kpis_show_percent_example():
+    """Rate KPI columns (CTR, engagement rate) should have a '%' example
+    row value so users immediately see the expected format."""
+    from core.csv_import import generate_csv_template
+
+    template = generate_csv_template("go").decode("utf-8")
+    lines = template.split("\n")
+    assert len(lines) >= 2
+    header_lower = lines[0].lower()
+    if "ctr" in header_lower:
+        # Find CTR column index, check example row contains '%' somewhere
+        # (we don't enforce that specific column has %, just that the
+        # example row contains a percentage form for rate KPIs).
+        assert "%" in lines[1], (
+            "Go template has CTR column but no '%' example value to "
+            "signal rate format"
+        )
+
+
 def test_composition_recompose_with_user_weights():
     """Simulate the Option C override: take the parsed breakdown, apply
     per-component weights, recompose with the same operator."""

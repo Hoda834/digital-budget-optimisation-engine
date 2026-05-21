@@ -16,7 +16,11 @@ from modules.module1 import (
     Module1ValidationError,
 )
 from core.kpi_config import KPI_CONFIG, effective_kpi_config
-from core.csv_import import parse_platform_csv, SUPPORTED_PLATFORMS as CSV_SUPPORTED
+from core.csv_import import (
+    parse_platform_csv,
+    SUPPORTED_PLATFORMS as CSV_SUPPORTED,
+    generate_csv_template,
+)
 from modules.module3 import finalise_module3_from_inputs
 from modules.module2 import run_module2
 from modules.module4 import run_module4
@@ -804,14 +808,38 @@ def module3_ui(state: WizardState) -> None:
             # default to them when the user uploads a file.
             csv_defaults_key = f"_csv_defaults_{platform}"
             if platform in CSV_SUPPORTED:
-                uploaded = st.file_uploader(
-                    f"Drop a {platform_name} export here to pre-fill (optional)",
-                    type=["csv"],
-                    key=f"_csv_upload_{platform}",
-                    help="Upload the CSV you export from the platform's "
-                         "reporting UI.  Column names are matched heuristically — "
-                         "you can still adjust any value below.",
-                )
+                # Upload + download-template side by side so the user can
+                # grab the canonical column-name template, fill it in, and
+                # re-upload — no guessing at column names.
+                col_upload, col_template = st.columns([3, 1])
+                with col_upload:
+                    uploaded = st.file_uploader(
+                        f"Drop a {platform_name} export here to pre-fill (optional)",
+                        type=["csv"],
+                        key=f"_csv_upload_{platform}",
+                        help="Upload the CSV you export from the platform's "
+                             "reporting UI.  Column names are matched "
+                             "heuristically — you can still adjust any "
+                             "value below.",
+                    )
+                with col_template:
+                    template_bytes = generate_csv_template(platform)
+                    if template_bytes:
+                        st.write("")  # vertical spacer to align with uploader
+                        st.download_button(
+                            "📥 Template",
+                            data=template_bytes,
+                            file_name=f"{platform}_template.csv",
+                            mime="text/csv",
+                            key=f"_csv_template_{platform}",
+                            help=(
+                                f"Download an empty {platform_name} template "
+                                "with every column the parser recognises "
+                                "(plus one example row).  Fill in your real "
+                                "values and re-upload."
+                            ),
+                            use_container_width=True,
+                        )
                 if uploaded is not None:
                     parsed = parse_platform_csv(uploaded.getvalue(), platform)
                     if "error" in parsed:

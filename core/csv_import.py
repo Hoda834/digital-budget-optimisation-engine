@@ -280,6 +280,83 @@ def get_composition(platform: str, var: str) -> Optional[KPIComposition]:
     return _CSV_PATTERNS.get(platform.lower(), {}).get(var)
 
 
+def _template_example_value(var: str) -> str:
+    """Sample value for the template's example row.  Sizes are
+    order-of-magnitude plausible for a £3k monthly campaign so the
+    template doesn't suggest unrealistic ratios."""
+    if var == _BUDGET:
+        return "3000"
+    if var == _DAYS:
+        return "30"
+    if var in _RATE_KPIS:
+        return "2.5%"
+    lower = var.lower()
+    if "reach" in lower or "impression" in lower or "view" in lower:
+        return "500000"
+    if "click" in lower:
+        return "5000"
+    if "lead" in lower or "conversion" in lower:
+        return "100"
+    if "reaction" in lower or "comment" in lower or "share" in lower or "save" in lower:
+        return "2000"
+    if "engagement" in lower:
+        return "8000"
+    return "1000"
+
+
+def _column_name_for_needle(needle: str) -> str:
+    """Convert a normalised needle ('amount spent') into a presentable
+    column name ('Amount Spent') for the template."""
+    # Title-case but keep abbreviations and common headers natural
+    parts = needle.split()
+    out = []
+    for p in parts:
+        if p.lower() in ("ctr", "er", "cpc", "cpa", "cpm"):
+            out.append(p.upper())
+        else:
+            out.append(p.capitalize())
+    return " ".join(out)
+
+
+def generate_csv_template(platform: str) -> bytes:
+    """Build a downloadable CSV template for one platform.
+
+    The header row contains every column the parser looks for (one per
+    component group, not just one per canonical KPI — so engagement
+    breaks out into Reactions / Comments / Shares / Saves rather than
+    a single 'Engagement' bucket).  One example row follows with
+    order-of-magnitude plausible values for a typical month.
+
+    Returns empty bytes if the platform isn't in the CSV-import set.
+    """
+    plat = (platform or "").strip().lower()
+    if plat not in _CSV_PATTERNS:
+        return b""
+
+    patterns = _CSV_PATTERNS[plat]
+    columns: List[str] = []
+    example: List[str] = []
+    seen: set = set()
+
+    for var, comp in patterns.items():
+        # Surface every component group as its own column so the
+        # template captures the same atomic signals the parser will
+        # look for.  Saves the user from guessing whether the parser
+        # wants 'Engagement' or 'Reactions + Comments + Shares'.
+        for needle_group in comp.components:
+            if not needle_group:
+                continue
+            col_name = _column_name_for_needle(needle_group[0])
+            if col_name in seen:
+                continue
+            seen.add(col_name)
+            columns.append(col_name)
+            example.append(_template_example_value(var))
+
+    csv_text = ",".join(columns) + "\n" + ",".join(example) + "\n"
+    return csv_text.encode("utf-8")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Parsing helpers
 # ─────────────────────────────────────────────────────────────────────────────
