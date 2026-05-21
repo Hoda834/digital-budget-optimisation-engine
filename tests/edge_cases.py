@@ -1086,11 +1086,29 @@ def test_usd_plan_excel_and_pdf_outputs_contain_no_pound_symbol() -> None:
                         )
 
         # PDF — money columns are pre-rendered via money() before being
-        # placed in the table; assert $ shows up in the binary and £ does not.
+        # placed in the table.  Extract the rendered text via pypdf rather
+        # than searching the raw bytes: ReportLab uses WinAnsi single-byte
+        # encoding inside content streams, so the UTF-8 byte pattern for £
+        # (\xc2\xa3) never matches even when £ visually appears.  Extracted
+        # text gives the symbol back in its decoded form, which is the
+        # check we actually want.
         pdf = create_pdf_bytes(s, [("base", lp, fc)])
-        assert b"$" in pdf, "PDF export of a USD plan should contain at least one $ symbol."
-        assert "£".encode("utf-8") not in pdf, (
-            "PDF export of a USD plan must not contain a £ symbol anywhere."
+
+        import io
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(pdf))
+        pdf_text = "".join((p.extract_text() or "") for p in reader.pages)
+
+        assert "$" in pdf_text, (
+            "PDF export of a USD plan should contain at least one $ symbol "
+            "in the rendered text."
+        )
+        assert "£" not in pdf_text, (
+            f"PDF export of a USD plan must not contain a £ symbol in the "
+            f"rendered text.  Found in text starting with: "
+            f"{pdf_text[max(0, pdf_text.index('£')-40):pdf_text.index('£')+40]!r}"
+            if "£" in pdf_text else
+            "PDF export of a USD plan must not contain a £ symbol in the rendered text."
         )
     finally:
         # Cleanup so subsequent tests aren't affected
@@ -1174,10 +1192,14 @@ def test_module1_error_examples_dont_anchor_on_pound_symbol() -> None:
 
     with pytest.raises(Module1ValidationError) as excinfo:
         _parse_budget("not a number")
-    msg = str(excinfo.value).lower()
-    # Currency-neutral: the example should not anchor only on £
-    assert "£, $, €" in str(excinfo.value) or "£, $, €" in str(excinfo.value).replace(" ", " "), (
-        f"Expected the error to list all three accepted currency symbols, got: {excinfo.value!r}"
+    err = str(excinfo.value)
+    # Currency-neutral: the example must list all three accepted symbols
+    # rather than privileging £.  Normalise non-breaking spaces to
+    # regular spaces before comparison so a formatter change that swaps
+    # them wouldn't silently bypass the check.
+    normalised = err.replace(" ", " ")
+    assert "£, $, €" in normalised, (
+        f"Expected the error to list all three accepted currency symbols, got: {err!r}"
     )
     # And the value example itself should be plain (no £ prefix on the numeric example)
-    assert "£1,200.50" not in str(excinfo.value)
+    assert "£1,200.50" not in err
