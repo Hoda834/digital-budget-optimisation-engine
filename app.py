@@ -898,6 +898,95 @@ def results_ui(state: WizardState) -> None:
 
             st.markdown("---")
 
+    # ── Solver diagnostics (auditable "why this allocation?") ──────────────
+    # Surfaces the LP signals that already exist on every Module5LPResult
+    # but were previously hidden from the UI.  Focused on the base scenario;
+    # the per-scenario tabs below still let the user dig deeper.
+    base_lp = lp_by_scenario.get("base") or (
+        lp_by_scenario.get(scenario_keys[0]) if scenario_keys else None
+    )
+    if base_lp is not None and (
+        base_lp.binding_constraints
+        or base_lp.shadow_prices
+        or base_lp.effective_minimum_warnings
+        or base_lp.near_degenerate_groups
+        or base_lp.test_and_learn_reserve > 0.0
+    ):
+        with st.expander("Solver diagnostics", expanded=False):
+            st.caption(
+                "What constraints actually shaped the optimiser's choice, "
+                "and how sensitive the allocation is to each one."
+            )
+
+            if base_lp.test_and_learn_reserve > 0.0:
+                st.markdown(
+                    f"**Test-and-learn reserve (base scenario):** "
+                    f"{money(base_lp.test_and_learn_reserve)} held back from the LP."
+                )
+
+            if base_lp.binding_constraints:
+                st.markdown("**Binding constraints** — these stopped the LP from doing better:")
+                binding_rows = []
+                for bc in base_lp.binding_constraints:
+                    target_label = ""
+                    if bc.kind == "min_platform":
+                        target_label = PLATFORM_NAMES.get(str(bc.target).lower(), str(bc.target))
+                    elif bc.kind == "min_goal":
+                        target_label = _GOAL_LABEL.get(str(bc.target).lower(), str(bc.target))
+                    elif bc.kind == "budget_cap":
+                        target_label = "(total)"
+                    binding_rows.append({
+                        "Constraint": bc.name,
+                        "Kind": bc.kind,
+                        "Target": target_label,
+                        "Limit": money(bc.rhs),
+                        "Shadow price": number(bc.shadow_price, 4),
+                    })
+                st.dataframe(pd.DataFrame(binding_rows),
+                             use_container_width=True, hide_index=True)
+                st.caption(
+                    "Shadow price ≈ how much the objective would change if you "
+                    "relaxed the constraint by one unit.  Positive on min floors "
+                    "(forcing spend hurts the objective), negative on the budget cap "
+                    "(more budget would help)."
+                )
+
+            # Top-3 shadow prices (by absolute value), excluding the already-shown bindings
+            if base_lp.shadow_prices:
+                already_shown = {bc.name for bc in base_lp.binding_constraints}
+                other = [
+                    (name, pi) for name, pi in base_lp.shadow_prices.items()
+                    if name not in already_shown and abs(pi) > 1e-9
+                ]
+                if other:
+                    other.sort(key=lambda kv: abs(kv[1]), reverse=True)
+                    top = other[:3]
+                    st.markdown("**Largest non-binding sensitivities:**")
+                    st.dataframe(
+                        pd.DataFrame([
+                            {"Constraint": name, "Shadow price": number(pi, 4)}
+                            for name, pi in top
+                        ]),
+                        use_container_width=True, hide_index=True,
+                    )
+
+            if base_lp.effective_minimum_warnings:
+                st.markdown("**Below industry-effective spend** — these platforms may not exit the learning phase:")
+                for w in base_lp.effective_minimum_warnings:
+                    st.warning(w)
+
+            if base_lp.near_degenerate_groups:
+                st.markdown("**Near-degenerate cells** — productivity was effectively tied:")
+                for grp in base_lp.near_degenerate_groups:
+                    g_label = _GOAL_LABEL.get(str(grp.get("goal", "")).lower(), str(grp.get("goal", "")))
+                    plats = ", ".join(
+                        PLATFORM_NAMES.get(str(p).lower(), str(p)) for p in grp.get("platforms", [])
+                    )
+                    st.caption(
+                        f"{g_label}: {plats} — split was set by proportional "
+                        f"redistribution, not by a meaningful productivity gap."
+                    )
+
     tabs = st.tabs([_human_scenario_name(k) for k in scenario_keys])
     scenario_payload_for_exports: List[Tuple[str, Module5LPResult, Optional[Module6Result]]] = []
 
