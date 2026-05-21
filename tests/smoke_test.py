@@ -446,6 +446,104 @@ def test_equal_productivity_gives_balanced_allocation() -> None:
     )
 
 
+def test_goal_value_weights_shift_allocation_toward_high_value_goal() -> None:
+    """When the user declares 'a lead is worth £200 to me, an impression £0.0005',
+    the LP should allocate substantially more to lead-gen than when goal weights
+    fall back to priority frequency.
+
+    Same inputs as the multi-objective regression test, plus explicit goal values.
+    """
+    from modules.module2 import run_module2
+    from modules.module3 import finalise_module3_from_inputs
+    from modules.module4 import run_module4
+    from modules.module5 import run_module5
+
+    def _alloc(goal_values=None) -> dict:
+        s = WizardState()
+        complete_module1_and_advance(
+            s,
+            raw_objectives=["aw", "en", "lg"],
+            raw_budget=20000.0,
+            raw_duration_days=30,
+            raw_goal_values=goal_values,
+        )
+        run_module2(
+            s,
+            selected_platforms=["fb", "ig", "li"],
+            priorities_input={
+                "fb": {"priority_1": "aw", "priority_2": "en"},
+                "ig": {"priority_1": "en", "priority_2": "aw"},
+                "li": {"priority_1": "lg", "priority_2": "en"},
+            },
+        )
+        finalise_module3_from_inputs(
+            s,
+            platform_inputs={
+                "fb": {"budget": 5000.0, "kpis": {"FB_AW_REACH": 500000.0, "FB_AW_IMPRESSION": 1200000.0, "FB_EN_ENGAGEMENT": 8000.0}},
+                "ig": {"budget": 4000.0, "kpis": {"IG_AW_REACH": 200000.0, "IG_EN_ENGRATERATE": 0.05}},
+                "li": {"budget": 5000.0, "kpis": {"LI_LG_LEADS": 80.0, "LI_EN_ENGRATERATE": 0.025}},
+            },
+        )
+        run_module4(s)
+        run_module5(s)
+        return s.module5_scenario_bundle.results_by_scenario["base"].budget_per_platform_goal
+
+    baseline = _alloc(goal_values=None)
+    weighted = _alloc(goal_values={"lg": 200.0, "en": 0.20, "aw": 0.0005})
+
+    li_baseline = sum(baseline.get("li", {}).values())
+    li_weighted = sum(weighted.get("li", {}).values())
+
+    assert li_weighted > li_baseline, (
+        f"With high £/lead value, LI (the LG platform) should get more than baseline. "
+        f"Baseline LI=£{li_baseline:.0f}, weighted LI=£{li_weighted:.0f}."
+    )
+
+
+def test_module6_count_kpi_has_confidence_band() -> None:
+    """Module 6 must surface a ±band on every count-KPI forecast so the
+    output cannot be mistaken for a precise commitment."""
+    from modules.module6 import compute_module6_forecast, DEFAULT_UNCERTAINTY_BAND
+    from modules.module5 import Module5LPResult
+    from core.kpi_config import KIND_COUNT
+
+    lp = Module5LPResult(
+        budget_per_platform_goal={"fb": {"lg": 5000.0}},
+        budget_per_platform={"fb": 5000.0},
+        total_budget_used=5000.0,
+        objective_value=1.0,
+        r_pg={"fb": {"lg": 1.0}},
+        combined_weight_pg={"fb": {"lg": 1.0}},
+        estimated_kpi_per_platform_goal={"fb": {"lg": 100.0}},
+    )
+    result = compute_module6_forecast({"fb": {"lg": {"FB_LG_LEADS": 0.025}}}, lp)
+    count_rows = [r for r in result.rows if r.kpi_kind == KIND_COUNT]
+    assert count_rows, "Expected at least one count-KPI row"
+    row = count_rows[0]
+    assert row.predicted_kpi_low < row.predicted_kpi < row.predicted_kpi_high
+    expected_low = row.predicted_kpi * (1.0 - DEFAULT_UNCERTAINTY_BAND)
+    assert row.predicted_kpi_low == pytest.approx(expected_low)
+
+
+def test_module7_includes_forecast_caveat() -> None:
+    """Every Module 7 output should include the standard caveat about
+    historical-vs-future performance, plus an extension when goal values
+    are missing."""
+    state = _run_pipeline_to_module5()
+    from modules.module6 import run_module6
+    from modules.module7 import run_module7
+
+    run_module6(state)
+    bundle = state.module5_scenario_bundle
+    fc = state.module6_scenario_result.results_by_scenario
+    insights = run_module7(state, bundle, fc)
+
+    assert insights.forecast_caveat
+    assert "historical" in insights.forecast_caveat.lower()
+    # No goal_value_per_unit set → extended note must appear
+    assert "no per-goal economic values" in insights.forecast_caveat.lower()
+
+
 def test_module6_rate_kpi_not_multiplied_by_budget() -> None:
     from modules.module6 import compute_module6_forecast, Module6ForecastRow
     from modules.module5 import Module5LPResult

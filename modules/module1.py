@@ -59,6 +59,9 @@ class Module1Result:
     total_budget: float
     currency: str = DEFAULT_CURRENCY
     campaign_duration_days: Optional[int] = None
+    # £ value the user assigns to one unit of each goal's KPI.
+    # e.g. {"lg": 100.0, "aw": 0.001} = a lead is worth £100, an impression £0.001.
+    goal_value_per_unit: Dict[str, float] = field(default_factory=dict)
 
 
 def _normalise_objectives(raw_objectives: Sequence[str]) -> List[str]:
@@ -212,6 +215,48 @@ def _parse_duration(raw_duration: Any) -> Optional[int]:
     return d if d > 0 else None
 
 
+def _parse_goal_values(
+    raw_values: Any,
+    valid_objectives: Sequence[str],
+) -> Dict[str, float]:
+    """Parse a {goal_code: £-value-per-unit} mapping.
+
+    Keys not in *valid_objectives* are dropped.  Values must be positive
+    finite numbers (£ per one unit of the goal's KPI — e.g. £100 per lead,
+    £0.001 per impression).
+    """
+    if raw_values is None:
+        return {}
+    if not isinstance(raw_values, dict):
+        raise Module1ValidationError(
+            "goal_value_per_unit must be a dict like {'lg': 100.0, 'aw': 0.001}."
+        )
+
+    allowed = {str(g).strip().lower() for g in valid_objectives}
+    cleaned: Dict[str, float] = {}
+    for g, v in raw_values.items():
+        gk = str(g).strip().lower()
+        if gk not in allowed:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            raise Module1ValidationError(
+                f"goal_value_per_unit[{gk!r}] must be numeric, got {v!r}."
+            )
+        if math.isnan(fv) or math.isinf(fv):
+            raise Module1ValidationError(
+                f"goal_value_per_unit[{gk!r}] must be finite."
+            )
+        if fv < 0:
+            raise Module1ValidationError(
+                f"goal_value_per_unit[{gk!r}] must be non-negative, got {fv}."
+            )
+        if fv > 0:
+            cleaned[gk] = fv
+    return cleaned
+
+
 def _validate_budget(numeric_budget: float) -> None:
     if numeric_budget <= 1:
         raise Module1ValidationError(
@@ -230,6 +275,7 @@ def run_module_1(
     raw_budget: Any,
     raw_currency: Any = None,
     raw_duration_days: Any = None,
+    raw_goal_values: Any = None,
 ) -> Module1Result:
     normalised_objectives = _normalise_objectives(raw_objectives)
     _validate_objectives(normalised_objectives)
@@ -239,12 +285,14 @@ def run_module_1(
 
     currency = _parse_currency(raw_currency, fallback=detected_currency)
     campaign_duration_days = _parse_duration(raw_duration_days)
+    goal_values = _parse_goal_values(raw_goal_values, normalised_objectives)
 
     return Module1Result(
         selected_objectives=normalised_objectives,
         total_budget=numeric_budget,
         currency=currency,
         campaign_duration_days=campaign_duration_days,
+        goal_value_per_unit=goal_values,
     )
 
 
@@ -254,6 +302,7 @@ def complete_module1_and_advance(
     raw_budget: Any,
     raw_currency: Any = None,
     raw_duration_days: Any = None,
+    raw_goal_values: Any = None,
 ) -> WizardState:
     if state.module1_finalised:
         raise FlowStateError(
@@ -266,13 +315,16 @@ def complete_module1_and_advance(
             "Module 1 can only be completed when the wizard is at step 1."
         )
 
-    result = run_module_1(raw_objectives, raw_budget, raw_currency, raw_duration_days)
+    result = run_module_1(
+        raw_objectives, raw_budget, raw_currency, raw_duration_days, raw_goal_values
+    )
 
     state.complete_module1_and_advance(
         valid_goals=result.selected_objectives,
         total_budget=result.total_budget,
         currency=result.currency,
         campaign_duration_days=result.campaign_duration_days,
+        goal_value_per_unit=result.goal_value_per_unit,
     )
 
     return state

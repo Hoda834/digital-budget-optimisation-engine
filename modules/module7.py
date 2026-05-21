@@ -59,6 +59,27 @@ class Module7BundleInsight:
     global_stability_explanation: str = ""
     global_data_quality_note: Optional[str] = None
     global_notes: List[str] = field(default_factory=list)
+    # Standard caveat shown alongside every plan: digital ad performance changes
+    # week to week, so historical ratios should be validated against live
+    # platform data before committing the full budget.
+    forecast_caveat: str = ""
+
+
+_FORECAST_CAVEAT = (
+    "Forecasts assume historical KPI ratios will hold over the campaign window. "
+    "Actual results commonly differ by 20-40% due to algorithm updates, "
+    "seasonality, competitive bidding pressure, audience saturation, and "
+    "creative fatigue. Validate against current platform benchmarks before "
+    "committing the full budget."
+)
+
+_NO_VALUE_WEIGHTS_NOTE = (
+    " No per-goal economic values were provided, so goal weights were derived "
+    "from priority frequency. This approximates but does not measure the relative "
+    "business value of each objective. For multi-objective campaigns, supply "
+    "raw_goal_values (e.g. {'lg': 100.0, 'aw': 0.001}) in Module 1 to get a "
+    "ROAS-weighted allocation."
+)
 
 
 def _f(x: object) -> float:
@@ -611,6 +632,12 @@ def run_module7(
 
     if global_dq:
         out.global_data_quality_note = " ".join(sorted(set(global_dq)))
+
+    # Standard forecast caveat, extended when goal-value weights are missing.
+    caveat = _FORECAST_CAVEAT
+    if not (getattr(state, "goal_value_per_unit", None) or {}):
+        caveat += _NO_VALUE_WEIGHTS_NOTE
+    out.forecast_caveat = caveat
 
     # Populate global notes with campaign-level context.
     n_platforms = len(getattr(state, "active_platforms", []) or [])

@@ -14,6 +14,13 @@ _KPI_KIND: Dict[str, str] = {
     for row in KPI_CONFIG
 }
 
+# Default ±30% confidence band on count-KPI forecasts.  Without multi-period
+# variance data we apply a flat band that reflects the typical week-to-week
+# spread of digital ad performance (algorithm shifts, auction noise, creative
+# fatigue).  The band is shown alongside the point estimate so the user does
+# not mistake "predicted 425,000 reach" for a precise commitment.
+DEFAULT_UNCERTAINTY_BAND = 0.30
+
 
 @dataclass
 class Module6ForecastRow:
@@ -24,6 +31,8 @@ class Module6ForecastRow:
     ratio_kpi_per_budget: float   # count KPI: units/£; rate KPI: the rate value itself
     allocated_budget: float
     predicted_kpi: float          # count KPI: units; rate KPI: expected rate (dimensionless)
+    predicted_kpi_low: float = 0.0    # lower bound of the confidence band
+    predicted_kpi_high: float = 0.0   # upper bound of the confidence band
 
 
 @dataclass
@@ -50,6 +59,8 @@ class Module6Result:
                 "ratio_kpi_per_budget": r.ratio_kpi_per_budget,
                 "allocated_budget": r.allocated_budget,
                 "predicted_kpi": r.predicted_kpi,
+                "predicted_kpi_low": r.predicted_kpi_low,
+                "predicted_kpi_high": r.predicted_kpi_high,
             }
             for r in self.rows
         ]
@@ -111,6 +122,7 @@ def compute_module6_forecast(
     kpi_ratios: Dict[str, Dict[str, Dict[str, float]]],
     module5_result: Module5LPResult,
     min_budget_threshold: float = 1.0,
+    uncertainty_band: float = DEFAULT_UNCERTAINTY_BAND,
 ) -> Module6Result:
     """Produce per-KPI forecasts from the LP allocation.
 
@@ -182,6 +194,17 @@ def compute_module6_forecast(
                     d.skipped_invalid_ratio_items += 1
                     continue
 
+                # Confidence band: count KPIs get a ±band% range to reflect the
+                # inherent noise of digital ad performance.  Rate KPIs already
+                # bake in averaging across the historical window, so we keep
+                # the point estimate without a wider band.
+                if kind == KIND_COUNT and uncertainty_band > 0:
+                    p_low = predicted * (1.0 - uncertainty_band)
+                    p_high = predicted * (1.0 + uncertainty_band)
+                else:
+                    p_low = predicted
+                    p_high = predicted
+
                 rows.append(
                     Module6ForecastRow(
                         platform=p,
@@ -191,6 +214,8 @@ def compute_module6_forecast(
                         ratio_kpi_per_budget=ratio_val,
                         allocated_budget=budget_val,
                         predicted_kpi=predicted,
+                        predicted_kpi_low=p_low,
+                        predicted_kpi_high=p_high,
                     )
                 )
                 any_row = True
@@ -208,6 +233,7 @@ def compute_module6_forecast_for_scenarios(
     kpi_ratios: Dict[str, Dict[str, Dict[str, float]]],
     module5_bundle: Module5ScenarioBundle,
     min_budget_threshold: float = 1.0,
+    uncertainty_band: float = DEFAULT_UNCERTAINTY_BAND,
 ) -> Module6ScenarioResult:
     results_by_scenario: Dict[str, Module6Result] = {}
     for scenario_name, lp_res in module5_bundle.results_by_scenario.items():
@@ -215,6 +241,7 @@ def compute_module6_forecast_for_scenarios(
             kpi_ratios=kpi_ratios,
             module5_result=lp_res,
             min_budget_threshold=min_budget_threshold,
+            uncertainty_band=uncertainty_band,
         )
     return Module6ScenarioResult(results_by_scenario=results_by_scenario)
 
@@ -222,6 +249,7 @@ def compute_module6_forecast_for_scenarios(
 def run_module6(
     state: WizardState,
     min_budget_threshold: float = 1.0,
+    uncertainty_band: float = DEFAULT_UNCERTAINTY_BAND,
 ) -> WizardState:
     if not state.module3_finalised:
         raise ValueError("Module 6 requires Module 3 to be finalised.")
@@ -237,6 +265,7 @@ def run_module6(
             kpi_ratios=state.kpi_ratios,
             module5_bundle=bundle,
             min_budget_threshold=min_budget_threshold,
+            uncertainty_band=uncertainty_band,
         )
         state.complete_module6(
             module6_result=scenario_forecast.get_base(),
@@ -249,6 +278,7 @@ def run_module6(
             kpi_ratios=state.kpi_ratios,
             module5_result=state.module5_result,
             min_budget_threshold=min_budget_threshold,
+            uncertainty_band=uncertainty_band,
         )
         state.complete_module6(
             module6_result=forecast,

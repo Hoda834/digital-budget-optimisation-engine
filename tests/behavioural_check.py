@@ -30,11 +30,14 @@ def _run(
     priorities: Dict[str, Dict[str, str]],
     platform_inputs: Dict[str, Dict],
     duration: int = 30,
+    goal_values: Dict[str, float] = None,
 ) -> None:
     print(f"\n{SEP}\n{title}\n{SEP}")
     print(f"  Objectives : {objectives}")
     print(f"  Total budget: £{total_budget:,.0f}   Campaign: {duration} days")
     print(f"  Priorities : {priorities}")
+    if goal_values:
+        print(f"  Goal values: {goal_values}")
     print(f"  Platform historical inputs:")
     for p, pin in platform_inputs.items():
         print(f"    {p}: £{pin['budget']:,.0f} spent → {pin['kpis']}")
@@ -45,6 +48,7 @@ def _run(
         raw_objectives=objectives,
         raw_budget=total_budget,
         raw_duration_days=duration,
+        raw_goal_values=goal_values,
     )
     run_module2(state, selected_platforms=platforms, priorities_input=priorities)
     finalise_module3_from_inputs(state, platform_inputs=platform_inputs)
@@ -76,6 +80,17 @@ def _run(
                   f"(cap £{r.effective_budget_cap:,.0f}, "
                   f"objective={r.objective_value:,.0f})")
 
+    print("\n  Module 6 base forecast (with ±30% band on count KPIs):")
+    base_fc = forecasts.get("base")
+    if base_fc:
+        for row in base_fc.rows[:6]:
+            if row.kpi_kind == "count":
+                print(f"    {row.platform}/{row.objective}/{row.kpi_name}: "
+                      f"~{row.predicted_kpi:,.0f}  (range {row.predicted_kpi_low:,.0f} – {row.predicted_kpi_high:,.0f})")
+            else:
+                print(f"    {row.platform}/{row.objective}/{row.kpi_name}: "
+                      f"{row.predicted_kpi:.1%} rate (historical signal)")
+
     print("\n  Module 7 base insight:")
     base_ins = insights.scenario_insights.get("base")
     if base_ins:
@@ -88,6 +103,8 @@ def _run(
             print(f"    Binding           : {base_ins.binding_constraints}")
     if insights.global_notes:
         print(f"    Global notes      : {insights.global_notes}")
+    if insights.forecast_caveat:
+        print(f"\n  Caveat: {insights.forecast_caveat}")
 
 
 # ------------------------------------------------------------------------------
@@ -285,6 +302,46 @@ def case_realistic_mixed() -> None:
     )
 
 
+def case_realistic_mixed_with_goal_values() -> None:
+    _run(
+        "CASE 5B: SAME B2B MIX, but strategist provides goal values "
+        "(1 lead = £200, 1 engagement = £0.20, 1 reach impression = £0.0005)",
+        objectives=["aw", "en", "lg"],
+        total_budget=20000.0,
+        platforms=["fb", "ig", "li"],
+        priorities={
+            "fb": {"priority_1": "aw", "priority_2": "en"},
+            "ig": {"priority_1": "en", "priority_2": "aw"},
+            "li": {"priority_1": "lg", "priority_2": "en"},
+        },
+        goal_values={"lg": 200.0, "en": 0.20, "aw": 0.0005},
+        platform_inputs={
+            "fb": {
+                "budget": 5000.0,
+                "kpis": {
+                    "FB_AW_REACH": 500000.0,
+                    "FB_AW_IMPRESSION": 1200000.0,
+                    "FB_EN_ENGAGEMENT": 8000.0,
+                },
+            },
+            "ig": {
+                "budget": 4000.0,
+                "kpis": {
+                    "IG_AW_REACH": 200000.0,
+                    "IG_EN_ENGRATERATE": 0.05,
+                },
+            },
+            "li": {
+                "budget": 5000.0,
+                "kpis": {
+                    "LI_LG_LEADS": 80.0,
+                    "LI_EN_ENGRATERATE": 0.025,
+                },
+            },
+        },
+    )
+
+
 if __name__ == "__main__":
     case_awareness_only()
     case_leads_only()
@@ -294,4 +351,5 @@ if __name__ == "__main__":
     case_identical()
     case_same_kpi_different_budget()
     case_realistic_mixed()
+    case_realistic_mixed_with_goal_values()
     print(f"\n{SEP}\nAll behavioural cases completed.\n{SEP}")

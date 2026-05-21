@@ -43,6 +43,13 @@ class WizardState:
     currency: str = DEFAULT_CURRENCY
     campaign_duration_days: Optional[int] = None
 
+    # User-provided economic value per unit of each goal's KPI
+    # (e.g. {"lg": 100.0, "aw": 0.001} = "1 lead is worth £100, 1 impression
+    # is worth £0.001 to my business").  When set, Module 5 derives system
+    # goal weights from value × productivity (expected ROAS per goal)
+    # instead of from priority-frequency.
+    goal_value_per_unit: Dict[str, float] = field(default_factory=dict)
+
     system_goal_weights: Dict[str, float] = field(default_factory=dict)
 
     platform_priorities: Dict[str, Any] = field(default_factory=dict)
@@ -86,6 +93,7 @@ class WizardState:
         total_budget: float,
         currency: str = DEFAULT_CURRENCY,
         campaign_duration_days: Optional[int] = None,
+        goal_value_per_unit: Optional[Dict[str, float]] = None,
     ) -> None:
         self._ensure_step(expected_step=1)
         if self.module1_finalised:
@@ -113,6 +121,20 @@ class WizardState:
         self.valid_goals = list(dict.fromkeys(goals))
         self.total_budget = b
         self.currency = cur
+
+        if goal_value_per_unit:
+            cleaned: Dict[str, float] = {}
+            for g, v in goal_value_per_unit.items():
+                gk = str(g).strip().lower()
+                if gk not in self.valid_goals:
+                    continue
+                try:
+                    fv = float(v)
+                except (TypeError, ValueError):
+                    raise ValueError(f"goal_value_per_unit[{gk!r}] must be numeric.")
+                if fv > 0:
+                    cleaned[gk] = fv
+            self.goal_value_per_unit = cleaned
 
         self.module1_finalised = True
         self.current_step = 2

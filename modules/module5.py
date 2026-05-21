@@ -227,6 +227,41 @@ def _build_r_pg_from_state(state: WizardState) -> Dict[str, Dict[str, float]]:
     return r_pg
 
 
+def _representative_productivity_per_goal(state: WizardState) -> Dict[str, float]:
+    """Mean raw productivity per goal across active platforms (pre-normalisation).
+
+    For count KPIs the unit is count/£; for rate KPIs it is the rate value itself.
+    Used to convert user-provided £-value-per-unit into a goal weight via
+    weight[g] = value_per_unit[g] × representative_productivity[g] (= expected ROAS).
+    """
+    kind_lookup: Dict[Tuple[str, str], str] = {
+        (row["platform"], row["var"]): row.get("kind", KIND_COUNT)
+        for row in KPI_CONFIG
+    }
+    by_goal: Dict[str, List[float]] = {g: [] for g in state.valid_goals}
+    for p in (getattr(state, "active_platforms", []) or []):
+        for g in state.valid_goals:
+            ratios = state.kpi_ratios.get(p, {}).get(g, {})
+            if not ratios:
+                continue
+            count_vals: List[float] = []
+            rate_vals: List[float] = []
+            for var, val in ratios.items():
+                kind = kind_lookup.get((p, var), KIND_COUNT)
+                v = _safe_float(val, 0.0)
+                if v <= 0.0:
+                    continue
+                if kind == KIND_RATE:
+                    rate_vals.append(v)
+                else:
+                    count_vals.append(v)
+            if count_vals:
+                by_goal[g].append(sum(count_vals) / len(count_vals))
+            elif rate_vals:
+                by_goal[g].append(sum(rate_vals) / len(rate_vals))
+    return {g: (sum(v) / len(v) if v else 0.0) for g, v in by_goal.items()}
+
+
 def _build_system_goal_weights(state: WizardState) -> Dict[str, float]:
     # 1) honour any caller-set weights
     if getattr(state, "system_goal_weights", None):
@@ -242,7 +277,24 @@ def _build_system_goal_weights(state: WizardState) -> Dict[str, float]:
     if not getattr(state, "valid_goals", None):
         raise Module5ValidationError("Cannot build system_goal_weights because valid_goals is empty.")
 
-    # 2) derive from Module 2 platform priorities: each platform contributes
+    # 2a) Prefer user-provided economic values when available.
+    # weight[g] = value_per_unit[g] × representative_productivity[g]
+    # The product expresses expected £-return per £ invested in goal g —
+    # i.e. a relative ROAS — which is what a CMO/strategist actually trades off.
+    goal_values = getattr(state, "goal_value_per_unit", None) or {}
+    if goal_values and any(_safe_float(v, 0.0) > 0 for v in goal_values.values()):
+        rep_prod = _representative_productivity_per_goal(state)
+        derived: Dict[str, float] = {}
+        for g in state.valid_goals:
+            val = max(0.0, _safe_float(goal_values.get(g, 0.0), 0.0))
+            prod = max(0.0, _safe_float(rep_prod.get(g, 0.0), 0.0))
+            if val > 0.0 and prod > 0.0:
+                derived[g] = val * prod
+        total = sum(derived.values())
+        if total > 0.0:
+            return {g: w / total for g, w in derived.items()}
+
+    # 2b) derive from Module 2 platform priorities: each platform contributes
     #    rank-1 -> 2, rank-2 -> 1 to its respective goal. This makes the system-level
     #    weight a frequency-weighted preference instead of inert uniformity.
     derived: Dict[str, float] = {g: 0.0 for g in state.valid_goals}
