@@ -15,7 +15,8 @@ from modules.module1 import (
     complete_module1_and_advance as finalise_module1,
     Module1ValidationError,
 )
-from core.kpi_config import KPI_CONFIG
+from core.kpi_config import KPI_CONFIG, effective_kpi_config
+from modules.module3 import finalise_module3_from_inputs
 from modules.module2 import run_module2
 from modules.module4 import run_module4
 from modules.module5 import (
@@ -635,104 +636,97 @@ def create_pdf_bytes(
 
 def module3_ui(state: WizardState) -> None:
     st.header("Historical data")
+    st.caption(
+        "Tell the optimiser what each platform delivered for £X over the historical window. "
+        "Count KPIs (reach, leads, clicks) are totals; rate KPIs (engagement rate) are percentages. "
+        "Decimals are fine throughout."
+    )
 
-    m3_data: Dict[str, Dict[str, Any]] = {}
-    platform_budgets: Dict[str, float] = {}
-    platform_kpis: Dict[str, Dict[str, float]] = {}
+    default_days = int(getattr(state, "campaign_duration_days", None) or 30)
+    catalog = effective_kpi_config(state)
+    m3_inputs: Dict[str, Dict[str, Any]] = {}
 
     for platform in state.active_platforms:
-        platform_name = PLATFORM_NAMES.get(platform, platform.upper())
-        st.subheader(f"Data for {platform_name}")
+        platform_name = _platform_display_name(state, platform)
+        with st.expander(platform_name, expanded=True):
+            col_days, col_budget = st.columns([1, 2])
+            with col_days:
+                hist_days = st.number_input(
+                    "Historical window (days)",
+                    min_value=1, value=default_days, step=1,
+                    key=f"hist_days_{platform}",
+                    help="How many days of past performance these numbers cover. "
+                         "Confidence bands shrink as the window grows (more data → less noise).",
+                )
+            with col_budget:
+                budget = st.number_input(
+                    "Total budget spent in that window",
+                    min_value=1.01, value=1000.0, step=100.0, format="%.2f",
+                    key=f"budget_{platform}",
+                    help="Combined ad spend over the historical window. Decimals OK.",
+                )
 
-        time_window = st.text_input(
-            f"Time window for {platform_name} (for example: last 30 days)",
-            key=f"time_{platform}",
-        )
+            kpi_defs = [
+                row for row in catalog
+                if row["platform"] == platform
+                and row["goal"] in state.goals_by_platform.get(platform, [])
+            ]
 
-        budget = st.number_input(
-            f"Total historical budget on {platform_name} (must be greater than 1)",
-            min_value=1.01,
-            value=1000.0,
-            step=100.0,
-            key=f"budget_{platform}",
-        )
+            kpi_values: Dict[str, float] = {}
+            for kpi_def in kpi_defs:
+                var = kpi_def["var"]
+                label = kpi_def["kpi_label"]
+                kind = kpi_def.get("kind", "count")
+                goal_code = kpi_def["goal"]
+                goal_name = _GOAL_LABEL.get(goal_code, goal_code)
 
-        kpi_defs = [
-            row for row in KPI_CONFIG if row["platform"] == platform and row["goal"] in state.goals_by_platform.get(platform, [])
-        ]
+                if kind == "rate":
+                    # Rate KPIs are dimensionless ratios in [0, 1].  Show as a
+                    # percent slider — much easier to reason about than typing
+                    # "0.045"; store as fraction.
+                    pct = st.slider(
+                        f"{goal_name} · {label} (%)",
+                        min_value=0.0, max_value=100.0, value=2.5, step=0.1,
+                        key=f"{platform}_{var}",
+                        help=f"Average {label.lower()} as a percentage. Stored as a decimal.",
+                    )
+                    kpi_values[var] = pct / 100.0
+                else:
+                    # Count KPIs: total units over the historical window.
+                    # Decimals are accepted (some platforms report fractional values).
+                    val = st.number_input(
+                        f"{goal_name} · {label} (total over window)",
+                        min_value=0.0, value=1000.0, step=10.0, format="%.2f",
+                        key=f"{platform}_{var}",
+                        help=f"Total {label.lower()} recorded during the historical window. "
+                             f"Decimals OK (e.g. 1500.5 leads if you're averaging across multiple ad sets).",
+                    )
+                    kpi_values[var] = float(val)
 
-        kpi_values: Dict[str, float] = {}
-        for kpi_def in kpi_defs:
-            var = kpi_def["var"]
-            label = kpi_def["kpi_label"]
-            goal_code = kpi_def["goal"]
-            goal_name = GOAL_NAMES.get(goal_code, goal_code)
-            descriptive_label = f"{goal_name} - {label} on {platform_name} (must be greater than 1)"
+            m3_inputs[platform] = {
+                "time_window": f"{int(hist_days)} days",
+                "historical_days": int(hist_days),
+                "budget": float(budget),
+                "kpis": kpi_values,
+            }
 
-            val = st.number_input(
-                descriptive_label,
-                min_value=1.01,
-                value=1.01,
-                step=0.1,
-                key=f"{platform}_{var}",
-            )
-            kpi_values[var] = float(val)
-
-        m3_data[platform] = {"time_window": time_window, "budget": float(budget), "kpis": kpi_values}
-        platform_budgets[platform] = float(budget)
-        platform_kpis[platform] = kpi_values
-
-    can_run = True
-    for _, d in m3_data.items():
-        if not d.get("time_window"):
-            can_run = False
-            break
+    # Validate before allowing submit — keeps the button enabled until the
+    # user has at least one positive KPI value per platform.
+    can_run = bool(state.active_platforms)
+    for d in m3_inputs.values():
         if float(d.get("budget", 0.0)) <= 1.0:
             can_run = False
             break
-        for _, kpi_val in (d.get("kpis", {}) or {}).items():
-            if float(kpi_val) <= 1.0:
-                can_run = False
-                break
-        if not can_run:
+        if not any(float(v) > 0 for v in d.get("kpis", {}).values()):
+            can_run = False
             break
 
-    if st.button("Run optimisation", disabled=not can_run):
-        kpi_ratios: Dict[str, Dict[str, Dict[str, float]]] = {}
-
-        for platform in m3_data:
-            b = float(m3_data[platform]["budget"])
-            goals_for_platform = state.goals_by_platform.get(platform, [])
-
-            kpi_ratios[platform] = {}
-            for g in goals_for_platform:
-                kpi_ratios[platform][g] = {}
-
-            for row in KPI_CONFIG:
-                p = row["platform"]
-                g = row["goal"]
-                var = row["var"]
-
-                if p != platform:
-                    continue
-                if g not in goals_for_platform:
-                    continue
-
-                val = float(m3_data[platform]["kpis"].get(var, 0.0))
-                if val <= 0.0 or b <= 0.0:
-                    continue
-
-                kpi_ratios[platform][g][var] = val / b
-
-            kpi_ratios[platform] = {g: d for g, d in kpi_ratios[platform].items() if d}
-
-        state.complete_module3_and_advance(
-            module3_data=m3_data,
-            platform_budgets=platform_budgets,
-            platform_kpis=platform_kpis,
-            kpi_ratios=kpi_ratios,
-        )
-        safe_rerun()
+    if st.button("Run optimisation", disabled=not can_run, type="primary"):
+        try:
+            finalise_module3_from_inputs(state, platform_inputs=m3_inputs)
+            safe_rerun()
+        except (ValueError, RuntimeError) as e:
+            st.error(f"Could not finalise Module 3: {e}")
 
 
 def _get_module5_scenarios(state: WizardState) -> Dict[str, Module5LPResult]:
