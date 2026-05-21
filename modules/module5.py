@@ -1135,6 +1135,65 @@ def run_module5_lp_scenarios(input_data: Module5LPInput) -> Module5ScenarioBundl
     )
 
 
+@dataclass
+class Module5MissingDataCell:
+    """One platform/goal cell where the LP couldn't even consider the cell
+    because no input data was available — distinct from a cell the LP
+    weighed and chose to skip.
+
+    reason ∈ {'no_platform_data', 'no_cell_data'}:
+      - 'no_platform_data': the user selected the platform in Module 2 but
+        provided no KPI values at all in Module 3 (kpis dict was empty).
+      - 'no_cell_data': the platform has KPIs for some goals but not this
+        one (e.g. user gave AW reach but no LG leads on Facebook even
+        though LG was prioritised on FB).
+    """
+    platform: str
+    goal: Optional[str]  # None when the whole platform was empty
+    reason: str
+
+
+def detect_missing_data_cells(state: WizardState) -> List[Module5MissingDataCell]:
+    """List the (platform, goal) cells that got zero LP allocation purely
+    because the user didn't supply data — separated from cells the LP
+    chose to skip on merit.
+
+    Use this in the results UI to surface a 'we got nothing on these
+    cells, that's why they're missing from the plan' warning, so the
+    user can't mistake silence for an optimiser decision.
+    """
+    issues: List[Module5MissingDataCell] = []
+    kpi_ratios = getattr(state, "kpi_ratios", None) or {}
+    active_platforms = getattr(state, "active_platforms", None) or []
+    goals_by_platform = getattr(state, "goals_by_platform", None) or {}
+
+    for p in active_platforms:
+        platform_ratios = kpi_ratios.get(p, {}) or {}
+        if not platform_ratios:
+            # Selected in Module 2 but Module 3 received nothing for it.
+            issues.append(Module5MissingDataCell(
+                platform=p, goal=None, reason="no_platform_data",
+            ))
+            continue
+
+        prioritised_goals = goals_by_platform.get(p, []) or []
+        for g in prioritised_goals:
+            goal_ratios = platform_ratios.get(g, {}) or {}
+            # Empty dict, or only non-positive values, both mean the LP
+            # can't optimise this cell.
+            if not goal_ratios:
+                issues.append(Module5MissingDataCell(
+                    platform=p, goal=g, reason="no_cell_data",
+                ))
+                continue
+            if not any(_safe_float(v, 0.0) > 0.0 for v in goal_ratios.values()):
+                issues.append(Module5MissingDataCell(
+                    platform=p, goal=g, reason="no_cell_data",
+                ))
+
+    return issues
+
+
 def run_module5(state: WizardState) -> WizardState:
     if state.module5_finalised:
         raise FlowStateError("Module 5 has already been finalised. Reset the wizard to change it.")

@@ -783,6 +783,90 @@ def test_composition_partial_components_produce_partial_sum():
     assert len(bd["components"]) == 2
 
 
+def test_missing_data_detector_flags_empty_platform():
+    """A platform selected in M2 with no KPIs at all in M3 must be flagged
+    with reason 'no_platform_data' so the results UI can surface it."""
+    from modules.module5 import detect_missing_data_cells
+
+    s = WizardState()
+    complete_module1_and_advance(s, raw_objectives=["lg"], raw_budget=10000.0,
+                                 raw_duration_days=30)
+    run_module2(s, selected_platforms=["fb", "li"],
+                priorities_input={
+                    "fb": {"priority_1": "lg", "priority_2": None},
+                    "li": {"priority_1": "lg", "priority_2": None},
+                })
+    finalise_module3_from_inputs(s, platform_inputs={
+        "fb": {"budget": 3000.0, "kpis": {}},   # ← empty kpis
+        "li": {"budget": 3000.0, "kpis": {"LI_LG_LEADS": 80.0}},
+    })
+
+    issues = detect_missing_data_cells(s)
+    fb_issues = [i for i in issues if i.platform == "fb"]
+    assert fb_issues, "FB with empty kpis dict should be flagged"
+    assert fb_issues[0].reason == "no_platform_data"
+    assert fb_issues[0].goal is None
+
+
+def test_missing_data_detector_flags_cell_gap():
+    """A platform with some goals covered but not others should produce
+    per-cell 'no_cell_data' entries for the gaps."""
+    from modules.module5 import detect_missing_data_cells
+
+    s = WizardState()
+    complete_module1_and_advance(s, raw_objectives=["aw", "lg"], raw_budget=10000.0,
+                                 raw_duration_days=30)
+    run_module2(s, selected_platforms=["fb"],
+                priorities_input={"fb": {"priority_1": "aw", "priority_2": "lg"}})
+    # FB has AW data but NO LG data
+    finalise_module3_from_inputs(s, platform_inputs={
+        "fb": {"budget": 3000.0, "kpis": {"FB_AW_REACH": 200000.0}},
+    })
+
+    issues = detect_missing_data_cells(s)
+    lg_gaps = [i for i in issues if i.platform == "fb" and i.goal == "lg"]
+    assert lg_gaps, "FB·LG missing should be flagged"
+    assert lg_gaps[0].reason == "no_cell_data"
+
+
+def test_missing_data_detector_silent_when_complete():
+    """When every prioritised cell has data, the detector should return [].
+    No false positives — happy-path users shouldn't see spurious warnings."""
+    from modules.module5 import detect_missing_data_cells
+    from tests.smoke_test import _run_pipeline_to_module5
+
+    s = _run_pipeline_to_module5()
+    assert detect_missing_data_cells(s) == []
+
+
+def test_module3_none_kpi_value_raises_clean_valueerror():
+    """Passing None as a KPI value used to crash with TypeError from inside
+    float().  Should now raise ValueError with a useful message."""
+    s = WizardState()
+    complete_module1_and_advance(s, raw_objectives=["aw"], raw_budget=10000.0,
+                                 raw_duration_days=30)
+    run_module2(s, selected_platforms=["fb"],
+                priorities_input={"fb": {"priority_1": "aw", "priority_2": None}})
+    with pytest.raises(ValueError, match="must be numeric"):
+        finalise_module3_from_inputs(s, platform_inputs={
+            "fb": {"budget": 3000.0, "kpis": {"FB_AW_REACH": None}},
+        })
+
+
+def test_module3_string_kpi_value_raises_clean_valueerror():
+    """Strings that aren't numeric should also raise ValueError, not
+    propagate a raw ValueError from float() without the variable name."""
+    s = WizardState()
+    complete_module1_and_advance(s, raw_objectives=["aw"], raw_budget=10000.0,
+                                 raw_duration_days=30)
+    run_module2(s, selected_platforms=["fb"],
+                priorities_input={"fb": {"priority_1": "aw", "priority_2": None}})
+    with pytest.raises(ValueError, match="must be numeric"):
+        finalise_module3_from_inputs(s, platform_inputs={
+            "fb": {"budget": 3000.0, "kpis": {"FB_AW_REACH": "not a number"}},
+        })
+
+
 def test_composition_recompose_with_user_weights():
     """Simulate the Option C override: take the parsed breakdown, apply
     per-component weights, recompose with the same operator."""

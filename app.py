@@ -26,6 +26,7 @@ from modules.module5 import (
     run_module5,
     run_module5_montecarlo,
     DEFAULT_MC_TRIALS,
+    detect_missing_data_cells,
 )
 from modules.module6 import Module6Result, Module6ScenarioResult, run_module6
 
@@ -643,6 +644,15 @@ def module3_ui(state: WizardState) -> None:
         "Count KPIs (reach, leads, clicks) are totals; rate KPIs (engagement rate) are percentages. "
         "Decimals are fine throughout."
     )
+    st.warning(
+        "**Form fields are pre-filled with placeholder values** (e.g. 1,000 leads, "
+        "2.5% engagement rate).  These are *not* defaults you should accept — they're "
+        "starter numbers to keep the form interactive.  Replace each cell with your "
+        "actual historical KPI before relying on the plan, or upload a CSV to "
+        "pre-fill from real data.  The results page will warn you about any cells "
+        "with no data, but it cannot tell when a placeholder was submitted as real.",
+        icon="⚠️",
+    )
     st.info(
         "**How your numbers are used.** Values are compared *relative to other platforms* "
         "within the same objective — doubling every platform's reach won't shift the "
@@ -951,6 +961,35 @@ def results_ui(state: WizardState) -> None:
         "incrementality tests (geo lifts, holdout splits) before committing to "
         "material reallocations."
     )
+
+    # ── Missing-data warning (silent zeros made loud) ──────────────────────
+    # A platform/goal cell that got £0 because the user provided no input
+    # data looks identical in the allocation table to one the optimiser
+    # actively chose to skip.  Surface the distinction so users can't
+    # mistake "we had no information" for "the LP ranked this low."
+    missing_cells = detect_missing_data_cells(state)
+    if missing_cells:
+        lines = []
+        for cell in missing_cells:
+            pname = _platform_display_name(state, cell.platform)
+            if cell.reason == "no_platform_data":
+                lines.append(
+                    f"- **{pname}** — no KPI data provided for any objective"
+                )
+            else:
+                gname = _GOAL_LABEL.get(cell.goal or "", cell.goal or "")
+                lines.append(
+                    f"- **{pname} · {gname}** — no KPI value provided for this cell"
+                )
+        st.warning(
+            "**Some cells couldn't be optimised because input data was missing.**\n\n"
+            + "\n".join(lines)
+            + "\n\n_These platforms/goals got £0 not because the optimiser "
+              "ranked them low, but because there was nothing to rank.  "
+              "Go back to Module 3 and supply the missing values if you "
+              "want them considered._",
+            icon="⚠️",
+        )
 
     df_p, df_g, df_s = _policy_tables(state)
     df_sgm = _scenario_goal_multiplier_table(state)

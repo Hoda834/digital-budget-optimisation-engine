@@ -334,7 +334,16 @@ def finalise_module3_from_inputs(
         for var, raw_value in raw_kpis.items():
             if var not in allowed_vars:
                 continue
-            v = _validate_finite(float(raw_value), f"KPI {var}")
+            try:
+                v = _validate_finite(float(raw_value), f"KPI {var}")
+            except (TypeError, ValueError) as e:
+                # Translate raw float() / None failures into a clean
+                # ValueError with the offending value so API callers see
+                # a useful message instead of a TypeError from inside float.
+                raise ValueError(
+                    f"KPI {var} for platform {platform!r} must be numeric, "
+                    f"got {raw_value!r} ({type(raw_value).__name__})"
+                ) from e
             kind = next((r.get("kind", KIND_COUNT) for r in kpi_catalog
                          if r["platform"] == platform and r["var"] == var), KIND_COUNT)
             if kind == KIND_RATE:
