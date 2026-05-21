@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from core.wizard_state import WizardState, FlowStateError
 from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE
+
+
+# CPU values more than this multiple of the per-goal median are flagged as outliers
+# (likely caused by a tiny KPI count or a unit/scale error) and skipped.
+CPU_OUTLIER_MULTIPLE = 100.0
 
 
 class Module4ValidationError(Exception):
@@ -135,6 +140,45 @@ def run_module4(
                     continue
 
                 cpu_per_goal.setdefault(platform, {}).setdefault(goal, {})[var] = cpu
+
+    # Outlier sweep: tiny KPI counts (e.g. 1 lead from a £5,000 spend) yield CPUs
+    # that are orders of magnitude higher than their peers and would dominate the
+    # LP if used directly. We bucket by (goal, kpi_label) — that's "cost per Lead",
+    # "cost per Click" etc. across platforms — and drop rows above the threshold.
+    label_lookup = {(row["platform"], row["var"]): row["kpi_label"] for row in kpi_config}
+
+    by_goal_label: Dict[Tuple[str, str], List[float]] = {}
+    for p, gdict in cpu_per_goal.items():
+        for g, kdict in gdict.items():
+            for var, cpu in kdict.items():
+                label = label_lookup.get((p, var), var)
+                by_goal_label.setdefault((g, label), []).append(cpu)
+
+    medians: Dict[Tuple[str, str], float] = {
+        key: sorted(vals)[len(vals) // 2]
+        for key, vals in by_goal_label.items()
+        if len(vals) >= 2  # cannot detect outliers with fewer than 2 peers
+    }
+
+    for p in list(cpu_per_goal.keys()):
+        for g in list(cpu_per_goal[p].keys()):
+            for var in list(cpu_per_goal[p][g].keys()):
+                label = label_lookup.get((p, var), var)
+                median = medians.get((g, label), 0.0)
+                if median <= 0:
+                    continue
+                cpu = cpu_per_goal[p][g][var]
+                if cpu > median * CPU_OUTLIER_MULTIPLE:
+                    skipped.append(
+                        f"{p}/{g}/{var}: CPU {cpu:.2f} is >{CPU_OUTLIER_MULTIPLE:.0f}x "
+                        f"the cross-platform median for {label!r} ({median:.2f}); "
+                        f"dropped as outlier."
+                    )
+                    del cpu_per_goal[p][g][var]
+            if not cpu_per_goal[p][g]:
+                del cpu_per_goal[p][g]
+        if not cpu_per_goal[p]:
+            del cpu_per_goal[p]
 
     valid_platforms: Set[str] = {p for p, gdict in cpu_per_goal.items() if gdict}
 

@@ -14,6 +14,10 @@ from core.wizard_state import (
 
 ALLOWED_OBJECTIVES: Set[str] = {GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG}
 
+# Hard ceiling on total budget. 1e9 covers any plausible single-campaign budget
+# in major currencies; values above this are almost certainly a typo or unit error.
+MAX_REASONABLE_BUDGET = 1e9
+
 OBJECTIVE_DEFINITIONS: List[Dict[str, str]] = [
     {
         "code": GOAL_AW,
@@ -123,6 +127,12 @@ def _validate_budget(numeric_budget: float) -> None:
     if numeric_budget <= 1:
         raise Module1ValidationError(
             "Your total budget must be greater than 1 monetary unit."
+        )
+    if numeric_budget > MAX_REASONABLE_BUDGET:
+        raise Module1ValidationError(
+            f"Your total budget {numeric_budget:.0f} exceeds the sanity ceiling "
+            f"({MAX_REASONABLE_BUDGET:.0f}). Please check the value — this is "
+            f"likely a typo or a unit/scale error."
         )
 
 

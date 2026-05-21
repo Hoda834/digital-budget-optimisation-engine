@@ -26,12 +26,39 @@ def _validate_finite(value: float, label: str) -> float:
     return value
 
 
+def _parse_positive_int(value: Any, label: str) -> int:
+    try:
+        d = int(value)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"{label} must be a positive integer (got {value!r}).") from e
+    if d <= 0:
+        raise ValueError(f"{label} must be greater than zero (got {d}).")
+    return d
+
+
 def ask_required_string(prompt: str) -> str:
     while True:
         value = input(prompt).strip()
         if value:
             return value
         print("This field is required. Please enter a value.")
+
+
+def ask_required_positive_int(prompt: str) -> int:
+    while True:
+        text = input(prompt).strip()
+        if not text:
+            print("This field is required. Please enter a value.")
+            continue
+        try:
+            d = int(text)
+        except ValueError:
+            print("Please enter a whole number.")
+            continue
+        if d <= 0:
+            print("Value must be greater than zero.")
+            continue
+        return d
 
 
 def ask_required_budget_gt1(prompt: str) -> float:
@@ -159,14 +186,17 @@ def run_module3(state: WizardState) -> WizardState:
         print(f"Platform: {platform}")
         print("------------------------------------------\n")
 
-        time_window = ask_required_string(
-            f"Enter the time window for {platform} data "
-            f"(for example: 'last 30 days', 'Q4 2024'): "
+        historical_days = ask_required_positive_int(
+            f"How many days of {platform} history are you reporting "
+            f"(a positive integer, e.g. 30)? "
+        )
+        time_window_label = ask_required_string(
+            f"Optional label for this window (e.g. 'last 30 days', 'Q4 2024'): "
         )
 
         budget = ask_required_budget_gt1(
             f"Enter the historical budget spent on {platform} "
-            f"in this period in {currency} (numeric > 1): "
+            f"over {historical_days} days in {currency} (numeric > 1): "
         )
 
         active_goals = state.goals_by_platform.get(platform, [])
@@ -197,7 +227,8 @@ def run_module3(state: WizardState) -> WizardState:
             kpi_values[var] = value
 
         temp_module3_data[platform] = {
-            "time_window": time_window,
+            "time_window": time_window_label,
+            "historical_days": historical_days,
             "budget": budget,
             "kpis": kpi_values,
         }
@@ -255,6 +286,8 @@ def finalise_module3_from_inputs(
         raise RuntimeError("No active platforms found. Nothing to do in Module 3.")
 
     cleaned: Dict[str, Dict[str, Any]] = {}
+    campaign_days = getattr(state, "campaign_duration_days", None)
+
     for platform in state.active_platforms:
         if platform not in platform_inputs:
             raise ValueError(f"Module 3 inputs missing for platform {platform!r}.")
@@ -265,9 +298,14 @@ def finalise_module3_from_inputs(
             raise ValueError(f"Module 3 inputs invalid for platform {platform!r}: {e}") from e
         if budget <= 1.0:
             raise ValueError(f"Historical budget for {platform!r} must be greater than 1.")
-        time_window = str(pin.get("time_window", "")).strip()
-        if not time_window:
-            raise ValueError(f"Module 3 inputs for {platform!r} need a non-empty time_window.")
+
+        historical_days = _parse_positive_int(
+            pin.get("historical_days") if "historical_days" in pin else campaign_days,
+            f"historical_days for {platform}",
+        )
+        time_window_label = str(pin.get("time_window", f"{historical_days} days")).strip()
+        if not time_window_label:
+            time_window_label = f"{historical_days} days"
 
         raw_kpis = pin.get("kpis", {})
         if not isinstance(raw_kpis, dict):
@@ -296,7 +334,12 @@ def finalise_module3_from_inputs(
                     raise ValueError(f"Count KPI {var} must be greater than zero.")
             validated_kpis[var] = v
 
-        cleaned[platform] = {"time_window": time_window, "budget": budget, "kpis": validated_kpis}
+        cleaned[platform] = {
+            "time_window": time_window_label,
+            "historical_days": historical_days,
+            "budget": budget,
+            "kpis": validated_kpis,
+        }
 
     return _finalise_module3(state, cleaned)
 

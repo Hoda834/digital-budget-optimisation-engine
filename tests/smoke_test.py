@@ -35,17 +35,15 @@ def _run_pipeline_to_module5(
     *,
     valid_goals=("aw", "en", "lg"),
     total_budget=10000.0,
-    currency="GBP",
     campaign_duration_days=30,
 ) -> WizardState:
     state = WizardState()
+    state.campaign_duration_days = campaign_duration_days
 
     complete_module1_and_advance(
         state,
         raw_objectives=list(valid_goals),
         raw_budget=total_budget,
-        raw_currency=currency,
-        raw_duration_days=campaign_duration_days,
     )
 
     run_module2(
@@ -122,27 +120,12 @@ def test_full_pipeline_smoke() -> None:
         assert used <= lp_res.effective_budget_cap + 1e-6
 
 
-def test_currency_and_duration_persisted() -> None:
-    state = WizardState()
-    complete_module1_and_advance(
-        state,
-        raw_objectives=["aw", "lg"],
-        raw_budget="£1,200.50",
-        raw_currency=None,  # should auto-detect GBP from symbol
-        raw_duration_days="45",
-    )
-    assert state.currency == "GBP"
-    assert state.campaign_duration_days == 45
-    assert state.total_budget == pytest.approx(1200.50)
-
-
 def test_module2_excludes_non_priority_goals() -> None:
     state = WizardState()
     complete_module1_and_advance(
         state,
         raw_objectives=["aw", "en", "wt", "lg"],
         raw_budget=10000.0,
-        raw_currency="GBP",
     )
     run_module2(
         state,
@@ -235,3 +218,103 @@ def test_wizard_state_reset() -> None:
     assert state.module1_finalised is False
     assert state.valid_goals == []
     assert state.current_step == 1
+
+
+def test_module1_rejects_absurd_budget() -> None:
+    from modules.module1 import MAX_REASONABLE_BUDGET, Module1ValidationError
+
+    state = WizardState()
+    with pytest.raises(Module1ValidationError, match="sanity ceiling"):
+        complete_module1_and_advance(
+            state,
+            raw_objectives=["aw"],
+            raw_budget=MAX_REASONABLE_BUDGET * 10,
+        )
+
+
+def test_module2_min_budget_per_goal_only_covers_prioritised_goals() -> None:
+    state = WizardState()
+    complete_module1_and_advance(
+        state,
+        raw_objectives=["aw", "en", "wt", "lg"],
+        raw_budget=10000.0,
+    )
+    run_module2(
+        state,
+        selected_platforms=["fb"],
+        priorities_input={"fb": {"priority_1": "aw", "priority_2": None}},
+    )
+    # Only AW is prioritised anywhere; WT/EN/LG should not reserve budget.
+    assert set(state.min_budget_per_goal.keys()) == {"aw"}
+    assert state.min_budget_per_goal["aw"] > 0
+
+
+def test_module3_records_historical_days() -> None:
+    state = _run_pipeline_to_module5()
+    for p, pdata in state.module3_data.items():
+        assert "historical_days" in pdata
+        assert isinstance(pdata["historical_days"], int)
+        assert pdata["historical_days"] > 0
+
+
+def test_module3_falls_back_to_campaign_duration_for_historical_days() -> None:
+    from modules.module3 import finalise_module3_from_inputs as fin
+
+    state = WizardState()
+    complete_module1_and_advance(state, raw_objectives=["aw"], raw_budget=10000.0)
+    state.campaign_duration_days = 30  # not set by M1; caller sets directly
+    run_module2(
+        state,
+        selected_platforms=["fb"],
+        priorities_input={"fb": {"priority_1": "aw", "priority_2": None}},
+    )
+    fin(
+        state,
+        platform_inputs={
+            "fb": {
+                "budget": 4000.0,
+                "kpis": {"FB_AW_REACH": 200000.0},
+                # historical_days intentionally omitted
+            }
+        },
+    )
+    assert state.module3_data["fb"]["historical_days"] == 30
+
+
+def test_module4_drops_extreme_cpu_outliers() -> None:
+    from modules.module4 import run_module4, CPU_OUTLIER_MULTIPLE
+    from modules.module3 import finalise_module3_from_inputs
+
+    state = WizardState()
+    complete_module1_and_advance(state, raw_objectives=["lg"], raw_budget=10000.0)
+    state.campaign_duration_days = 30
+    run_module2(
+        state,
+        selected_platforms=["fb", "ig", "li"],
+        priorities_input={
+            "fb": {"priority_1": "lg", "priority_2": None},
+            "ig": {"priority_1": "lg", "priority_2": None},
+            "li": {"priority_1": "lg", "priority_2": None},
+        },
+    )
+    # FB and IG: 100 leads from £4k → CPU 40. LI: 0.001 leads from £4k → CPU 4M (outlier).
+    finalise_module3_from_inputs(
+        state,
+        platform_inputs={
+            "fb": {"budget": 4000.0, "historical_days": 30, "kpis": {"FB_LG_LEADS": 100.0}},
+            "ig": {"budget": 4000.0, "historical_days": 30, "kpis": {"IG_LG_LEADS": 100.0}},
+            "li": {"budget": 4000.0, "historical_days": 30, "kpis": {"LI_LG_LEADS": 0.001}},
+        },
+    )
+    result = run_module4(state)
+    assert "li" not in result.cpu_per_goal or "lg" not in result.cpu_per_goal.get("li", {})
+    assert any("outlier" in row for row in result.skipped_rows)
+
+
+def test_module5_attaches_cpu_per_goal_to_results() -> None:
+    state = _run_pipeline_to_module5()
+    bundle = _get_module5_bundle(state)
+    base = bundle.results_by_scenario["base"]
+    assert base.cpu_per_goal, "cpu_per_goal should be populated on the LP result"
+    for name, res in bundle.results_by_scenario.items():
+        assert res.cpu_per_goal == base.cpu_per_goal

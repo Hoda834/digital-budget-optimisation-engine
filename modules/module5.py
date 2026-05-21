@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import math
@@ -40,6 +40,7 @@ class Module5LPInput:
     min_budget_per_goal: Dict[str, float]
     scenario_multipliers: Dict[str, float]
     scenario_goal_multipliers: Dict[str, Dict[str, float]]
+    cpu_per_goal: Dict[str, Dict[str, Dict[str, float]]] = field(default_factory=dict)
 
 
 @dataclass
@@ -53,6 +54,10 @@ class Module5LPResult:
     estimated_kpi_per_platform_goal: Dict[str, Dict[str, float]]
     objective_value_raw: float = 0.0
     effective_budget_cap: float = 0.0
+    # M4's cost-per-unit-KPI table, attached for reporting/UI. Not used in the LP
+    # itself (the LP needs yields, which are the reciprocals); exposed here so
+    # downstream modules and the UI can present both views.
+    cpu_per_goal: Dict[str, Dict[str, Dict[str, float]]] = field(default_factory=dict)
 
 
 @dataclass
@@ -351,6 +356,14 @@ def build_module5_input_from_state(state: WizardState) -> Module5LPInput:
         total_budget=float(state.total_budget),
     )
 
+    module4_result = getattr(state, "module4_result", None)
+    cpu_per_goal = (
+        {p: {g: dict(kdict) for g, kdict in gdict.items()}
+         for p, gdict in module4_result.cpu_per_goal.items()}
+        if module4_result is not None
+        else {}
+    )
+
     return Module5LPInput(
         valid_goals=list(state.valid_goals),
         total_budget=float(state.total_budget),
@@ -362,6 +375,7 @@ def build_module5_input_from_state(state: WizardState) -> Module5LPInput:
         min_budget_per_goal=min_budget_per_goal,
         scenario_multipliers=scenario_multipliers,
         scenario_goal_multipliers=scenario_goal_multipliers,
+        cpu_per_goal=cpu_per_goal,
     )
 
 
@@ -376,6 +390,7 @@ def _solve_single_lp(
     min_spend_per_platform: Dict[str, float],
     min_budget_per_goal: Dict[str, float],
     budget_cap: float,
+    cpu_per_goal: Optional[Dict[str, Dict[str, Dict[str, float]]]] = None,
 ) -> Module5LPResult:
     if not valid_goals:
         raise Module5ValidationError("Module 5 LP, valid_goals is empty.")
@@ -524,6 +539,7 @@ def _solve_single_lp(
         estimated_kpi_per_platform_goal=estimated_kpi_per_platform_goal,
         objective_value_raw=objective_value_raw,
         effective_budget_cap=budget_cap,
+        cpu_per_goal=cpu_per_goal or {},
     )
 
 
@@ -538,6 +554,7 @@ def run_module5_lp(input_data: Module5LPInput) -> Module5LPResult:
         min_spend_per_platform=input_data.min_spend_per_platform,
         min_budget_per_goal=input_data.min_budget_per_goal,
         budget_cap=input_data.total_budget,
+        cpu_per_goal=input_data.cpu_per_goal,
     )
 
 
@@ -598,6 +615,7 @@ def run_module5_lp_scenarios(input_data: Module5LPInput) -> Module5ScenarioBundl
             min_spend_per_platform=input_data.min_spend_per_platform,
             min_budget_per_goal=input_data.min_budget_per_goal,
             budget_cap=budget_cap,
+            cpu_per_goal=input_data.cpu_per_goal,
         )
 
     if not results:

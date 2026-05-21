@@ -227,16 +227,25 @@ def apply_default_policies(
     active_platforms = list(state.active_platforms)
     valid_goals = list(state.valid_goals)
 
+    # Goals actually prioritised on at least one active platform. M1 goals that no
+    # platform took on shouldn't reserve budget — they have no execution channel.
+    prioritised_goals: List[str] = sorted({
+        g
+        for p in active_platforms
+        for g in state.goals_by_platform.get(p, [])
+        if g in valid_goals
+    })
+
     min_spend_per_platform: Dict[str, float] = {}
     min_per_platform_value = max(0.0, total_budget * float(min_platform_share))
     for p in active_platforms:
         min_spend_per_platform[p] = min_per_platform_value
 
     min_budget_per_goal: Dict[str, float] = {}
-    if len(valid_goals) > 0:
+    if prioritised_goals:
         pool = max(0.0, total_budget * float(min_goal_pool_share))
-        per_goal = pool / float(len(valid_goals))
-        for g in valid_goals:
+        per_goal = pool / float(len(prioritised_goals))
+        for g in prioritised_goals:
             min_budget_per_goal[g] = per_goal
 
     if scenario_multipliers is None:
