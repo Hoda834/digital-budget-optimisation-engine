@@ -1544,3 +1544,231 @@ def test_module6_rate_kpi_not_multiplied_by_budget() -> None:
         "Multiplying by budget would give wrong units."
     )
     assert row.predicted_kpi != pytest.approx(0.045 * 3000.0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# build_forecast_df: Expected Revenue / ROAS columns (Item 1 of the audit)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _run_pipeline_with_goal_values(goal_values=None) -> WizardState:
+    state = WizardState()
+    complete_module1_and_advance(
+        state,
+        raw_objectives=["aw", "lg"],
+        raw_budget=10000.0,
+        raw_duration_days=30,
+        raw_goal_values=goal_values,
+    )
+    run_module2(
+        state,
+        selected_platforms=["fb", "li"],
+        priorities_input={
+            "fb": {"priority_1": "aw", "priority_2": None},
+            "li": {"priority_1": "lg", "priority_2": None},
+        },
+    )
+    finalise_module3_from_inputs(
+        state,
+        platform_inputs={
+            "fb": {"budget": 4000.0, "kpis": {"FB_AW_REACH": 200000.0}},
+            "li": {"budget": 3000.0, "kpis": {"LI_LG_LEADS": 80.0}},
+        },
+    )
+    run_module4(state, KPI_CONFIG)
+    run_module5(state)
+    run_module6(state)
+    return state
+
+
+def test_build_forecast_df_omits_revenue_columns_when_no_goal_values() -> None:
+    """Without goal_value_per_unit, the forecast df should match its
+    pre-feature shape: Platform / Objective / KPI / Allocated Budget /
+    Predicted KPI, no revenue or ROAS columns."""
+    from app import build_forecast_df
+
+    state = _run_pipeline_with_goal_values(goal_values=None)
+    fc = state.module6_scenario_result.results_by_scenario["base"]
+    df = build_forecast_df(fc)
+
+    assert "Expected Revenue" not in df.columns
+    assert "ROAS" not in df.columns
+    assert set(df.columns) >= {"Platform", "Objective", "KPI", "Allocated Budget", "Predicted KPI"}
+
+
+def test_build_forecast_df_adds_revenue_columns_when_goal_values_provided() -> None:
+    """When goal_value_per_unit has positive values, count KPI rows should
+    get Expected Revenue = predicted × goal_value and ROAS = revenue / budget."""
+    from app import build_forecast_df
+
+    state = _run_pipeline_with_goal_values(goal_values={"lg": 200.0, "aw": 0.001})
+    fc = state.module6_scenario_result.results_by_scenario["base"]
+    df = build_forecast_df(fc, goal_values=state.goal_value_per_unit)
+
+    assert "Expected Revenue" in df.columns
+    assert "ROAS" in df.columns
+    assert not df.empty
+
+    for _, row in df.iterrows():
+        if row["KPI"] == "Leads" and row["Predicted KPI"] > 0:
+            expected_rev = row["Predicted KPI"] * 200.0
+            expected_roas = expected_rev / row["Allocated Budget"]
+            assert row["Expected Revenue"] == pytest.approx(expected_rev, rel=1e-6)
+            assert row["ROAS"] == pytest.approx(expected_roas, rel=1e-6)
+            break
+    else:
+        raise AssertionError("Expected at least one Leads row with positive predicted volume.")
+
+
+def test_build_forecast_df_rate_kpis_have_zero_revenue() -> None:
+    """Rate KPIs (Engagement Rate, CTR) are dimensionless — their predicted
+    value is a proportion, not a count, so multiplying by a £/unit goal value
+    gives nonsense. The revenue column for rate rows must be zero."""
+    from app import build_forecast_df
+
+    state = WizardState()
+    complete_module1_and_advance(
+        state,
+        raw_objectives=["en", "lg"],
+        raw_budget=8000.0,
+        raw_duration_days=30,
+        raw_goal_values={"en": 0.20, "lg": 100.0},
+    )
+    run_module2(
+        state,
+        selected_platforms=["ig", "li"],
+        priorities_input={
+            "ig": {"priority_1": "en", "priority_2": None},
+            "li": {"priority_1": "lg", "priority_2": None},
+        },
+    )
+    finalise_module3_from_inputs(
+        state,
+        platform_inputs={
+            "ig": {"budget": 3000.0, "kpis": {"IG_EN_ENGRATERATE": 0.045}},
+            "li": {"budget": 3000.0, "kpis": {"LI_LG_LEADS": 80.0}},
+        },
+    )
+    run_module4(state, KPI_CONFIG)
+    run_module5(state)
+    run_module6(state)
+
+    fc = state.module6_scenario_result.results_by_scenario["base"]
+    df = build_forecast_df(fc, goal_values=state.goal_value_per_unit)
+
+    rate_rows = df[df["KPI"] == "Engagement Rate"]
+    assert not rate_rows.empty, "Expected at least one Engagement Rate row."
+    for _, row in rate_rows.iterrows():
+        assert row["Expected Revenue"] == 0.0, (
+            f"Rate KPI {row['KPI']} should have zero expected revenue (rates are "
+            f"dimensionless), got {row['Expected Revenue']}."
+        )
+        assert row["ROAS"] == 0.0
+
+
+def test_build_forecast_df_zero_goal_value_treated_as_unset() -> None:
+    """A goal value of 0 (the user 'skipped' that goal) should not trigger
+    the revenue columns — equivalent to no goal values at all for that
+    objective."""
+    from app import build_forecast_df
+
+    state = _run_pipeline_with_goal_values(goal_values={"lg": 200.0})  # aw skipped (0)
+    fc = state.module6_scenario_result.results_by_scenario["base"]
+    df = build_forecast_df(fc, goal_values=state.goal_value_per_unit)
+
+    # Columns exist because lg has a value
+    assert "Expected Revenue" in df.columns
+
+    # AW rows (Reach, Impression) get goal_value=0 → revenue=0
+    aw_rows = df[df["Objective"] == "Awareness"]
+    if not aw_rows.empty:
+        for _, row in aw_rows.iterrows():
+            assert row["Expected Revenue"] == 0.0
+
+
+def test_build_forecast_df_roas_uses_total_cell_budget() -> None:
+    """For cells with multiple count KPIs (e.g. FB AW: Reach + Impression),
+    each row's ROAS divides by the cell's allocated budget — both rows share
+    the same budget so their ROAS values stack correctly."""
+    from app import build_forecast_df
+
+    state = WizardState()
+    complete_module1_and_advance(
+        state,
+        raw_objectives=["aw", "lg"],
+        raw_budget=10000.0,
+        raw_duration_days=30,
+        raw_goal_values={"aw": 0.001, "lg": 100.0},
+    )
+    run_module2(
+        state,
+        selected_platforms=["fb", "li"],
+        priorities_input={
+            "fb": {"priority_1": "aw", "priority_2": None},
+            "li": {"priority_1": "lg", "priority_2": None},
+        },
+    )
+    finalise_module3_from_inputs(
+        state,
+        platform_inputs={
+            "fb": {
+                "budget": 4000.0,
+                "kpis": {"FB_AW_REACH": 200000.0, "FB_AW_IMPRESSION": 500000.0},
+            },
+            "li": {"budget": 3000.0, "kpis": {"LI_LG_LEADS": 80.0}},
+        },
+    )
+    run_module4(state, KPI_CONFIG)
+    run_module5(state)
+    run_module6(state)
+
+    fc = state.module6_scenario_result.results_by_scenario["base"]
+    df = build_forecast_df(fc, goal_values=state.goal_value_per_unit)
+
+    fb_aw_rows = df[(df["Platform"] == "Facebook") & (df["Objective"] == "Awareness")]
+    assert len(fb_aw_rows) == 2, "Expected Reach AND Impression rows for FB Awareness."
+
+    budgets = set(fb_aw_rows["Allocated Budget"].tolist())
+    assert len(budgets) == 1, (
+        "Both KPI rows for the same (platform, objective) cell should share the "
+        f"same allocated budget; got {budgets}."
+    )
+
+    for _, row in fb_aw_rows.iterrows():
+        expected_roas = (row["Predicted KPI"] * 0.001) / row["Allocated Budget"]
+        assert row["ROAS"] == pytest.approx(expected_roas, rel=1e-6)
+
+
+def test_build_forecast_df_invalid_goal_values_ignored() -> None:
+    """Non-numeric or negative goal values should be silently ignored
+    rather than raise — the rest of the dict (with valid entries) should
+    still produce revenue columns."""
+    from app import build_forecast_df
+
+    state = _run_pipeline_with_goal_values(goal_values={"lg": 200.0})
+    fc = state.module6_scenario_result.results_by_scenario["base"]
+
+    # Mix of bad and good values passed directly (state.goal_value_per_unit
+    # itself is validated at finalise_module1; this guards the build_forecast_df
+    # entry point against future callers that pass raw dicts).
+    df = build_forecast_df(
+        fc,
+        goal_values={"lg": 200.0, "aw": -5.0, "en": "not a number", "wt": float("nan")},  # type: ignore[dict-item]
+    )
+
+    assert "Expected Revenue" in df.columns  # lg=200 enabled it
+    # Bad entries silently drop; only lg revenue should be positive
+    lg_rows = df[df["Objective"] == "Lead Generation"]
+    assert (lg_rows["Expected Revenue"] > 0).any()
+
+
+def test_kpi_meta_includes_kind() -> None:
+    """build_kpi_meta must expose 'kind' so callers can tell count from rate
+    KPIs without re-importing KPI_CONFIG."""
+    from app import build_kpi_meta
+
+    meta = build_kpi_meta()
+    assert "FB_AW_REACH" in meta
+    assert meta["FB_AW_REACH"]["kind"] == "count"
+    assert "IG_EN_ENGRATERATE" in meta
+    assert meta["IG_EN_ENGRATERATE"]["kind"] == "rate"
