@@ -145,6 +145,30 @@ def _aggregate(rows: List[Dict[str, Any]], col: str, op: str) -> Optional[float]
     return sum(vals)
 
 
+# Substrings of the leftmost text-column value that mark a totals/summary row
+# we should skip so the aggregation doesn't double-count.  Google Ads exports
+# append "Total --"; some other exports use "Total", "Subtotal", "All".
+_TOTALS_ROW_MARKERS = ("total", "subtotal", "all conversions", "grand total")
+
+
+def _is_totals_row(row: Dict[str, Any]) -> bool:
+    """Detect summary rows that platforms append at the bottom of exports."""
+    for v in row.values():
+        if v is None:
+            continue
+        s = str(v).strip().lower()
+        if not s:
+            continue
+        for marker in _TOTALS_ROW_MARKERS:
+            if s.startswith(marker):
+                return True
+        # First non-blank column gates the check: if it's a campaign name like
+        # "Total Impressions Awareness", don't flag.  Only inspect the first
+        # populated text-ish cell.
+        return False
+    return False
+
+
 def parse_platform_csv(
     content: Union[bytes, str],
     platform: str,
@@ -192,6 +216,12 @@ def parse_platform_csv(
     if not rows:
         return {"error": "CSV is empty or has no data rows."}
 
+    # Drop summary rows that platforms append at the bottom of exports —
+    # otherwise they get double-counted into the spend total.
+    rows = [r for r in rows if not _is_totals_row(r)]
+    if not rows:
+        return {"error": "CSV has no data rows after filtering totals."}
+
     # Build {normalised → actual} column-name index
     column_index: Dict[str, str] = {}
     for col in rows[0].keys():
@@ -234,8 +264,27 @@ def parse_platform_csv(
             op = "mean" if var in _RATE_KPIS else "sum"
             v = _aggregate(rows, col, op)
             if v is not None and v > 0:
+                # Rate KPIs live in [0, 1].  Some exports print percentages
+                # without the '%' suffix (e.g. CTR shown as 4.50 meaning 4.5%);
+                # _parse_number can't tell those apart from a literal 4.5.
+                # If the aggregated rate exceeds 1.0, treat the column as a
+                # bare-percentage form and divide by 100 — same correction
+                # Module 3 applies to manual input.
+                if var in _RATE_KPIS and v > 1.0:
+                    if v <= 100.0:
+                        v = v / 100.0
+                    else:
+                        # > 100 is implausible for any rate — drop the value
+                        # so the user has to enter it manually.
+                        missing.append(var)
+                        continue
                 kpis[var] = v
                 matched[var] = col
+            else:
+                # Column matched but had no usable values (all blanks, dashes,
+                # zeros).  Surface as missing so the UI prompts manual entry
+                # rather than letting the user silently lose the KPI.
+                missing.append(var)
 
     return {
         "budget": budget_val,

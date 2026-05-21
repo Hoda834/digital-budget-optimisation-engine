@@ -184,10 +184,21 @@ def run_module4(
 
     valid_platforms: Set[str] = {p for p, gdict in cpu_per_goal.items() if gdict}
 
+    # Module 4's cpu_per_goal is meaningful only for count KPIs (cost per
+    # Lead, Click, Reach unit).  Rate-only campaigns (engagement-rate goals
+    # on IG / LI / TT / YT) legitimately produce no rows here — the LP gets
+    # everything it needs from Module 3's kpi_ratios.  Raise only when
+    # Module 3 had nothing for any platform at all.
     if not cpu_per_goal:
-        raise Module4ValidationError(
-            "Module 4 computed an empty cpu_per_goal table. Check Module 3 data."
+        any_rate_data = any(
+            (state.kpi_ratios.get(p, {}) or {})
+            for p in (state.active_platforms or [])
         )
+        if not any_rate_data:
+            raise Module4ValidationError(
+                "Module 4 computed an empty cpu_per_goal table and Module 3 "
+                "had no KPI data. Check the historical inputs."
+            )
 
     result = Module4Result(
         cpu_per_goal=cpu_per_goal,

@@ -646,6 +646,27 @@ def build_module5_input_from_state(state: WizardState) -> Module5LPInput:
         total_budget=base_lp_cap,
     )
 
+    # Drop per-goal floors for goals no platform has positive r_pg for.
+    # The LP can't possibly hit a floor when no cell can absorb the budget;
+    # keeping the floor would cause Infeasible status.  This happens in
+    # practice when a goal is prioritised in Module 2 but the user only
+    # provides KPI data for a different goal in Module 3.
+    goals_with_capacity = {
+        g for g in state.valid_goals
+        if any(r_pg.get(p, {}).get(g, 0.0) > 0.0 for p in r_pg)
+    }
+    dropped_goal_floors = set(min_budget_per_goal.keys()) - goals_with_capacity
+    if dropped_goal_floors:
+        _LOG.info(
+            "Dropping per-goal floors for goals with no productivity data: %s. "
+            "Provide Module 3 KPIs for these goals to re-enable.",
+            sorted(dropped_goal_floors),
+        )
+    min_budget_per_goal = {
+        g: v for g, v in min_budget_per_goal.items()
+        if g in goals_with_capacity
+    }
+
     module4_result = getattr(state, "module4_result", None)
     cpu_per_goal = (
         {p: {g: dict(kdict) for g, kdict in gdict.items()}
