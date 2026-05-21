@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from core.wizard_state import WizardState
+from core.kpi_config import KIND_RATE
 from modules.module5 import Module5LPResult, Module5ScenarioBundle
 from modules.module6 import Module6Result
 
@@ -215,11 +216,13 @@ def _classification(bundle: Module5ScenarioBundle, lp: Module5LPResult) -> str:
     pt = _platform_totals(lp)
     pr = _ratio(pt)
     nz = _nonzero_allocations(lp)
-    if pr >= 0.80 or nz <= 2:
+    # Corner-dominant: a literal corner solution (≤2 funded cells) or extreme
+    # concentration (≥90 %). A 3-platform 80/10/10 split does NOT qualify.
+    if nz <= 2 or pr >= 0.90:
         return "Corner-dominant"
-    if nz >= 3 and pr <= 0.70:
+    if nz >= 3 and pr <= 0.75:
         return "Balanced"
-    return "Unclear"
+    return "Concentrated"  # moderate concentration: 75–90 % to one platform
 
 
 def _data_quality_note(lp: Module5LPResult, fc: Optional[Module6Result]) -> Optional[str]:
@@ -231,6 +234,10 @@ def _data_quality_note(lp: Module5LPResult, fc: Optional[Module6Result]) -> Opti
         small = 0
         total = 0
         for r in fc.rows:
+            # Rate KPIs (engagement rate etc.) are naturally in [0, 1] — applying a
+            # count-KPI "small value" threshold to them would always fire falsely.
+            if getattr(r, "kpi_kind", None) == KIND_RATE:
+                continue
             total += 1
             if _f(getattr(r, "predicted_kpi", 0.0)) < 5.0:
                 small += 1
@@ -352,63 +359,19 @@ def _plan_a(lp: Module5LPResult) -> PlanOutput:
     )
 
 
-def _apply_minimums(
-    state: WizardState,
-    allocation: Dict[str, Dict[str, float]],
-    total_budget: float,
-    valid_goals: List[str],
-    active_platforms: List[str],
-) -> Dict[str, Dict[str, float]]:
-    out: Dict[str, Dict[str, float]] = {p: dict(allocation.get(p, {})) for p in active_platforms}
-
-    min_p = getattr(state, "min_spend_per_platform", {}) or {}
-    for p in active_platforms:
-        req = max(0.0, _f(min_p.get(p, 0.0)))
-        if req <= 0:
-            continue
-        cur = sum(max(0.0, _f(v)) for v in out.get(p, {}).values())
-        if cur + 1e-9 < req:
-            need = req - cur
-            g0 = valid_goals[0] if valid_goals else "aw"
-            out.setdefault(p, {})
-            out[p][g0] = max(0.0, _f(out[p].get(g0, 0.0))) + need
-
-    min_g = getattr(state, "min_budget_per_goal", {}) or {}
-    for g in valid_goals:
-        req = max(0.0, _f(min_g.get(g, 0.0)))
-        if req <= 0:
-            continue
-        cur = 0.0
-        for p in active_platforms:
-            cur += max(0.0, _f(out.get(p, {}).get(g, 0.0)))
-        if cur + 1e-9 < req:
-            need = req - cur
-            p0 = active_platforms[0] if active_platforms else "fb"
-            out.setdefault(p0, {})
-            out[p0][g] = max(0.0, _f(out[p0].get(g, 0.0))) + need
-
-    used = 0.0
-    for p in active_platforms:
-        for g in valid_goals:
-            used += max(0.0, _f(out.get(p, {}).get(g, 0.0)))
-
-    if used <= 0:
-        return out
-
-    if used > total_budget + 1e-6:
-        scale = total_budget / used
-        for p in active_platforms:
-            for g in list(out.get(p, {}).keys()):
-                out[p][g] = max(0.0, _f(out[p][g])) * scale
-
-    return out
-
-
 def _plan_b_risk_managed(
     state: WizardState,
     lp: Module5LPResult,
     cap_top_platform_share: float = 0.70,
 ) -> Optional[PlanOutput]:
+    """Return a diversified alternative that caps the dominant platform.
+
+    The LP (Plan A) already satisfies all minimum-spend constraints set in
+    Module 2, so we do not re-enforce them here — that would re-implement
+    policy independently and risk inconsistency.  We simply scale down the
+    top platform and redistribute the freed budget to the remaining platforms
+    in proportion to their LP productivity scores.
+    """
     total_budget = max(0.0, _f(getattr(lp, "total_budget_used", 0.0)))
     if total_budget <= 0:
         total_budget = max(0.0, _f(getattr(state, "total_budget", 0.0)))
@@ -416,14 +379,14 @@ def _plan_b_risk_managed(
         return None
 
     valid_goals = [_k(g) for g in (getattr(state, "valid_goals", []) or [])]
-    active_platforms = [_k(p) for p in (getattr(state, "active_platforms", []) or [])]
-    if not valid_goals or not active_platforms:
+    if not valid_goals:
         return None
 
     plan_a = _plan_a(lp)
-    pt_a: Dict[str, float] = {}
-    for p, gmap in plan_a.allocation.items():
-        pt_a[p] = sum(max(0.0, _f(v)) for v in (gmap or {}).values())
+    pt_a: Dict[str, float] = {
+        p: sum(max(0.0, _f(v)) for v in (gmap or {}).values())
+        for p, gmap in plan_a.allocation.items()
+    }
 
     top_p = _dominant(pt_a)
     if not top_p:
@@ -433,10 +396,10 @@ def _plan_b_risk_managed(
     current_top = max(0.0, _f(pt_a.get(top_p, 0.0)))
 
     if current_top <= cap_value + 1e-6:
-        obj_est = _estimate_objective_value(plan_a.allocation, lp)
+        # Already within the cap — Plan B = Plan A.
         return PlanOutput(
             allocation=plan_a.allocation,
-            objective_value_estimate=obj_est,
+            objective_value_estimate=_estimate_objective_value(plan_a.allocation, lp),
             kpi_focus="Diversified execution",
             tradeoff_percent=0.0,
         )
@@ -445,21 +408,22 @@ def _plan_b_risk_managed(
     if not scores:
         return None
 
-    alloc_b: Dict[str, Dict[str, float]] = {p: {} for p in active_platforms}
-    for p in active_platforms:
-        for g in valid_goals:
-            alloc_b[p][g] = 0.0
+    # Start from Plan A and scale down the top platform.
+    alloc_b: Dict[str, Dict[str, float]] = {
+        p: {_k(g): max(0.0, _f(v)) for g, v in (gmap or {}).items()}
+        for p, gmap in plan_a.allocation.items()
+    }
+    factor = cap_value / current_top
+    for g in list(alloc_b.get(top_p, {}).keys()):
+        alloc_b[top_p][g] *= factor
 
-    top_alloc = plan_a.allocation.get(top_p, {})
-    if current_top > 0:
-        factor = cap_value / current_top
-        for g, v in top_alloc.items():
-            alloc_b[top_p][_k(g)] = max(0.0, _f(v)) * factor
+    freed = total_budget - sum(
+        sum(v for v in gmap.values()) for gmap in alloc_b.values()
+    )
+    if freed < 0:
+        freed = 0.0
 
-    remaining = total_budget - sum(sum(max(0.0, _f(v)) for v in alloc_b[p].values()) for p in active_platforms)
-    if remaining < 0:
-        remaining = 0.0
-
+    # Distribute freed budget to other platforms proportionally by LP scores.
     weights: List[Tuple[str, str, float]] = []
     for p, gmap in scores.items():
         pk = _k(p)
@@ -474,20 +438,11 @@ def _plan_b_risk_managed(
                 weights.append((pk, gk, w))
 
     total_w = sum(w for _, _, w in weights)
-    if total_w <= 0:
-        alloc_b = _apply_minimums(state, alloc_b, total_budget, valid_goals, active_platforms)
-        obj_est = _estimate_objective_value(alloc_b, lp)
-        return PlanOutput(
-            allocation=alloc_b,
-            objective_value_estimate=obj_est,
-            kpi_focus="Diversified execution",
-            tradeoff_percent=None,
-        )
-
-    for pk, gk, w in weights:
-        alloc_b[pk][gk] += remaining * (w / total_w)
-
-    alloc_b = _apply_minimums(state, alloc_b, total_budget, valid_goals, active_platforms)
+    if total_w > 0 and freed > 0:
+        for pk, gk, w in weights:
+            alloc_b.setdefault(pk, {})[gk] = (
+                alloc_b.get(pk, {}).get(gk, 0.0) + freed * (w / total_w)
+            )
 
     obj_a = _estimate_objective_value(plan_a.allocation, lp)
     obj_b = _estimate_objective_value(alloc_b, lp)
@@ -517,6 +472,10 @@ def _risks_recs(
     if classification == "Corner-dominant":
         risks.append("Budget is highly concentrated, which increases dependency on a single channel.")
         recs.append("Use the risk managed plan if you want to reduce concentration risk.")
+
+    if classification == "Concentrated":
+        risks.append("Budget leans toward one channel; performance is sensitive to that channel's delivery.")
+        recs.append("Monitor the dominant channel closely and consider the risk managed plan as a hedge.")
 
     if classification == "Scenario-sensitive":
         risks.append("The recommended allocation changes across scenarios, which suggests higher uncertainty.")
@@ -652,6 +611,22 @@ def run_module7(
 
     if global_dq:
         out.global_data_quality_note = " ".join(sorted(set(global_dq)))
+
+    # Populate global notes with campaign-level context.
+    n_platforms = len(getattr(state, "active_platforms", []) or [])
+    n_goals = len(getattr(state, "valid_goals", []) or [])
+    if n_platforms > 0 and n_goals > 0:
+        out.global_notes.append(
+            f"Optimisation covers {n_platforms} platform{'s' if n_platforms != 1 else ''} "
+            f"across {n_goals} objective{'s' if n_goals != 1 else ''}."
+        )
+
+    scalars = list((bundle.scenario_multipliers or {}).values())
+    if len(scalars) >= 2:
+        lo, hi = min(scalars), max(scalars)
+        out.global_notes.append(
+            f"Scenario budget caps range from {lo:.0%} to {hi:.0%} of the total budget."
+        )
 
     state.module7_finalised = True
     state.current_step = max(state.current_step, 8)
