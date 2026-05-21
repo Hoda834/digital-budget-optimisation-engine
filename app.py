@@ -194,12 +194,33 @@ def _render_sidebar(state: WizardState) -> None:
             reset_state()
 
 
-def money(x: Any) -> str:
+def _current_currency_symbol() -> str:
+    """Resolve the currency symbol from the active WizardState.
+
+    Read once per money() / format call rather than threaded through every
+    caller, because Streamlit's session-state already gives us a single
+    canonical state per session.  Falls back to '£' if state isn't
+    initialised yet (initial page load) or the currency is unknown.
+    """
+    state = st.session_state.get("wizard_state") if hasattr(st, "session_state") else None
+    code = getattr(state, "currency", None) or "GBP"
+    return _CURRENCY_SYMBOLS.get(code, "£")
+
+
+def money(x: Any, currency_symbol: Optional[str] = None) -> str:
+    """Format a money value with the campaign's currency symbol.
+
+    Pass currency_symbol explicitly to override (useful in tests and PDF
+    generation where state isn't accessible).  Default reads from the
+    active WizardState so every UI panel shows £/$/€ consistently with
+    the user's Module 1 choice.
+    """
+    sym = currency_symbol if currency_symbol is not None else _current_currency_symbol()
     try:
         v = float(x)
     except Exception:
-        return "£0.00"
-    return f"£{v:,.2f}"
+        return f"{sym}0.00"
+    return f"{sym}{v:,.2f}"
 
 
 def number(x: Any, decimals: int = 2) -> str:
@@ -752,8 +773,9 @@ def create_pdf_bytes(
 
 def module3_ui(state: WizardState) -> None:
     st.header("Historical data")
+    sym = _current_currency_symbol()
     st.caption(
-        "Tell the optimiser what each platform delivered for £X over the historical window. "
+        f"Tell the optimiser what each platform delivered for {sym}X over the historical window. "
         "Count KPIs (reach, leads, clicks) are totals; rate KPIs (engagement rate) are percentages. "
         "Decimals are fine throughout."
     )
@@ -1127,10 +1149,11 @@ def results_ui(state: WizardState) -> None:
                 lines.append(
                     f"- **{pname} · {gname}** — no KPI value provided for this cell"
                 )
+        sym = _current_currency_symbol()
         st.warning(
             "**Some cells couldn't be optimised because input data was missing.**\n\n"
             + "\n".join(lines)
-            + "\n\n_These platforms/goals got £0 not because the optimiser "
+            + f"\n\n_These platforms/goals got {sym}0 not because the optimiser "
               "ranked them low, but because there was nothing to rank.  "
               "Go back to Module 3 and supply the missing values if you "
               "want them considered._",
@@ -1648,14 +1671,15 @@ def results_ui(state: WizardState) -> None:
         reset_state()
 
 
-# Default £-per-unit values shown as placeholders in the Module 1 form.
-# These are sensible starting points for a UK B2B SaaS context, not
-# universal truths — the user is meant to override them.
+# Default value-per-unit illustrations for the Module 1 form.  The numeric
+# magnitudes are anchored in UK B2B SaaS; the leading symbol is filled in at
+# render time so the label matches whatever currency the user picked in
+# Module 1 (GBP / USD / EUR).
 _GOAL_VALUE_HINTS: Dict[str, Tuple[str, float]] = {
-    GOAL_LG: ("£ per qualified lead", 100.0),
-    GOAL_WT: ("£ per website click", 0.50),
-    GOAL_EN: ("£ per engagement", 0.20),
-    GOAL_AW: ("£ per reach impression", 0.001),
+    GOAL_LG: ("{sym} per qualified lead", 100.0),
+    GOAL_WT: ("{sym} per website click", 0.50),
+    GOAL_EN: ("{sym} per engagement", 0.20),
+    GOAL_AW: ("{sym} per reach impression", 0.001),
 }
 
 _GOAL_LABEL: Dict[str, str] = {
@@ -1716,25 +1740,30 @@ def module1_ui(state: WizardState) -> None:
     goal_values: Dict[str, float] = {}
     if goal_codes:
         st.markdown("### What is each result worth to the business?")
+        sym_display = _CURRENCY_SYMBOLS.get(currency, "£")
         st.caption(
-            "Set the £ value of one unit of each objective's KPI.  The "
-            "optimiser uses these as utility weights — without them it "
+            f"Set the {sym_display} value of one unit of each objective's KPI.  "
+            "The optimiser uses these as utility weights — without them it "
             "falls back to rank-based heuristics.  Leave at 0 to skip."
         )
         st.info(
-            "ℹ️ **The values pre-filled below are illustrative — sized for "
-            "UK B2B SaaS** (£100/lead, £0.50/click, £0.20/engagement, "
-            "£0.001/impression).  A B2C e-commerce business would use very "
-            "different numbers: a lead might be worth £20, a click "
-            "£0.05, an impression £0.001.  **Replace them with your own "
-            "economics before relying on the plan** — these aren't "
-            "universal defaults, they're a starter for one specific "
-            "vertical."
+            f"ℹ️ **The values pre-filled below are illustrative — sized for "
+            f"UK B2B SaaS** ({sym_display}100/lead, {sym_display}0.50/click, "
+            f"{sym_display}0.20/engagement, {sym_display}0.001/impression).  "
+            f"A B2C e-commerce business would use very different numbers: a "
+            f"lead might be worth {sym_display}20, a click {sym_display}0.05, "
+            f"an impression {sym_display}0.001.  **Replace them with your own "
+            "economics before relying on the plan** — these aren't universal "
+            "defaults, they're a starter for one specific vertical."
         )
         cols = st.columns(min(len(goal_codes), 4))
         prior_values = state.goal_value_per_unit or {}
+        sym = _CURRENCY_SYMBOLS.get(currency, "£")
         for i, gcode in enumerate(goal_codes):
-            label, default = _GOAL_VALUE_HINTS.get(gcode, (f"£ per {gcode}", 1.0))
+            label_tpl, default = _GOAL_VALUE_HINTS.get(
+                gcode, ("{sym} per " + gcode, 1.0),
+            )
+            label = label_tpl.format(sym=sym)
             current = float(prior_values.get(gcode, default))
             with cols[i % len(cols)]:
                 v = st.number_input(

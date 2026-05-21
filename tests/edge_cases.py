@@ -774,6 +774,39 @@ def test_csv_template_rate_kpis_show_percent_example():
         )
 
 
+def test_money_helper_uses_current_currency_from_state():
+    """The money() helper should pick up the WizardState's currency so a
+    USD plan doesn't render £ everywhere."""
+    import streamlit as st
+    from app import money, _current_currency_symbol
+
+    # Default (no state) → £
+    if "wizard_state" in st.session_state:
+        del st.session_state["wizard_state"]
+    assert _current_currency_symbol() == "£"
+    assert money(1234.56) == "£1,234.56"
+
+    # USD state
+    s = WizardState()
+    complete_module1_and_advance(s, raw_objectives=["lg"], raw_budget=10000.0,
+                                 raw_currency="USD")
+    st.session_state["wizard_state"] = s
+    assert _current_currency_symbol() == "$"
+    assert money(1234.56) == "$1,234.56"
+
+    # EUR state
+    s2 = WizardState()
+    complete_module1_and_advance(s2, raw_objectives=["lg"], raw_budget=10000.0,
+                                 raw_currency="EUR")
+    st.session_state["wizard_state"] = s2
+    assert money(1234.56) == "€1,234.56"
+
+    # Explicit override still works (used by PDF export)
+    assert money(1234.56, currency_symbol="$") == "$1,234.56"
+    # Cleanup so subsequent tests aren't affected
+    del st.session_state["wizard_state"]
+
+
 def test_composition_recompose_with_user_weights():
     """Simulate the Option C override: take the parsed breakdown, apply
     per-component weights, recompose with the same operator."""
