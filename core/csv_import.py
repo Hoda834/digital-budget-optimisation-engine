@@ -781,11 +781,11 @@ def generate_unified_template_xlsx(
     instructions["A8"] = "Then upload this workbook back into Module 3."
     instructions["A10"] = "Realistic ranges for a £3k monthly campaign (illustrative, not required):"
     instructions["A10"].font = Font(bold=True)
-    instructions["A11"] = "  • Reach / Impressions:  100,000 – 1,000,000"
-    instructions["A12"] = "  • Clicks:               1,000 – 10,000"
-    instructions["A13"] = "  • Leads / Conversions:  20 – 200"
-    instructions["A14"] = "  • Engagement / Saves:   1,000 – 5,000"
-    instructions["A15"] = "  • Engagement Rate / CTR: 0.005 – 0.10 (or 0.5% – 10%)"
+    instructions["A11"] = "  • Reach / Impressions:        100,000 – 1,000,000"
+    instructions["A12"] = "  • Clicks:                     1,000 – 10,000"
+    instructions["A13"] = "  • Leads / Conversions:        20 – 200"
+    instructions["A14"] = "  • Purchases:                  10 – 100"
+    instructions["A15"] = "  • Engagement count components: 100 – 5,000 each (likes, comments, shares, etc.)"
     instructions["A17"] = "Sheets in this workbook:"
     instructions["A17"].font = Font(bold=True)
 

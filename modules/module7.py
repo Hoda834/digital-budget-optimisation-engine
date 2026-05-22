@@ -319,8 +319,10 @@ def _data_quality_note(
         small = 0
         total = 0
         for r in fc.rows:
-            # Rate KPIs (engagement rate etc.) are naturally in [0, 1] — applying a
-            # count-KPI "small value" threshold to them would always fire falsely.
+            # Rate KPIs would be naturally in [0, 1] — applying a count-KPI
+            # "small value" threshold would always fire falsely. No canonical KPI
+            # is a rate today, but this guard keeps the threshold honest if one
+            # is re-introduced.
             if getattr(r, "kpi_kind", None) == KIND_RATE:
                 continue
             total += 1

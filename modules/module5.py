@@ -252,9 +252,10 @@ def _build_r_pg_from_state(state: WizardState) -> Dict[str, Dict[str, float]]:
                     count_vals.append(val)
 
             # When both kinds are present, the count productivity is the LP-meaningful
-            # signal (currency-scaled). The rate becomes a soft multiplicative boost so
-            # that, say, "engagement rate" still tilts the optimiser without distorting
-            # units. When only rates exist (LI/IG/YT engagement), we use the rate itself.
+            # signal (currency-scaled). The rate becomes a soft multiplicative boost
+            # without distorting units. Today every canonical KPI is a count, so the
+            # rate branches are dormant — but retained in case a future platform
+            # re-introduces a rate canonical.
             if count_vals:
                 productivity = sum(count_vals) / float(len(count_vals))
                 if rate_vals:

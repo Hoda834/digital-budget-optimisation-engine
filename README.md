@@ -58,29 +58,33 @@ The LP:
 
 ### 3. Platform Catalogue + CSV Import
 
-Twelve built-in platforms with curated KPI configs.  Google appears as three distinct surfaces — Search, Display, and Performance Max — because their lead-gen productivities differ by an order of magnitude and lumping them obscures decisions a marketer actually needs to make:
+Twelve built-in platforms with curated KPI configs.  Google appears as three distinct surfaces — Search, Display, and Performance Max — because their lead-gen productivities differ by an order of magnitude and lumping them obscures decisions a marketer actually needs to make.
+
+**Every canonical KPI is a count** (the uniform-units refactor folded Engagement Rate / View Rate / CTR into summed count components like `likes + comments + shares + saves`).  This means all four KPIs on a platform share the same unit, so the LP doesn't mix percentages and totals.  Where the schema lists Purchases as a distinct conversion event, it has its own canonical alongside Leads / Conversions:
 
 | Platform | KPIs (Awareness · Engagement · Traffic · Lead Gen) |
 |---|---|
-| Facebook | Reach · Engagement · Link Clicks · Leads |
-| Instagram | Reach · Engagement Rate · Link Clicks · Leads |
-| LinkedIn | Impressions · Engagement Rate · Clicks · Leads |
-| YouTube | Views · View Rate · Clicks · Conversions |
-| Google Search | Impressions · CTR · Clicks · Conversions |
-| Google Display | Impressions · CTR · Clicks · Conversions |
-| Google Performance Max | Impressions · CTR · Clicks · Conversions |
-| TikTok | Video Views · Engagement Rate · Clicks · Leads |
-| Pinterest | Impressions · Saves · Outbound Clicks · Leads |
-| X (Twitter) | Impressions · Engagement Rate · Clicks · Leads |
-| Snapchat | Reach · Engagement Rate · Swipe-ups · Leads |
-| Reddit | Impressions · Engagement Rate · Clicks · Leads |
+| Facebook | Reach · Engagement (reactions+comments+shares+saves+follows) · Link Clicks · Leads + Purchases |
+| Instagram | Reach · Engagement (likes+comments+shares+saves+follows) · Link Clicks · Leads + Purchases |
+| LinkedIn | Impressions · Engagement (reactions+comments+shares+followers) · Clicks · Leads |
+| YouTube | Views · Engagement (likes+comments+shares+subscribers) · Clicks · Conversions + Purchases |
+| Google Search | Impressions · *(no engagement KPI)* · Clicks · Conversions + Purchases |
+| Google Display | Impressions · *(no engagement KPI)* · Clicks · Conversions + Purchases |
+| Google Performance Max | Impressions · *(no engagement KPI)* · Clicks · Conversions + Purchases |
+| TikTok | Video Views · Engagement (likes+comments+shares+saves+followers) · Clicks · Leads + Purchases |
+| Pinterest | Impressions · Saves · Outbound Clicks · Leads + Checkouts |
+| X (Twitter) | Impressions · Engagement (likes+replies+reposts+bookmarks+followers) · Link Clicks · Leads |
+| Snapchat | Reach · Engagement (story opens+shares+subscribers) · Swipe-ups · Leads + Purchases |
+| Reddit | Impressions · Engagement (upvotes+comments+shares+followers) · Clicks · Leads |
 
-**CSV import** for Meta / Google / LinkedIn / TikTok / YouTube — drop the platform's standard export into the form and the parser:
+Google surfaces have no engagement KPI because CTR was a rate (violates uniform units within a platform) and "engaged clicks" would duplicate the Traffic KPI.
+
+**CSV import** for every supported platform — drop the platform's standard export into the form and the parser:
 
 * Sniffs encoding (UTF-8, UTF-8-BOM, Latin-1) and delimiter (`,` / `;` / `\t`)
 * Filters totals rows (Google's `Total --`, Meta's summary rows)
-* Normalises rate KPIs from percent-strings or bare-percentage forms into `[0, 1]`
 * Composes canonical KPIs from raw columns with documented rationale (see below)
+* **Legacy back-compat**: an older export with only an `Engagement Rate` column (no individual count breakouts) is still parsed — engagement count is derived as `rate × awareness_count`
 
 ---
 
@@ -103,7 +107,6 @@ Module 6 produces per-KPI forecasts from the LP allocation. Confidence bands are
 
 * If Module 3 has ≥3 historical observations per KPI, the band is the sample coefficient of variation — true noise from data.
 * Otherwise, the band scales by `√(30 / historical_days)` — a 90-day history produces a ~17% band, a 7-day history ~62%.
-* Rate KPIs (engagement rate, CTR) get a point estimate — they're already averages.
 * Seasonality multipliers apply to count-KPI forecasts so the predicted volume matches what the LP optimised against.
 
 ---

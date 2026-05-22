@@ -171,12 +171,16 @@ warnings, not constraints. Each section flags which category a constant is in.
   a single scalar productivity the LP can compare across cells.
 - **Source:** Authored as a v1 heuristic. The intuition: a count KPI
   (Reach, Leads) carries the £-denominated productivity signal, while a
-  rate KPI (Engagement Rate, CTR) carries a quality signal that tilts
-  the count up or down without changing units. Multiplying by `(1 + rate)`
-  rather than just `rate` keeps the base scale stable when the rate is
-  small (the common case — engagement rates are typically 0.5–5%).
-- **Sensitivity:** The multiplicative tilt is mild because typical rate
-  values are 0.01–0.05. A platform with 5% engagement gets a 5% bonus
+  rate KPI would carry a quality signal that tilts the count up or down
+  without changing units. Multiplying by `(1 + rate)` rather than just
+  `rate` keeps the base scale stable when the rate is small.
+  **As of the uniform-units refactor, no canonical KPI is a rate — every
+  social-platform engagement KPI is now a count (sum of likes / comments
+  / shares / etc.).** The rate-handling branch is retained as a forward-
+  compatibility shim.
+- **Sensitivity:** When the branch was active, the multiplicative tilt
+  was mild because typical rate values were 0.01–0.05. A platform with
+  5% engagement would have got a 5% bonus
   to its count productivity — large enough to break ties, too small to
   flip ordering between cells with genuinely different counts.
 - **Honest caveat for a reviewer:** This formula is not derivable from
@@ -192,18 +196,21 @@ warnings, not constraints. Each section flags which category a constant is in.
 ### Fix A: rate-only cell rescaling
 
 - **Location:** `modules/module5.py:272–296`
-- **Role:** When a cell has *only* rate KPIs (e.g. IG / YT / LI
-  engagement) and other platforms in the same goal report a count, the
-  rate-only cells are multiplied by the cross-platform count mean so
-  they compete on the same numerical footing inside the LP.
-- **Source:** Required for the LP to compare apples-to-apples. Without
-  it, a 4.5% engagement rate (0.045) would compete against a 50 leads/£
-  count (50.0) and lose by three orders of magnitude.
-- **Sensitivity:** Structural — without Fix A, rate-only cells get zero
-  allocation regardless of their quality. The exact scaling factor
-  (cross-platform mean) is the natural choice; alternatives (median,
-  geomean) would move the rate-only cells by ~10–20% but not change
-  the qualitative ordering.
+- **Role:** When a cell has *only* rate KPIs and other platforms in the
+  same goal report a count, the rate-only cells are multiplied by the
+  cross-platform count mean so they compete on the same numerical
+  footing inside the LP.
+- **Source:** Required for the LP to compare apples-to-apples. A 4.5%
+  rate (0.045) competing against a 50 leads/£ count (50.0) would lose
+  by three orders of magnitude without this rescale.
+  **As of the uniform-units refactor every canonical KPI is a count, so
+  the "rate-only cell" condition is never true in production** — this
+  branch is retained as a forward-compatibility shim.
+- **Sensitivity:** Structural — without Fix A, rate-only cells would
+  get zero allocation regardless of their quality. The exact scaling
+  factor (cross-platform mean) is the natural choice; alternatives
+  (median, geomean) would move rate-only cells by ~10–20% but not
+  change the qualitative ordering.
 
 ---
 

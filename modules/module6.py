@@ -187,12 +187,13 @@ def compute_module6_forecast(
 ) -> Module6Result:
     """Produce per-KPI forecasts from the LP allocation.
 
-    For count KPIs (e.g. Reach, Leads):
+    For count KPIs (every canonical KPI in KPI_CONFIG today):
         predicted = (historical_count / historical_budget) × allocated_budget
 
-    For rate KPIs (e.g. Engagement Rate):
-        predicted = historical_rate  (rates don't scale with spend; multiplying by
-        budget would produce meaningless units)
+    The rate-KPI branch below is retained for forward-compatibility (if a
+    future platform introduces a rate canonical), in which case:
+        predicted = historical_rate  (rates don't scale with spend;
+        multiplying by budget would produce meaningless units).
     """
     if min_budget_threshold <= 0:
         raise ValueError("min_budget_threshold must be greater than 0.")

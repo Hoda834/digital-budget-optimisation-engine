@@ -293,9 +293,12 @@ def build_forecast_df(
     """Build the per-KPI forecast table.
 
     When ``goal_values`` is provided and contains at least one positive value,
-    the table gains ``Expected Revenue`` and ``ROAS`` columns.  Revenue is only
-    well-defined for count KPIs (Reach, Leads, Clicks, …); rate KPIs
-    (Engagement Rate, CTR) are dimensionless and leave those cells at zero.
+    the table gains ``Expected Revenue`` and ``ROAS`` columns.  Revenue is
+    computed as predicted volume × £/unit for every count KPI (all canonical
+    KPIs are counts after the uniform-units refactor — Engagement is now a
+    sum of likes/comments/shares/etc., not a rate).  Any future rate KPI
+    would leave those cells at zero since rate × £/unit is dimensionally
+    meaningless.
     """
     kpi_meta = build_kpi_meta()
     rows: List[Dict[str, Any]] = []
@@ -833,8 +836,8 @@ def module3_ui(state: WizardState) -> None:
     sym = _current_currency_symbol()
     st.caption(
         f"Tell the optimiser what each platform delivered for {sym}X over the historical window. "
-        "Count KPIs (reach, leads, clicks) are totals; rate KPIs (engagement rate) are percentages. "
-        "Decimals are fine throughout."
+        "Every KPI is a count — reach, engagement (sum of likes/comments/shares/etc.), clicks, "
+        "leads, purchases — so just enter the totals.  Decimals are fine."
     )
     # Consolidate three notices (placeholders, normalisation, attribution) into
     # one collapsible disclosure.  Each is real and worth surfacing the first
@@ -843,7 +846,7 @@ def module3_ui(state: WizardState) -> None:
     with st.expander("How Module 3 works (read once)", expanded=False):
         st.markdown(
             "**Form fields are pre-filled with placeholder values** "
-            "(e.g. 1,000 leads, 2.5% engagement rate). These are *not* "
+            "(e.g. 1,000 leads, 8,000 engagements). These are *not* "
             "defaults you should accept — they're starter numbers to keep "
             "the form interactive. Replace each cell with your actual "
             "historical KPI, or upload a CSV to pre-fill from real data. "
@@ -1726,11 +1729,12 @@ def results_ui(state: WizardState) -> None:
                 with c4:
                     st.metric("Objective value", number(lp_res.objective_value or 0.0, 2))
                 st.caption(
-                    "Expected revenue = predicted volume × goal value (count KPIs only). "
-                    "Rate KPIs (Engagement Rate, CTR) contribute zero. Cells with multiple "
-                    "count KPIs for the same objective (e.g. Facebook Awareness: Reach + "
-                    "Impression) sum each KPI's contribution — treat the total as an upper "
-                    "bound when those KPIs measure overlapping value."
+                    "Expected revenue = predicted volume × goal value.  Every canonical KPI "
+                    "is a count (the uniform-units refactor folded Engagement Rate / CTR into "
+                    "summed count KPIs), so all KPIs contribute.  Cells with multiple KPIs for "
+                    "the same objective (e.g. Facebook Awareness: Reach + Impression) sum each "
+                    "KPI's contribution — treat the total as an upper bound when those KPIs "
+                    "measure overlapping value."
                 )
             else:
                 c1, c2 = st.columns(2)

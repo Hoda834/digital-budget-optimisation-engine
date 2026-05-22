@@ -45,8 +45,8 @@ System-level goal weights are derived from the frequency of priority choices acr
 
 KPI rows in `core/kpi_config.py` are tagged as `count` or `rate`:
 
-- **Count** KPIs (Reach, Impressions, Clicks, Leads, Engagements, Views) are normalised into a productivity of `value / historical_budget`.
-- **Rate** KPIs (Engagement Rate) are kept as-is. When a goal has both kinds of KPIs in its history, the rate is folded in as a multiplicative boost on the count-derived productivity, not divided by budget.
+- **Count** KPIs (Reach, Impressions, Clicks, Leads, Purchases, Engagements, Views) are normalised into a productivity of `value / historical_budget`.
+- **Rate** KPIs (none in the current catalogue) would be kept as-is — folded in as a multiplicative boost on the count-derived productivity, not divided by budget. The uniform-units refactor switched every social-platform engagement KPI from rate to count (sum of likes / comments / shares / etc.) so that all KPIs on a platform share the same unit. The rate-handling branches in modules 3–7 are retained as forward-compatibility shims if a future platform re-introduces a rate canonical.
 
 ---
 
