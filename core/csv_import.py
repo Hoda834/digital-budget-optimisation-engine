@@ -144,16 +144,23 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
         "FB_LG_LEADS": KPIComposition(
             components=(
                 ("on-facebook lead", "leads", "lead"),
-                ("purchases", "purchase"),
                 ("conversions", "conv."),
             ),
             operator="first",
             rationale=(
-                "On-platform lead form submissions preferred; Purchases / "
-                "Conversions accepted as fallbacks.  Not summed because "
-                "Meta's 'Conversions' column is often a superset that "
-                "already includes Leads and Purchases — summing would "
-                "triple-count."
+                "On-platform lead form submissions preferred; Conversions "
+                "accepted as a fallback (Meta's 'Conversions' is often a "
+                "superset that already includes Leads, so summing would "
+                "double-count).  Purchases is now its own canonical "
+                "(FB_LG_PURCHASES) so a purchase-goal campaign isn't "
+                "lumped with lead-gen volume."
+            ),
+        ),
+        "FB_LG_PURCHASES": KPIComposition(
+            components=(("purchases", "purchase"),), operator="first",
+            rationale=(
+                "Purchase events tracked separately so the optimiser can "
+                "reward purchases without conflating them with Leads."
             ),
         ),
         _BUDGET: KPIComposition(
@@ -170,9 +177,17 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             operator="first",
             rationale="Unique people who saw the ad.  Impressions / Reel Views accepted as fallbacks.",
         ),
-        "IG_EN_ENGRATERATE": KPIComposition(
-            components=(("engagement rate", "er"),), operator="mean",
-            rationale="Engagement rate (Instagram reports as a single percentage).",
+        "IG_EN_ENGAGEMENT": KPIComposition(
+            components=(
+                ("likes", "like"),
+                ("comments", "comment"),
+                ("shares", "share"),
+                ("saves", "save"),
+                ("follows", "follow"),
+            ),
+            operator="sum",
+            rationale="Likes + Comments + Shares + Saves + Follows. Engagement is a count, "
+                      "so the unit matches Reach, Clicks and Leads on this platform.",
         ),
         "IG_WT_CLICKS": KPIComposition(
             components=(
@@ -183,9 +198,14 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             rationale="Clicks to your destination URL.  Profile Visits accepted as a fallback.",
         ),
         "IG_LG_LEADS": KPIComposition(
-            components=(("leads", "lead"), ("purchases", "purchase")),
+            components=(("leads", "lead"),),
             operator="first",
-            rationale="Lead form submissions preferred; Purchases accepted as a fallback.",
+            rationale="Lead form submissions.",
+        ),
+        "IG_LG_PURCHASES": KPIComposition(
+            components=(("purchases", "purchase"),),
+            operator="first",
+            rationale="Purchase events tracked via the IG conversion API.",
         ),
         _BUDGET: KPIComposition(
             components=(("amount spent", "spend", "cost"),), operator="first",
@@ -201,9 +221,16 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             operator="first",
             rationale="LinkedIn reports Impressions; Reach / Video Views accepted as fallbacks.",
         ),
-        "LI_EN_ENGRATERATE": KPIComposition(
-            components=(("engagement rate", "average ctr"),), operator="mean",
-            rationale="Engagement rate (LinkedIn reports a single weighted rate).",
+        "LI_EN_ENGAGEMENT": KPIComposition(
+            components=(
+                ("reactions", "reaction"),
+                ("comments", "comment"),
+                ("shares", "share"),
+                ("followers", "follower"),
+            ),
+            operator="sum",
+            rationale="Reactions + Comments + Shares + Followers. Count units, "
+                      "matching the other LinkedIn canonicals.",
         ),
         "LI_WT_CLICKS": KPIComposition(
             components=(("click",), ("website visit", "website visits")),
@@ -223,14 +250,13 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
         ),
     },
     # ── Google Search ──────────────────────────────────────────────────────
+    # No engagement KPI — see KPI_CONFIG comment.  All Google canonicals
+    # are counts (Impressions, Clicks, Conversions, Purchases) to preserve
+    # the platform-uniform-units invariant.
     "go_search": {
         "GO_SEARCH_AW_IMPRESSION": KPIComposition(
             components=(("impr.", "impressions", "impression"),), operator="first",
             rationale="Search-only impressions (export filtered to Search campaigns).",
-        ),
-        "GO_SEARCH_EN_CTR": KPIComposition(
-            components=(("ctr",),), operator="mean",
-            rationale="Search CTR — usually much higher than Display because of keyword intent.",
         ),
         "GO_SEARCH_WT_CLICKS": KPIComposition(
             components=(("clicks", "click"),), operator="first",
@@ -240,16 +266,17 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             components=(
                 ("conversions", "conv."),
                 ("leads", "lead"),
-                ("purchases", "purchase"),
                 ("calls", "phone calls"),
             ),
             operator="first",
-            rationale=(
-                "Conversions preferred (whatever event you tagged); "
-                "Leads / Purchases / Calls accepted as fallbacks.  Not "
-                "summed because Conversions usually already includes "
-                "Leads and Purchases."
-            ),
+            rationale="Conversions preferred (whatever event you tagged); "
+                      "Leads / Calls accepted as fallbacks.  Purchases is now "
+                      "its own canonical (GO_SEARCH_LG_PURCHASES).",
+        ),
+        "GO_SEARCH_LG_PURCHASES": KPIComposition(
+            components=(("purchases", "purchase"),), operator="first",
+            rationale="Purchase conversions tracked separately so a purchase-goal "
+                      "campaign isn't lumped with lead-gen Conversions.",
         ),
         _BUDGET: KPIComposition(
             components=(("cost", "spend"),), operator="first",
@@ -265,18 +292,17 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             operator="first",
             rationale="Display Network impressions; Views accepted as a fallback.",
         ),
-        "GO_DISPLAY_EN_CTR": KPIComposition(
-            components=(("ctr",),), operator="mean",
-            rationale="Display CTR — typically much lower than Search (~0.2–0.5%).",
-        ),
         "GO_DISPLAY_WT_CLICKS": KPIComposition(
             components=(("clicks", "click"),), operator="first",
             rationale="Clicks on Display ads (including responsive display).",
         ),
         "GO_DISPLAY_LG_CONVERSIONS": KPIComposition(
-            components=(("conversions", "conv."), ("purchases", "purchase")),
-            operator="first",
-            rationale="Conversions preferred; Purchases accepted as a fallback.",
+            components=(("conversions", "conv."),), operator="first",
+            rationale="Conversions from Display campaigns.",
+        ),
+        "GO_DISPLAY_LG_PURCHASES": KPIComposition(
+            components=(("purchases", "purchase"),), operator="first",
+            rationale="Purchase conversions tracked separately.",
         ),
         _BUDGET: KPIComposition(
             components=(("cost", "spend"),), operator="first",
@@ -292,10 +318,6 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             operator="first",
             rationale="PMax impressions blended across surfaces; Views accepted as a fallback.",
         ),
-        "GO_PMAX_EN_CTR": KPIComposition(
-            components=(("ctr",),), operator="mean",
-            rationale="PMax CTR — a blended figure; treat as a directional signal only.",
-        ),
         "GO_PMAX_WT_CLICKS": KPIComposition(
             components=(("clicks", "click"),), operator="first",
             rationale="Total PMax clicks across all surfaces.",
@@ -304,14 +326,16 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             components=(
                 ("conversions", "conv."),
                 ("leads", "lead"),
-                ("purchases", "purchase"),
                 ("store visit", "store visits"),
             ),
             operator="first",
-            rationale=(
-                "Conversions preferred (Smart Bidding optimises for it); "
-                "Leads / Purchases / Store Visits accepted as fallbacks."
-            ),
+            rationale="Conversions preferred (Smart Bidding optimises for it); "
+                      "Leads / Store Visits accepted as fallbacks.  Purchases "
+                      "is now its own canonical (GO_PMAX_LG_PURCHASES).",
+        ),
+        "GO_PMAX_LG_PURCHASES": KPIComposition(
+            components=(("purchases", "purchase"),), operator="first",
+            rationale="Purchase conversions tracked separately.",
         ),
         _BUDGET: KPIComposition(
             components=(("cost", "spend"),), operator="first",
@@ -327,10 +351,16 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             operator="first",
             rationale="Total video views (2 seconds+); Reach accepted as a fallback.",
         ),
-        "TT_EN_ENGRATERATE": KPIComposition(
-            components=(("engagement rate", "er"),), operator="mean",
-            rationale="Engagement rate.  If your export has likes/comments/shares as "
-                      "separate columns, fill the Engagement Rate column directly.",
+        "TT_EN_ENGAGEMENT": KPIComposition(
+            components=(
+                ("likes", "like"),
+                ("comments", "comment"),
+                ("shares", "share"),
+                ("saves", "save"),
+                ("followers", "follower"),
+            ),
+            operator="sum",
+            rationale="Likes + Comments + Shares + Saves + Followers. Count units.",
         ),
         "TT_WT_CLICKS": KPIComposition(
             components=(("destination click", "clicks"), ("profile view", "profile views")),
@@ -338,9 +368,14 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             rationale="Destination clicks preferred; Profile Views accepted as a fallback.",
         ),
         "TT_LG_LEADS": KPIComposition(
-            components=(("leads", "lead"), ("purchases", "purchase")),
+            components=(("leads", "lead"),),
             operator="first",
-            rationale="Lead form submissions preferred; Purchases accepted as a fallback.",
+            rationale="Lead form submissions.",
+        ),
+        "TT_LG_PURCHASES": KPIComposition(
+            components=(("purchases", "purchase"),),
+            operator="first",
+            rationale="Purchase events tracked separately.",
         ),
         _BUDGET: KPIComposition(
             components=(("cost", "spend"),), operator="first",
@@ -356,9 +391,16 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             operator="first",
             rationale="Total ad views preferred; Impressions / Unique Viewers accepted as fallbacks.",
         ),
-        "YT_EN_ENGRATERATE": KPIComposition(
-            components=(("view rate", "engagement rate"),), operator="mean",
-            rationale="View-through rate as engagement proxy.",
+        "YT_EN_ENGAGEMENT": KPIComposition(
+            components=(
+                ("likes", "like"),
+                ("comments", "comment"),
+                ("shares", "share"),
+                ("subscribers", "subscriber"),
+            ),
+            operator="sum",
+            rationale="Likes + Comments + Shares + Subscribers. Count units, "
+                      "replacing the legacy View-Rate canonical.",
         ),
         "YT_WT_CLICKS": KPIComposition(
             components=(
@@ -370,9 +412,14 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             rationale="Total clicks preferred; Card / End Screen clicks accepted as fallbacks.",
         ),
         "YT_LG_LEADS": KPIComposition(
-            components=(("conversions", "leads"), ("purchases", "purchase")),
+            components=(("conversions", "leads"),),
             operator="first",
-            rationale="Tagged conversions preferred; Purchases accepted as a fallback.",
+            rationale="Tagged conversions (called Conversions on YouTube).",
+        ),
+        "YT_LG_PURCHASES": KPIComposition(
+            components=(("purchases", "purchase"),),
+            operator="first",
+            rationale="Purchase events tracked separately.",
         ),
         _BUDGET: KPIComposition(
             components=(("cost", "spend"),), operator="first",
@@ -389,13 +436,10 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             rationale="Total impressions; Video Views accepted as a fallback.",
         ),
         "PT_EN_SAVES": KPIComposition(
-            # Pinterest engagement canonical IS specifically Saves (per
-            # KPI_CONFIG.kpi_label).  Closeups + Followers are surfaced
-            # as informational extras in the template — they're related
-            # signals but combining them into 'Saves' would change what
-            # that label means.
             components=(("saves", "save"),), operator="first",
-            rationale="Pin saves — the canonical Pinterest engagement signal.",
+            rationale="Pin saves — the canonical Pinterest engagement signal.  "
+                      "Closeups / Followers stay informational because Saves is "
+                      "the labelled canonical (per KPI_CONFIG).",
         ),
         "PT_WT_CLICKS": KPIComposition(
             components=(("outbound click", "outbound clicks"), ("pin click", "pin clicks")),
@@ -403,9 +447,13 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             rationale="Outbound clicks preferred (off-platform traffic); Pin Clicks accepted as a fallback.",
         ),
         "PT_LG_LEADS": KPIComposition(
-            components=(("leads", "lead"), ("checkouts", "checkout")),
+            components=(("leads", "lead"),),
             operator="first",
-            rationale="Leads preferred; Checkouts accepted as a fallback.",
+            rationale="Leads.",
+        ),
+        "PT_LG_PURCHASES": KPIComposition(
+            components=(("checkouts", "checkout"),), operator="first",
+            rationale="Checkouts — Pinterest's purchase-equivalent event.",
         ),
         _BUDGET: KPIComposition(
             components=(("cost", "spend"),), operator="first",
@@ -421,9 +469,16 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             operator="first",
             rationale="Total impressions; Video Views accepted as a fallback.",
         ),
-        "TW_EN_ENGRATERATE": KPIComposition(
-            components=(("engagement rate", "er"),), operator="mean",
-            rationale="Engagement rate (X reports a single percentage).",
+        "TW_EN_ENGAGEMENT": KPIComposition(
+            components=(
+                ("likes", "like"),
+                ("replies", "reply"),
+                ("reposts", "repost"),
+                ("bookmarks", "bookmark"),
+                ("followers", "follower"),
+            ),
+            operator="sum",
+            rationale="Likes + Replies + Reposts + Bookmarks + Followers. Count units.",
         ),
         "TW_WT_CLICKS": KPIComposition(
             components=(("link click", "link clicks"), ("profile visit", "profile visits")),
@@ -449,9 +504,14 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             operator="first",
             rationale="Unique reach preferred; Impressions accepted as a fallback.",
         ),
-        "SN_EN_ENGRATERATE": KPIComposition(
-            components=(("engagement rate", "er"),), operator="mean",
-            rationale="Engagement rate (single percentage).",
+        "SN_EN_ENGAGEMENT": KPIComposition(
+            components=(
+                ("story opens", "story open"),
+                ("shares", "share"),
+                ("subscribers", "subscriber"),
+            ),
+            operator="sum",
+            rationale="Story Opens + Shares + Subscribers. Count units.",
         ),
         "SN_WT_CLICKS": KPIComposition(
             components=(("swipe-up", "swipe-ups", "swipe ups", "swipeups"),),
@@ -459,9 +519,14 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             rationale="Swipe-ups (Snapchat's destination-click metric).",
         ),
         "SN_LG_LEADS": KPIComposition(
-            components=(("leads", "lead"), ("purchases", "purchase")),
+            components=(("leads", "lead"),),
             operator="first",
-            rationale="Leads preferred; Purchases accepted as a fallback.",
+            rationale="Leads.",
+        ),
+        "SN_LG_PURCHASES": KPIComposition(
+            components=(("purchases", "purchase"),),
+            operator="first",
+            rationale="Purchase events tracked separately.",
         ),
         _BUDGET: KPIComposition(
             components=(("cost", "spend", "amount spent"),), operator="first",
@@ -477,9 +542,15 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             operator="first",
             rationale="Total impressions; Video Views accepted as a fallback.",
         ),
-        "RD_EN_ENGRATERATE": KPIComposition(
-            components=(("engagement rate", "er"),), operator="mean",
-            rationale="Engagement rate (single percentage).",
+        "RD_EN_ENGAGEMENT": KPIComposition(
+            components=(
+                ("upvotes", "upvote"),
+                ("comments", "comment"),
+                ("shares", "share"),
+                ("followers", "follower"),
+            ),
+            operator="sum",
+            rationale="Upvotes + Comments + Shares + Followers. Count units.",
         ),
         "RD_WT_CLICKS": KPIComposition(
             components=(("clicks", "click"),),
@@ -502,54 +573,45 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
 
 
 # Informational template columns that aren't mapped to any canonical KPI.
-# These appear in the unified template so the user can record raw counts
-# (Likes, Reactions, Followers, etc.) on platforms whose engagement
-# canonical is a RATE — the rate is what the engine optimises against,
-# but capturing the raw counts is useful for the user's own analysis
-# and for future "derive rate from counts" extensions.
+# Currently empty — Pinterest's Closeups/Followers stayed informational
+# in a previous iteration but are now omitted entirely since the
+# PT_EN_SAVES canonical is specifically Saves and surfacing the others
+# implied they fed into it (which was misleading).
 #
-# Format: {platform: ((column_name, example_value), ...)}.  These columns
-# are silently ignored by the parser — they don't feed any canonical.
+# This map is retained so a future rate-canonical platform can register
+# template-only columns without re-introducing the dead-data trap.
 _TEMPLATE_EXTRA_COLUMNS: Dict[str, Tuple[Tuple[str, str], ...]] = {
-    "ig": (
-        ("Likes", "8000"), ("Comments", "400"), ("Shares", "200"),
-        ("Saves", "500"), ("Follows", "100"),
-    ),
-    "li": (
-        ("Reactions", "1500"), ("Comments", "300"), ("Shares", "150"),
-        ("Followers", "80"),
-    ),
-    "yt": (
-        ("Likes", "3000"), ("Comments", "200"), ("Shares", "150"),
-        ("Subscribers", "100"),
-    ),
-    "tt": (
-        ("Likes", "10000"), ("Comments", "500"), ("Shares", "1000"),
-        ("Saves", "800"), ("Followers", "200"),
-    ),
     "pt": (
         ("Closeups", "3000"), ("Followers", "100"),
     ),
-    "tw": (
-        ("Likes", "1500"), ("Replies", "200"), ("Reposts", "300"),
-        ("Bookmarks", "150"), ("Followers", "80"),
-    ),
-    "sn": (
-        ("Story Opens", "5000"), ("Shares", "400"), ("Subscribers", "150"),
-    ),
-    "rd": (
-        ("Upvotes", "1500"), ("Comments", "400"), ("Shares", "200"),
-        ("Followers", "100"),
-    ),
 }
 
 
-_RATE_KPIS = {
-    "IG_EN_ENGRATERATE", "LI_EN_ENGRATERATE",
-    "GO_SEARCH_EN_CTR", "GO_DISPLAY_EN_CTR", "GO_PMAX_EN_CTR",
-    "TT_EN_ENGRATERATE", "YT_EN_ENGRATERATE",
-    "TW_EN_ENGRATERATE", "SN_EN_ENGRATERATE", "RD_EN_ENGRATERATE",
+# Engagement post-processing: if a user uploads a legacy export with an
+# 'Engagement Rate' column but no individual count breakouts, derive
+# engagement count = rate × awareness count.  Maps each social platform
+# to (set of rate-column needles, awareness canonical var to multiply
+# by, target engagement canonical var).  The post-processing only fires
+# when the engagement canonical came out missing from the primary
+# component aggregation.
+_LEGACY_RATE_FALLBACK: Dict[str, Tuple[Tuple[str, ...], str, str]] = {
+    "ig": (("engagement rate", "er"),                "IG_AW_REACH",       "IG_EN_ENGAGEMENT"),
+    "li": (("engagement rate", "average ctr"),       "LI_AW_REACH",       "LI_EN_ENGAGEMENT"),
+    "yt": (("view rate", "engagement rate"),         "YT_AW_VIEWS",       "YT_EN_ENGAGEMENT"),
+    "tt": (("engagement rate", "er"),                "TT_AW_VIEWS",       "TT_EN_ENGAGEMENT"),
+    "tw": (("engagement rate", "er"),                "TW_AW_IMPRESSION",  "TW_EN_ENGAGEMENT"),
+    "sn": (("engagement rate", "er"),                "SN_AW_REACH",       "SN_EN_ENGAGEMENT"),
+    "rd": (("engagement rate", "er"),                "RD_AW_IMPRESSION",  "RD_EN_ENGAGEMENT"),
 }
+
+
+# Set of canonical KPI vars whose values are stored as a rate (decimal
+# in [0,1]).  This set is now empty for the social platforms — all
+# engagement KPIs are counts so the same units apply within a platform.
+# Retained as an empty set for backward compatibility with code paths
+# that branch on `var in _RATE_KPIS`; if a future platform reintroduces
+# a rate canonical, register it here.
+_RATE_KPIS: set = set()
 
 
 SUPPORTED_PLATFORMS: Tuple[str, ...] = tuple(_CSV_PATTERNS.keys())
@@ -1108,6 +1170,52 @@ def parse_platform_csv(
             "components": components,
             "used_fallback": used_fallback,
         }
+
+    # Legacy rate fallback: if engagement is missing but the upload has a
+    # rate column (e.g. an older export with 'Engagement Rate' but no
+    # individual count breakouts) and an awareness count, derive
+    # engagement = rate × awareness_count.  Keeps backward compatibility
+    # with legacy exports without re-introducing rate units into the
+    # canonical KPI set.
+    if plat in _LEGACY_RATE_FALLBACK:
+        rate_needles, awareness_var, target_var = _LEGACY_RATE_FALLBACK[plat]
+        if target_var in missing and awareness_var in kpis:
+            rate_value = None
+            rate_column = None
+            for needle in rate_needles:
+                # Reuse the existing column-lookup machinery
+                for norm_col, original_col in column_index.items():
+                    if needle in norm_col:
+                        agg = _aggregate(rows, original_col, "mean")
+                        if agg is not None and agg > 0:
+                            rate_value = agg
+                            rate_column = original_col
+                            break
+                if rate_value is not None:
+                    break
+            if rate_value is not None:
+                if rate_value > 1.0 and rate_value <= 100.0:
+                    rate_value = rate_value / 100.0
+                derived = rate_value * kpis[awareness_var]
+                kpis[target_var] = derived
+                missing.remove(target_var)
+                matched[target_var] = rate_column
+                breakdown[target_var] = {
+                    "value": derived,
+                    "operator": "rate_times_awareness",
+                    "rationale": (
+                        f"Engagement count derived from {rate_column} "
+                        f"× {awareness_var} ({rate_value:.4f} × "
+                        f"{kpis[awareness_var]:.0f}).  Fill the individual "
+                        f"engagement count columns (Likes, Comments, etc.) "
+                        f"to replace this with an exact sum."
+                    ),
+                    "components": [{
+                        "column": rate_column, "value": rate_value,
+                        "needle": "engagement rate (legacy)",
+                    }],
+                    "used_fallback": True,
+                }
 
     return {
         "budget": budget_val,

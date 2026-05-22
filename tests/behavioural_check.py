@@ -181,8 +181,8 @@ def case_engagement_only() -> None:
         # FB has a count KPI (Engagement count). IG/LI have rate KPIs.
         platform_inputs={
             "fb": {"budget": 4000.0, "kpis": {"FB_EN_ENGAGEMENT": 12000.0}},
-            "ig": {"budget": 4000.0, "kpis": {"IG_EN_ENGRATERATE": 0.045}},   # 4.5 %
-            "li": {"budget": 4000.0, "kpis": {"LI_EN_ENGRATERATE": 0.015}},   # 1.5 %
+            "ig": {"budget": 4000.0, "kpis": {"IG_EN_ENGAGEMENT": 0.045}},   # 4.5 %
+            "li": {"budget": 4000.0, "kpis": {"LI_EN_ENGAGEMENT": 0.015}},   # 1.5 %
         },
     )
 
@@ -301,14 +301,14 @@ def case_realistic_mixed() -> None:
                 "budget": 4000.0,
                 "kpis": {
                     "IG_AW_REACH": 200000.0,
-                    "IG_EN_ENGRATERATE": 0.05,
+                    "IG_EN_ENGAGEMENT": 0.05,
                 },
             },
             "li": {
                 "budget": 5000.0,
                 "kpis": {
                     "LI_LG_LEADS": 80.0,
-                    "LI_EN_ENGRATERATE": 0.025,
+                    "LI_EN_ENGAGEMENT": 0.025,
                 },
             },
         },
@@ -341,14 +341,14 @@ def case_realistic_mixed_with_goal_values() -> None:
                 "budget": 4000.0,
                 "kpis": {
                     "IG_AW_REACH": 200000.0,
-                    "IG_EN_ENGRATERATE": 0.05,
+                    "IG_EN_ENGAGEMENT": 0.05,
                 },
             },
             "li": {
                 "budget": 5000.0,
                 "kpis": {
                     "LI_LG_LEADS": 80.0,
-                    "LI_EN_ENGRATERATE": 0.025,
+                    "LI_EN_ENGAGEMENT": 0.025,
                 },
             },
         },
@@ -381,14 +381,14 @@ def case_realistic_mixed_with_test_and_learn() -> None:
                 "budget": 4000.0,
                 "kpis": {
                     "IG_AW_REACH": 200000.0,
-                    "IG_EN_ENGRATERATE": 0.05,
+                    "IG_EN_ENGAGEMENT": 0.05,
                 },
             },
             "li": {
                 "budget": 5000.0,
                 "kpis": {
                     "LI_LG_LEADS": 80.0,
-                    "LI_EN_ENGRATERATE": 0.025,
+                    "LI_EN_ENGAGEMENT": 0.025,
                 },
             },
         },

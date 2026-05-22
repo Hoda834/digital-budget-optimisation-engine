@@ -86,12 +86,17 @@ def test_csv_with_currency_symbols():
     assert result["budget"] == pytest.approx(1200.50)
 
 
-def test_csv_google_ctr_decimal_form():
-    """When Google exports CTR as decimal (0.045), parse to 0.045, not 0.00045."""
+def test_csv_google_ctr_column_is_silently_ignored():
+    """Google has no engagement KPI any more — the CTR column appears
+    in user uploads (it's in Google's standard export) but it doesn't
+    feed any canonical, so the parser must silently ignore it without
+    erroring or producing a phantom KPI."""
     csv = b"Impressions,Clicks,CTR,Conversions,Cost\n100000,4500,0.045,300,1000\n"
     result = parse_platform_csv(csv, "go_search")
-    # CTR provided as decimal — should remain 0.045 (NOT divide by 100 again)
-    assert result["kpis"]["GO_SEARCH_EN_CTR"] == pytest.approx(0.045)
+    assert "GO_SEARCH_EN_CTR" not in result["kpis"]
+    # The other Google canonicals still parse correctly
+    assert result["kpis"]["GO_SEARCH_AW_IMPRESSION"] == pytest.approx(100000.0)
+    assert result["kpis"]["GO_SEARCH_WT_CLICKS"] == pytest.approx(4500.0)
 
 
 def test_csv_thousand_separator_in_numbers():
@@ -116,29 +121,38 @@ def test_csv_supported_platforms_covers_key_marketers():
         assert p in SUPPORTED_PLATFORMS, f"{p!r} missing from CSV support"
 
 
-def test_csv_google_ctr_bare_percentage_form():
-    """Google exports sometimes show CTR as '4.5' (meaning 4.5%) without
-    the '%' suffix.  The parser needs to recognise this — a bare 4.5
-    cannot mean 'CTR = 450%' literally.  Rate KPIs must be normalised
-    into [0, 1] regardless of presentation."""
-    csv = b"Impressions,Clicks,CTR,Conversions,Cost\n100000,4500,4.50,300,1000\n"
-    result = parse_platform_csv(csv, "go_search")
-    # Should be 0.045 (CTR of 4.5%), not 4.5
-    assert result["kpis"]["GO_SEARCH_EN_CTR"] == pytest.approx(0.045), (
-        f"Bare '4.50' in CTR column should normalise to 0.045, got "
-        f"{result['kpis']['GO_SEARCH_EN_CTR']}"
-    )
-
-
-def test_csv_engagement_rate_bare_percentage_form():
-    """Same problem on TikTok/IG/LI: CTR/ER reported as a percentage
-    without the % sign should not produce a 'rate' value > 1."""
-    csv = b"Impressions,Engagement rate,Cost\n100000,5.5,1000\n"
-    result = parse_platform_csv(csv, "tt")
-    if "TT_EN_ENGRATERATE" in result["kpis"]:
-        assert result["kpis"]["TT_EN_ENGRATERATE"] <= 1.0, (
-            f"Rate KPIs must be in [0,1]; got {result['kpis']['TT_EN_ENGRATERATE']}"
+def test_csv_google_no_engagement_canonical():
+    """Google surfaces (Search / Display / PMax) no longer have an
+    engagement KPI — see KPI_CONFIG comment: CTR was a rate, dropping it
+    keeps all KPIs on Google as counts (uniform-units invariant), and
+    'engaged clicks' would duplicate WT_CLICKS.  Verify no GO_*_EN_*
+    canonical exists in KPI_CONFIG."""
+    from core.kpi_config import KPI_CONFIG
+    for code in ("go_search", "go_display", "go_pmax"):
+        en_kpis = [r for r in KPI_CONFIG
+                   if r["platform"] == code and r["goal"] == "en"]
+        assert en_kpis == [], (
+            f"{code} should have no engagement KPI; found {en_kpis}"
         )
+
+
+def test_csv_legacy_engagement_rate_derives_count_via_fallback():
+    """A user uploading an older export that has 'Engagement rate' but
+    not the individual count breakouts should still get an engagement
+    canonical — the parser's legacy-rate fallback derives the count as
+    rate × awareness.  Verifies the back-compat shim added when
+    engagement was migrated from rate to count units."""
+    csv = b"Reach,Engagement rate,Amount Spent\n100000,5.5%,1000\n"
+    result = parse_platform_csv(csv, "ig")
+    # 0.055 × 100,000 = 5,500 engagements derived
+    assert "IG_EN_ENGAGEMENT" in result["kpis"], (
+        "Legacy-rate fallback should populate IG_EN_ENGAGEMENT from "
+        "rate × Reach when individual count columns are absent."
+    )
+    assert result["kpis"]["IG_EN_ENGAGEMENT"] == pytest.approx(5500.0), (
+        f"Derived engagement should be 0.055 × 100,000 = 5,500; got "
+        f"{result['kpis']['IG_EN_ENGAGEMENT']}"
+    )
 
 
 def test_csv_with_totals_row_doesnt_double_count():
@@ -391,11 +405,19 @@ def test_montecarlo_zero_seed_reproducible():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("platform", sorted(ALLOWED_PLATFORMS))
-def test_every_builtin_platform_has_all_four_goals(platform):
-    """Every built-in platform should have at least one KPI for each of the
-    four canonical goals (aw, en, wt, lg) — otherwise some Module-2
-    selections would silently drop the platform from the LP."""
-    for goal in (GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG):
+def test_every_builtin_platform_has_required_goals(platform):
+    """Every built-in platform should have at least one KPI for the three
+    universally-supported goals (aw, wt, lg) — otherwise some Module-2
+    selections would silently drop the platform from the LP.
+
+    Engagement (en) is required on social platforms but explicitly absent
+    on Google surfaces (see KPI_CONFIG: CTR was a rate, dropped to keep
+    all-counts uniformity; 'engaged clicks' on Google would duplicate
+    WT_CLICKS so the engagement goal is simply omitted there)."""
+    required = [GOAL_AW, GOAL_WT, GOAL_LG]
+    if not platform.startswith("go_"):
+        required.append(GOAL_EN)
+    for goal in required:
         rows = get_kpi_rows(platform, goal)
         assert rows, f"{platform!r} has no KPI for goal {goal!r}"
 
@@ -956,8 +978,8 @@ def test_pipeline_with_only_rate_kpi_goal():
                     "tt": {"priority_1": "en", "priority_2": None},
                 })
     finalise_module3_from_inputs(s, platform_inputs={
-        "ig": {"budget": 3000.0, "historical_days": 60, "kpis": {"IG_EN_ENGRATERATE": 0.045}},
-        "tt": {"budget": 3000.0, "historical_days": 60, "kpis": {"TT_EN_ENGRATERATE": 0.06}},
+        "ig": {"budget": 3000.0, "historical_days": 60, "kpis": {"IG_EN_ENGAGEMENT": 0.045}},
+        "tt": {"budget": 3000.0, "historical_days": 60, "kpis": {"TT_EN_ENGAGEMENT": 0.06}},
     })
     run_module4(s)
     run_module5(s)
@@ -1473,25 +1495,30 @@ def test_pinterest_parses_full_native_schema():
     assert result["kpis"]["PT_LG_LEADS"] == pytest.approx(25.0)
 
 
-def test_x_rate_kpi_normalised_from_percent_form():
-    """X engagement rate must normalise '3.5%' → 0.035, same as the
-    other rate-canonical platforms.  TW_EN_ENGRATERATE is in _RATE_KPIS."""
+def test_x_engagement_sums_count_components_not_rate():
+    """X engagement is now a count (sum of Likes + Replies + Reposts +
+    Bookmarks + Followers), not a rate.  An export with these columns
+    filled should produce the summed count; the legacy Engagement Rate
+    column is no longer a canonical input."""
     from core.csv_import import parse_platform_csv
-    csv = b"Impression,Engagement Rate,Link Click,Leads,Cost\n100000,3.5%,1200,50,1000\n"
+    csv = (
+        b"Impression,Likes,Replies,Reposts,Bookmarks,Followers,Link Click,Leads,Cost\n"
+        b"100000,800,200,300,150,80,1200,50,1000\n"
+    )
     result = parse_platform_csv(csv, "tw")
-    assert result["kpis"]["TW_EN_ENGRATERATE"] == pytest.approx(0.035), (
-        f"X engagement rate should be normalised to [0,1]; got "
-        f"{result['kpis']['TW_EN_ENGRATERATE']}"
+    # 800 + 200 + 300 + 150 + 80 = 1,530
+    assert result["kpis"]["TW_EN_ENGAGEMENT"] == pytest.approx(1530.0), (
+        f"X engagement should sum the five count components; got "
+        f"{result['kpis']['TW_EN_ENGAGEMENT']}"
     )
 
 
-def test_template_informational_extras_appear_but_dont_pollute_canonicals():
-    """Rate-canonical engagement platforms (IG, TT, etc.) surface raw
-    count columns (Likes, Comments, Shares, Saves, Follows) in the
-    template for the user's records, but those columns must NOT feed
-    the canonical engagement rate.  If the user fills Likes but not
-    Engagement Rate, the canonical stays missing rather than producing
-    a corrupt 'rate' from a count."""
+def test_template_engagement_counts_now_feed_canonical():
+    """Engagement count columns (Likes, Comments, Shares, Saves, Follows
+    on IG) USED to be informational-only on rate-canonical platforms.
+    After the all-counts refactor they ARE the canonical components —
+    the parser must sum them into IG_EN_ENGAGEMENT.  This locks the
+    new behaviour and prevents a regression back to the dead-data trap."""
     import io
     from openpyxl import load_workbook
     from core.csv_import import (
@@ -1503,14 +1530,13 @@ def test_template_informational_extras_appear_but_dont_pollute_canonicals():
     xlsx = generate_unified_template_xlsx(["ig"], platform_display_names=names)
     wb = load_workbook(io.BytesIO(xlsx))
 
-    # Confirm the informational columns appear in the IG sheet header
+    # The engagement count columns should appear in the IG template
     ig_columns = [c.value for c in wb["Instagram"][1]]
-    for extra in ("Likes", "Comments", "Shares", "Saves", "Follows"):
-        assert extra in ig_columns, (
-            f"Informational column {extra!r} missing from Instagram template"
+    for component in ("Likes", "Comments", "Shares", "Saves", "Follows"):
+        assert component in ig_columns, (
+            f"Engagement component {component!r} missing from Instagram template"
         )
 
-    # Fill only the informational counts, NOT the rate or any canonical
     ws = wb["Instagram"]
     hdr = {c.value: c.column for c in ws[1]}
     counts = {
@@ -1527,11 +1553,137 @@ def test_template_informational_extras_appear_but_dont_pollute_canonicals():
     parsed = {k: v for k, v in results.items() if not k.startswith("__")}
 
     assert "ig" in parsed
-    # The rate KPI should be missing (user didn't fill it) — Likes shouldn't
-    # have been mis-parsed AS the engagement rate.
-    assert "IG_EN_ENGRATERATE" not in parsed["ig"]["kpis"], (
-        f"Informational Likes column polluted IG_EN_ENGRATERATE; got "
-        f"{parsed['ig']['kpis'].get('IG_EN_ENGRATERATE')}"
+    # Engagement is now a count = 5000 + 200 + 100 + 80 + 30 = 5,410
+    assert parsed["ig"]["kpis"]["IG_EN_ENGAGEMENT"] == pytest.approx(5410.0), (
+        f"IG engagement should be 5000+200+100+80+30=5410; got "
+        f"{parsed['ig']['kpis'].get('IG_EN_ENGAGEMENT')}"
     )
-    # But the canonicals that DID match should be present
     assert parsed["ig"]["kpis"]["IG_AW_REACH"] == pytest.approx(100000.0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Schema drift prevention: cross-check KPI_CONFIG <-> _CSV_PATTERNS
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_kpi_config_and_csv_patterns_agree_per_platform():
+    """KPI_CONFIG (what the engine knows) and _CSV_PATTERNS (what the
+    parser knows) must agree on which canonical KPIs exist for each
+    platform.  A mismatch means either the parser returns KPIs the engine
+    can't use, OR the engine expects KPIs the parser can't produce —
+    both silent bugs.  This is the schema-drift trip-wire."""
+    from core.kpi_config import KPI_CONFIG
+    from core.csv_import import _CSV_PATTERNS, _BUDGET, _DAYS, SUPPORTED_PLATFORMS
+
+    config_kpis_by_platform = {}
+    for row in KPI_CONFIG:
+        config_kpis_by_platform.setdefault(row["platform"], set()).add(row["var"])
+
+    pattern_kpis_by_platform = {}
+    for platform, patterns in _CSV_PATTERNS.items():
+        # Strip the pseudo-KPI markers — they're parser-only (budget, days)
+        kpi_vars = {var for var in patterns if var not in (_BUDGET, _DAYS)}
+        pattern_kpis_by_platform[platform] = kpi_vars
+
+    for platform in SUPPORTED_PLATFORMS:
+        config = config_kpis_by_platform.get(platform, set())
+        patterns = pattern_kpis_by_platform.get(platform, set())
+        missing_in_patterns = config - patterns
+        extra_in_patterns = patterns - config
+        assert not missing_in_patterns, (
+            f"{platform!r}: KPI_CONFIG has KPIs the parser can't produce: "
+            f"{sorted(missing_in_patterns)}.  Either add patterns in "
+            f"_CSV_PATTERNS or remove the KPI_CONFIG row."
+        )
+        assert not extra_in_patterns, (
+            f"{platform!r}: parser produces KPIs the engine doesn't know: "
+            f"{sorted(extra_in_patterns)}.  Either add KPI_CONFIG rows or "
+            f"remove the _CSV_PATTERNS entries."
+        )
+
+
+def test_platform_kpis_have_uniform_units():
+    """All canonical KPIs on a given platform must share the same `kind`
+    (count or rate) so the optimizer / forecaster math doesn't mix units.
+    After the all-counts refactor every platform's KPIs should be
+    KIND_COUNT — no exceptions.  If a future PR re-introduces a rate
+    canonical it must do so on a per-platform basis (all 4 KPIs flip
+    together) or this invariant breaks."""
+    from core.kpi_config import KPI_CONFIG
+    from core.csv_import import SUPPORTED_PLATFORMS
+
+    for platform in SUPPORTED_PLATFORMS:
+        kinds = {
+            row.get("kind", "count")
+            for row in KPI_CONFIG if row["platform"] == platform
+        }
+        assert len(kinds) == 1, (
+            f"{platform!r} has mixed KPI kinds {kinds} — every KPI on a "
+            f"platform must share units (all count or all rate).  Currently "
+            f"the only accepted kind is 'count' (rates were removed during "
+            f"the uniform-units refactor)."
+        )
+        assert kinds == {"count"}, (
+            f"{platform!r} has KPIs with kind {kinds}; expected only "
+            f"'count' after the rate-engagement removal."
+        )
+
+
+def test_lg_split_purchases_separate_from_leads():
+    """Where the user's schema lists Purchases as a distinct conversion
+    event (FB, IG, YT, TT, PT, SN, Google Search / Display / PMax), the
+    *_LG_PURCHASES canonical must exist alongside *_LG_LEADS (or
+    *_LG_CONVERSIONS on Google) so the optimiser can reward purchases
+    without conflating them with lead-gen volume."""
+    from core.kpi_config import KPI_CONFIG
+
+    platforms_with_purchase_split = (
+        "fb", "ig", "yt", "tt", "pt", "sn",
+        "go_search", "go_display", "go_pmax",
+    )
+    for platform in platforms_with_purchase_split:
+        purchase_kpis = [
+            r for r in KPI_CONFIG
+            if r["platform"] == platform
+            and r["goal"] == "lg"
+            and r["var"].endswith("_PURCHASES")
+        ]
+        assert purchase_kpis, (
+            f"{platform!r} should have a *_LG_PURCHASES canonical "
+            f"(user's schema lists Purchases / Checkouts as a distinct "
+            f"conversion event)."
+        )
+        # And the *_LG_LEADS / *_LG_CONVERSIONS canonical must still exist
+        non_purchase_lg = [
+            r for r in KPI_CONFIG
+            if r["platform"] == platform
+            and r["goal"] == "lg"
+            and not r["var"].endswith("_PURCHASES")
+        ]
+        assert non_purchase_lg, (
+            f"{platform!r} should still have a non-purchase LG canonical "
+            f"(Leads or Conversions) for lead-gen / generic conversion "
+            f"campaigns."
+        )
+
+
+def test_lg_split_purchases_parses_independently():
+    """An upload with both Leads AND Purchases columns must populate
+    BOTH canonical KPIs — not lose one to first-wins fallthrough."""
+    from core.csv_import import parse_platform_csv
+
+    csv = (
+        b"Reach,Impression,Post Reactions,Comments,Shares,Saves,Follows,"
+        b"Link Click,On-facebook Lead,Purchases,Amount Spent\n"
+        b"100000,200000,500,100,50,30,20,3000,80,25,1000\n"
+    )
+    result = parse_platform_csv(csv, "fb")
+    assert result["kpis"]["FB_LG_LEADS"] == pytest.approx(80.0), (
+        f"Leads should parse independently of Purchases; got "
+        f"{result['kpis'].get('FB_LG_LEADS')}"
+    )
+    assert result["kpis"]["FB_LG_PURCHASES"] == pytest.approx(25.0), (
+        f"Purchases should parse into its own canonical, not get "
+        f"swallowed by Leads fallthrough; got "
+        f"{result['kpis'].get('FB_LG_PURCHASES')}"
+    )

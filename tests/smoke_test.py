@@ -73,7 +73,7 @@ def _run_pipeline_to_module5(
                 "time_window": "last 30 days",
                 "budget": 3000.0,
                 "kpis": {
-                    "IG_EN_ENGRATERATE": 0.045,
+                    "IG_EN_ENGAGEMENT": 0.045,
                     "IG_LG_LEADS": 120.0,
                 },
             },
@@ -388,8 +388,8 @@ def test_multi_objective_goal_normalisation_prevents_scale_dominance() -> None:
         state,
         platform_inputs={
             "fb": {"budget": 5000.0, "kpis": {"FB_AW_REACH": 500000.0, "FB_AW_IMPRESSION": 1200000.0, "FB_EN_ENGAGEMENT": 8000.0}},
-            "ig": {"budget": 4000.0, "kpis": {"IG_AW_REACH": 200000.0, "IG_EN_ENGRATERATE": 0.05}},
-            "li": {"budget": 5000.0, "kpis": {"LI_LG_LEADS": 80.0, "LI_EN_ENGRATERATE": 0.025}},
+            "ig": {"budget": 4000.0, "kpis": {"IG_AW_REACH": 200000.0, "IG_EN_ENGAGEMENT": 0.05}},
+            "li": {"budget": 5000.0, "kpis": {"LI_LG_LEADS": 80.0, "LI_EN_ENGAGEMENT": 0.025}},
         },
     )
     run_module4(state)
@@ -482,8 +482,8 @@ def test_goal_value_weights_shift_allocation_toward_high_value_goal() -> None:
             s,
             platform_inputs={
                 "fb": {"budget": 5000.0, "kpis": {"FB_AW_REACH": 500000.0, "FB_AW_IMPRESSION": 1200000.0, "FB_EN_ENGAGEMENT": 8000.0}},
-                "ig": {"budget": 4000.0, "kpis": {"IG_AW_REACH": 200000.0, "IG_EN_ENGRATERATE": 0.05}},
-                "li": {"budget": 5000.0, "kpis": {"LI_LG_LEADS": 80.0, "LI_EN_ENGRATERATE": 0.025}},
+                "ig": {"budget": 4000.0, "kpis": {"IG_AW_REACH": 200000.0, "IG_EN_ENGAGEMENT": 0.05}},
+                "li": {"budget": 5000.0, "kpis": {"LI_LG_LEADS": 80.0, "LI_EN_ENGAGEMENT": 0.025}},
             },
         )
         run_module4(s)
@@ -917,10 +917,11 @@ def test_csv_import_parses_meta_export() -> None:
     assert result["kpis"]["FB_LG_LEADS"] == pytest.approx(120.0)
 
 
-def test_csv_import_handles_google_ctr_as_percentage() -> None:
-    """Google exports CTR as '4.50%' or sometimes 0.045 — parser must
-    normalise both to a fraction in [0, 1].  Exercised against the
-    go_search slot (same CSV shape across Search / Display / PMax)."""
+def test_csv_import_google_no_engagement_kpi() -> None:
+    """Google surfaces have no engagement KPI (Engagement category
+    dropped — see KPI_CONFIG comment for rationale: CTR was a rate and
+    'engaged clicks' would duplicate WT_CLICKS).  A CTR column in the
+    upload is silently ignored; counts still parse normally."""
     from core.csv_import import parse_platform_csv
 
     csv_pct = (
@@ -928,8 +929,12 @@ def test_csv_import_handles_google_ctr_as_percentage() -> None:
         "Camp,1000000,45000,4.50%,300,2500\n"
     )
     result = parse_platform_csv(csv_pct.encode("utf-8"), "go_search")
-    assert result["kpis"]["GO_SEARCH_EN_CTR"] == pytest.approx(0.045)
+    assert "GO_SEARCH_EN_CTR" not in result["kpis"], (
+        "Google engagement KPI should no longer exist"
+    )
     assert result["kpis"]["GO_SEARCH_LG_CONVERSIONS"] == pytest.approx(300.0)
+    assert result["kpis"]["GO_SEARCH_AW_IMPRESSION"] == pytest.approx(1000000.0)
+    assert result["kpis"]["GO_SEARCH_WT_CLICKS"] == pytest.approx(45000.0)
     assert result["budget"] == pytest.approx(2500.0)
 
 
@@ -979,8 +984,11 @@ def test_google_pipeline_end_to_end() -> None:
         )
     catalog = KPI_CONFIG
     search_vars = {row["var"] for row in catalog if row["platform"] == "go_search"}
+    # Google has no engagement KPI (CTR was a rate, dropped to keep
+    # platform-uniform-units invariant); Awareness / Traffic / Conversion
+    # / Purchases remain.
     assert {
-        "GO_SEARCH_AW_IMPRESSION", "GO_SEARCH_EN_CTR",
+        "GO_SEARCH_AW_IMPRESSION",
         "GO_SEARCH_WT_CLICKS", "GO_SEARCH_LG_CONVERSIONS",
     } <= search_vars
 
@@ -1530,10 +1538,19 @@ def test_module7_includes_forecast_caveat() -> None:
     assert "no per-goal economic values" in text
 
 
-def test_module6_rate_kpi_not_multiplied_by_budget() -> None:
-    from modules.module6 import compute_module6_forecast, Module6ForecastRow
+def test_module6_rate_kpi_math_path_still_safe(monkeypatch) -> None:
+    """Locks the rate-vs-count branch in compute_module6_forecast.  As
+    of the all-counts refactor no KPI in KPI_CONFIG is a rate, but the
+    engine's KIND_RATE machinery is retained for future use — this test
+    monkeypatches a synthetic rate KPI to confirm the math path doesn't
+    silently multiply by budget."""
+    from modules import module6 as m6
+    from modules.module6 import compute_module6_forecast
     from modules.module5 import Module5LPResult
-    from core.kpi_config import KIND_RATE, KIND_COUNT
+    from core.kpi_config import KIND_RATE
+
+    # Inject a fake rate KPI into the kind lookup the forecaster reads
+    monkeypatch.setitem(m6._KPI_KIND, "SYNTH_EN_RATE", KIND_RATE)
 
     lp_result = Module5LPResult(
         budget_per_platform_goal={"ig": {"en": 3000.0}},
@@ -1545,11 +1562,11 @@ def test_module6_rate_kpi_not_multiplied_by_budget() -> None:
         estimated_kpi_per_platform_goal={"ig": {"en": 135.0}},
     )
 
-    kpi_ratios = {"ig": {"en": {"IG_EN_ENGRATERATE": 0.045}}}
+    kpi_ratios = {"ig": {"en": {"SYNTH_EN_RATE": 0.045}}}
     result = compute_module6_forecast(kpi_ratios, lp_result)
 
     rate_rows = [r for r in result.rows if r.kpi_kind == KIND_RATE]
-    assert len(rate_rows) == 1, "Expected one rate KPI row for IG engagement rate"
+    assert len(rate_rows) == 1
     row = rate_rows[0]
     # Predicted value must equal the rate itself, NOT rate × budget
     assert row.predicted_kpi == pytest.approx(0.045), (
@@ -1633,10 +1650,11 @@ def test_build_forecast_df_adds_revenue_columns_when_goal_values_provided() -> N
         raise AssertionError("Expected at least one Leads row with positive predicted volume.")
 
 
-def test_build_forecast_df_rate_kpis_have_zero_revenue() -> None:
-    """Rate KPIs (Engagement Rate, CTR) are dimensionless — their predicted
-    value is a proportion, not a count, so multiplying by a £/unit goal value
-    gives nonsense. The revenue column for rate rows must be zero."""
+def test_build_forecast_df_engagement_count_gets_normal_revenue() -> None:
+    """Engagement is now a count (all-counts refactor: same unit as the
+    other KPIs on each social platform).  Counts × £/unit = revenue
+    works normally — no special-casing needed.  Locks the post-refactor
+    behaviour so revenue is computed for engagement, not zeroed."""
     from app import build_forecast_df
 
     state = WizardState()
@@ -1658,7 +1676,8 @@ def test_build_forecast_df_rate_kpis_have_zero_revenue() -> None:
     finalise_module3_from_inputs(
         state,
         platform_inputs={
-            "ig": {"budget": 3000.0, "kpis": {"IG_EN_ENGRATERATE": 0.045}},
+            # Engagement as a COUNT (summed Likes+Comments+Shares+Saves+Follows etc.)
+            "ig": {"budget": 3000.0, "kpis": {"IG_EN_ENGAGEMENT": 9000.0}},
             "li": {"budget": 3000.0, "kpis": {"LI_LG_LEADS": 80.0}},
         },
     )
@@ -1669,14 +1688,20 @@ def test_build_forecast_df_rate_kpis_have_zero_revenue() -> None:
     fc = state.module6_scenario_result.results_by_scenario["base"]
     df = build_forecast_df(fc, goal_values=state.goal_value_per_unit)
 
-    rate_rows = df[df["KPI"] == "Engagement Rate"]
-    assert not rate_rows.empty, "Expected at least one Engagement Rate row."
-    for _, row in rate_rows.iterrows():
-        assert row["Expected Revenue"] == 0.0, (
-            f"Rate KPI {row['KPI']} should have zero expected revenue (rates are "
-            f"dimensionless), got {row['Expected Revenue']}."
-        )
-        assert row["ROAS"] == 0.0
+    # Engagement KPI label is now "Engagement" (not "Engagement Rate"),
+    # and revenue should compute normally as count × £/unit.
+    en_rows = df[df["KPI"] == "Engagement"]
+    assert not en_rows.empty, "Expected at least one Engagement row."
+    for _, row in en_rows.iterrows():
+        if row["Predicted KPI"] > 0:
+            expected_rev = row["Predicted KPI"] * 0.20
+            assert row["Expected Revenue"] == pytest.approx(expected_rev, rel=1e-6), (
+                f"Engagement count revenue should be predicted × £0.20; "
+                f"got {row['Expected Revenue']} vs expected {expected_rev}"
+            )
+            break
+    else:
+        raise AssertionError("Expected at least one Engagement row with positive predicted volume.")
 
 
 def test_build_forecast_df_zero_goal_value_treated_as_unset() -> None:
@@ -1816,8 +1841,10 @@ def test_kpi_meta_includes_kind() -> None:
     meta = build_kpi_meta()
     assert "FB_AW_REACH" in meta
     assert meta["FB_AW_REACH"]["kind"] == "count"
-    assert "IG_EN_ENGRATERATE" in meta
-    assert meta["IG_EN_ENGRATERATE"]["kind"] == "rate"
+    # IG engagement is now a count (sum of Likes+Comments+Shares+Saves+Follows),
+    # not a rate — same unit as the other KPIs on Instagram.
+    assert "IG_EN_ENGAGEMENT" in meta
+    assert meta["IG_EN_ENGAGEMENT"]["kind"] == "count"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1982,7 +2009,10 @@ def test_csv_export_works_for_each_google_surface() -> None:
         assert "impr" in header, (
             f"{code} template missing impressions column. Header: {header}"
         )
-        for needle in ("ctr", "click", "conversion", "cost"):
+        # CTR column dropped from Google templates (no engagement KPI on
+        # Google any more — see KPI_CONFIG comment).  Click / Conversion /
+        # Cost remain.
+        for needle in ("click", "conversion", "cost"):
             assert needle in header, (
                 f"{code} template missing {needle!r} column. Header: {header}"
             )
