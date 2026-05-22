@@ -1389,3 +1389,149 @@ def test_unified_template_corrupt_xlsx_returns_error():
     result = parse_unified_template_xlsx(b"not a valid xlsx file")
     assert "__error__" in result
     assert "error" in result["__error__"]
+
+
+def test_fb_engagement_includes_follows_component():
+    """The expanded FB engagement composition adds Follows as a fifth
+    summed component — Reactions + Comments + Shares + Saves + Follows.
+    Locks the schema extension so a future refactor doesn't silently
+    drop Follows back out."""
+    from core.csv_import import parse_platform_csv
+    csv = (
+        b"Reach,Impression,Post Reactions,Comments,Shares,Saves,Follows,"
+        b"Link Click,On-facebook Lead,Amount Spent\n"
+        b"100000,200000,1000,400,200,100,50,500,20,1000\n"
+    )
+    result = parse_platform_csv(csv, "fb")
+    # 1000 + 400 + 200 + 100 + 50 = 1750
+    assert result["kpis"]["FB_EN_ENGAGEMENT"] == pytest.approx(1750.0), (
+        "FB engagement should sum Reactions+Comments+Shares+Saves+Follows; "
+        f"got {result['kpis']['FB_EN_ENGAGEMENT']} (expected 1750)"
+    )
+
+
+def test_fb_clicks_uses_first_not_sum_to_avoid_double_count():
+    """FB now surfaces Link Click, Landing Page View, and Page View as
+    three separate template columns under FB_WT_CLICKS.  But Landing
+    Page Views are a subset of Link Clicks (clicks that successfully
+    loaded), so summing would double-count.  operator='first' picks the
+    most-canonical Link Click value when more than one is filled."""
+    from core.csv_import import parse_platform_csv
+    csv = (
+        b"Reach,Link Click,Landing Page View,Page View,Amount Spent\n"
+        b"100000,4000,3500,2000,1000\n"
+    )
+    result = parse_platform_csv(csv, "fb")
+    # Link Click wins (first non-zero), NOT 4000+3500+2000=9500
+    assert result["kpis"]["FB_WT_CLICKS"] == pytest.approx(4000.0), (
+        f"Expected Link Click (4000) to win over Landing/Page View alternates; "
+        f"got {result['kpis']['FB_WT_CLICKS']}"
+    )
+
+
+def test_fb_conversions_first_not_sum_to_avoid_triple_count():
+    """FB_LG_LEADS now accepts Leads, Purchases, or Conversions as
+    alternates.  Meta's 'Conversions' is usually a superset that
+    already includes Leads and Purchases — summing would triple-count.
+    Verify the parser picks one canonical value."""
+    from core.csv_import import parse_platform_csv
+    csv = (
+        b"Reach,On-facebook Lead,Purchases,Conversions,Amount Spent\n"
+        b"100000,80,40,150,1000\n"
+    )
+    result = parse_platform_csv(csv, "fb")
+    # Leads (80) wins; NOT 80+40+150=270
+    assert result["kpis"]["FB_LG_LEADS"] == pytest.approx(80.0), (
+        f"Expected Lead (80) to win over Purchases/Conversions; "
+        f"got {result['kpis']['FB_LG_LEADS']} (would be 270 if summed)"
+    )
+
+
+def test_new_platforms_have_csv_patterns_pt_tw_sn_rd():
+    """The four platforms that previously had KPI_CONFIG entries but no
+    CSV-import patterns (Pinterest, X, Snapchat, Reddit) now have full
+    parse support."""
+    from core.csv_import import SUPPORTED_PLATFORMS
+    for p in ("pt", "tw", "sn", "rd"):
+        assert p in SUPPORTED_PLATFORMS, f"{p!r} missing from CSV-import catalogue"
+
+
+def test_pinterest_parses_full_native_schema():
+    """Smoke-test Pinterest's new CSV patterns: Impression/Video View
+    for awareness, Saves for engagement, Outbound/Pin Click for traffic,
+    Leads/Checkouts for conversion."""
+    from core.csv_import import parse_platform_csv
+    csv = (
+        b"Impression,Video View,Saves,Outbound Click,Pin Click,Leads,Checkouts,Cost\n"
+        b"80000,30000,600,700,400,25,10,800\n"
+    )
+    result = parse_platform_csv(csv, "pt")
+    assert result["budget"] == pytest.approx(800.0)
+    assert result["kpis"]["PT_AW_IMPRESSION"] == pytest.approx(80000.0)
+    assert result["kpis"]["PT_EN_SAVES"] == pytest.approx(600.0)
+    assert result["kpis"]["PT_WT_CLICKS"] == pytest.approx(700.0)  # Outbound preferred
+    assert result["kpis"]["PT_LG_LEADS"] == pytest.approx(25.0)
+
+
+def test_x_rate_kpi_normalised_from_percent_form():
+    """X engagement rate must normalise '3.5%' → 0.035, same as the
+    other rate-canonical platforms.  TW_EN_ENGRATERATE is in _RATE_KPIS."""
+    from core.csv_import import parse_platform_csv
+    csv = b"Impression,Engagement Rate,Link Click,Leads,Cost\n100000,3.5%,1200,50,1000\n"
+    result = parse_platform_csv(csv, "tw")
+    assert result["kpis"]["TW_EN_ENGRATERATE"] == pytest.approx(0.035), (
+        f"X engagement rate should be normalised to [0,1]; got "
+        f"{result['kpis']['TW_EN_ENGRATERATE']}"
+    )
+
+
+def test_template_informational_extras_appear_but_dont_pollute_canonicals():
+    """Rate-canonical engagement platforms (IG, TT, etc.) surface raw
+    count columns (Likes, Comments, Shares, Saves, Follows) in the
+    template for the user's records, but those columns must NOT feed
+    the canonical engagement rate.  If the user fills Likes but not
+    Engagement Rate, the canonical stays missing rather than producing
+    a corrupt 'rate' from a count."""
+    import io
+    from openpyxl import load_workbook
+    from core.csv_import import (
+        generate_unified_template_xlsx,
+        parse_unified_template_xlsx,
+    )
+
+    names = _platform_display_names_for_test()
+    xlsx = generate_unified_template_xlsx(["ig"], platform_display_names=names)
+    wb = load_workbook(io.BytesIO(xlsx))
+
+    # Confirm the informational columns appear in the IG sheet header
+    ig_columns = [c.value for c in wb["Instagram"][1]]
+    for extra in ("Likes", "Comments", "Shares", "Saves", "Follows"):
+        assert extra in ig_columns, (
+            f"Informational column {extra!r} missing from Instagram template"
+        )
+
+    # Fill only the informational counts, NOT the rate or any canonical
+    ws = wb["Instagram"]
+    hdr = {c.value: c.column for c in ws[1]}
+    counts = {
+        "Reach": 100000, "Amount Spent": 1000, "Number Of Days": 30,
+        "Likes": 5000, "Comments": 200, "Shares": 100, "Saves": 80, "Follows": 30,
+    }
+    for col, val in counts.items():
+        if col in hdr:
+            ws.cell(row=2, column=hdr[col], value=str(val))
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    results = parse_unified_template_xlsx(buf.getvalue(), platform_display_names=names)
+    parsed = {k: v for k, v in results.items() if not k.startswith("__")}
+
+    assert "ig" in parsed
+    # The rate KPI should be missing (user didn't fill it) — Likes shouldn't
+    # have been mis-parsed AS the engagement rate.
+    assert "IG_EN_ENGRATERATE" not in parsed["ig"]["kpis"], (
+        f"Informational Likes column polluted IG_EN_ENGRATERATE; got "
+        f"{parsed['ig']['kpis'].get('IG_EN_ENGRATERATE')}"
+    )
+    # But the canonicals that DID match should be present
+    assert parsed["ig"]["kpis"]["IG_AW_REACH"] == pytest.approx(100000.0)

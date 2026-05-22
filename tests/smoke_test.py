@@ -934,11 +934,14 @@ def test_csv_import_handles_google_ctr_as_percentage() -> None:
 
 
 def test_csv_import_unsupported_platform_returns_error() -> None:
-    """Reddit/Snapchat aren't in the CSV-import set — caller should get a
-    helpful error rather than a silent failure."""
+    """A platform code that isn't in the CSV-import catalogue should
+    return a helpful error rather than silently failing.  All 12 active
+    platforms (fb/ig/li/yt/tt/pt/tw/sn/rd/go_search/go_display/go_pmax)
+    are now supported, so use a made-up code to exercise the rejection
+    path."""
     from core.csv_import import parse_platform_csv
 
-    result = parse_platform_csv(b"x,y\n1,2\n", "rd")
+    result = parse_platform_csv(b"x,y\n1,2\n", "made_up_platform")
     assert "error" in result and "not supported" in result["error"].lower()
 
 

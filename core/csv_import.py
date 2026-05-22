@@ -88,8 +88,13 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             rationale="Unique people who saw the ad. Distinct from impressions.",
         ),
         "FB_AW_IMPRESSION": KPIComposition(
-            components=(("impression",),), operator="first",
-            rationale="Total impressions served (includes repeats).",
+            # Impressions are total served; Video Views are a count of
+            # video plays — both are awareness signals that overlap, so
+            # we surface both as template columns but take FIRST to
+            # avoid double-counting if the user reports both.
+            components=(("impression",), ("video view", "video views")),
+            operator="first",
+            rationale="Total impressions served (includes repeats). Video Views accepted as a fallback.",
         ),
         "FB_EN_ENGAGEMENT": KPIComposition(
             components=(
@@ -97,11 +102,12 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
                 ("comments", "post comments"),
                 ("shares", "post shares"),
                 ("saves",),
+                ("follows", "page follows", "new follows"),
             ),
             operator="sum",
             rationale=(
-                "Reactions + comments + shares + saves.  Link clicks are "
-                "excluded — they live under Website Traffic, so including "
+                "Reactions + comments + shares + saves + follows.  Link clicks "
+                "are excluded — they live under Website Traffic, so including "
                 "them here would double-count."
             ),
             fallback=KPIComposition(
@@ -113,20 +119,42 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
                     "Be aware: this number includes link clicks, which are "
                     "ALSO in the Traffic category — the LP may see a small "
                     "amount of double-counting for FB.  To fix, export "
-                    "reactions / comments / shares / saves as separate "
-                    "columns and re-upload."
+                    "reactions / comments / shares / saves / follows as "
+                    "separate columns and re-upload."
                 ),
             ),
         ),
         "FB_WT_CLICKS": KPIComposition(
-            components=(("link click", "outbound click", "click (all)"),),
+            # Link Clicks is the canonical destination signal; Landing
+            # Page Views and Page Views are alternates surfaced as
+            # separate template columns.  operator='first' prevents
+            # double-counting when more than one is filled (Landing Page
+            # Views is a subset of Link Clicks; Page Views is on-platform).
+            components=(
+                ("link click", "outbound click", "click (all)"),
+                ("landing page view", "landing page views"),
+                ("page view", "page views"),
+            ),
             operator="first",
-            rationale="Clicks to your destination URL. Link / outbound are alternatives.",
+            rationale=(
+                "Clicks to your destination URL.  Link Click is preferred; "
+                "Landing Page Views or Page Views accepted as fallbacks."
+            ),
         ),
         "FB_LG_LEADS": KPIComposition(
-            components=(("on-facebook lead", "leads", "lead"),),
+            components=(
+                ("on-facebook lead", "leads", "lead"),
+                ("purchases", "purchase"),
+                ("conversions", "conv."),
+            ),
             operator="first",
-            rationale="On-platform lead form submissions.",
+            rationale=(
+                "On-platform lead form submissions preferred; Purchases / "
+                "Conversions accepted as fallbacks.  Not summed because "
+                "Meta's 'Conversions' column is often a superset that "
+                "already includes Leads and Purchases — summing would "
+                "triple-count."
+            ),
         ),
         _BUDGET: KPIComposition(
             components=(("amount spent", "spend", "cost"),), operator="first",
@@ -138,20 +166,26 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
     # ── Instagram ──────────────────────────────────────────────────────────
     "ig": {
         "IG_AW_REACH": KPIComposition(
-            components=(("reach",),), operator="first",
-            rationale="Unique people who saw the ad.",
+            components=(("reach",), ("impression", "impressions"), ("reel view", "reel views")),
+            operator="first",
+            rationale="Unique people who saw the ad.  Impressions / Reel Views accepted as fallbacks.",
         ),
         "IG_EN_ENGRATERATE": KPIComposition(
             components=(("engagement rate", "er"),), operator="mean",
             rationale="Engagement rate (Instagram reports as a single percentage).",
         ),
         "IG_WT_CLICKS": KPIComposition(
-            components=(("link click", "outbound click"),), operator="first",
-            rationale="Clicks to your destination URL.",
+            components=(
+                ("website click", "website clicks", "link click", "outbound click"),
+                ("profile visit", "profile visits"),
+            ),
+            operator="first",
+            rationale="Clicks to your destination URL.  Profile Visits accepted as a fallback.",
         ),
         "IG_LG_LEADS": KPIComposition(
-            components=(("leads", "lead"),), operator="first",
-            rationale="Lead form submissions.",
+            components=(("leads", "lead"), ("purchases", "purchase")),
+            operator="first",
+            rationale="Lead form submissions preferred; Purchases accepted as a fallback.",
         ),
         _BUDGET: KPIComposition(
             components=(("amount spent", "spend", "cost"),), operator="first",
@@ -163,20 +197,23 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
     # ── LinkedIn ───────────────────────────────────────────────────────────
     "li": {
         "LI_AW_REACH": KPIComposition(
-            components=(("impression",),), operator="first",
-            rationale="LinkedIn reports Impressions, not unique Reach.",
+            components=(("impression",), ("reach",), ("video view", "video views")),
+            operator="first",
+            rationale="LinkedIn reports Impressions; Reach / Video Views accepted as fallbacks.",
         ),
         "LI_EN_ENGRATERATE": KPIComposition(
             components=(("engagement rate", "average ctr"),), operator="mean",
             rationale="Engagement rate (LinkedIn reports a single weighted rate).",
         ),
         "LI_WT_CLICKS": KPIComposition(
-            components=(("click",),), operator="first",
-            rationale="Clicks on the ad.",
+            components=(("click",), ("website visit", "website visits")),
+            operator="first",
+            rationale="Clicks on the ad.  Website Visits accepted as a fallback.",
         ),
         "LI_LG_LEADS": KPIComposition(
-            components=(("leads", "lead"),), operator="first",
-            rationale="Lead Gen Form completions.",
+            components=(("leads", "lead"), ("conversions", "conv.")),
+            operator="first",
+            rationale="Lead Gen Form completions preferred; Conversions accepted as a fallback.",
         ),
         _BUDGET: KPIComposition(
             components=(("total spent", "amount spent", "spend", "cost"),), operator="first",
@@ -186,11 +223,6 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
         ),
     },
     # ── Google Search ──────────────────────────────────────────────────────
-    # Filter your Google Ads export to campaign type = Search before
-    # uploading, then attribute the file to this platform.  Column
-    # mappings are identical across Search / Display / PMax because
-    # Google Ads reports the same metric set — the differentiation comes
-    # from the productivity numbers in Module 3.
     "go_search": {
         "GO_SEARCH_AW_IMPRESSION": KPIComposition(
             components=(("impr.", "impressions", "impression"),), operator="first",
@@ -205,8 +237,19 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             rationale="Clicks on Search ads.",
         ),
         "GO_SEARCH_LG_CONVERSIONS": KPIComposition(
-            components=(("conversions", "conv."),), operator="first",
-            rationale="Conversions from Search campaigns (whatever event you tagged).",
+            components=(
+                ("conversions", "conv."),
+                ("leads", "lead"),
+                ("purchases", "purchase"),
+                ("calls", "phone calls"),
+            ),
+            operator="first",
+            rationale=(
+                "Conversions preferred (whatever event you tagged); "
+                "Leads / Purchases / Calls accepted as fallbacks.  Not "
+                "summed because Conversions usually already includes "
+                "Leads and Purchases."
+            ),
         ),
         _BUDGET: KPIComposition(
             components=(("cost", "spend"),), operator="first",
@@ -218,8 +261,9 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
     # ── Google Display Network ─────────────────────────────────────────────
     "go_display": {
         "GO_DISPLAY_AW_IMPRESSION": KPIComposition(
-            components=(("impr.", "impressions", "impression"),), operator="first",
-            rationale="Display Network impressions (filter your export to Display campaigns).",
+            components=(("impr.", "impressions", "impression"), ("view", "views")),
+            operator="first",
+            rationale="Display Network impressions; Views accepted as a fallback.",
         ),
         "GO_DISPLAY_EN_CTR": KPIComposition(
             components=(("ctr",),), operator="mean",
@@ -230,8 +274,9 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             rationale="Clicks on Display ads (including responsive display).",
         ),
         "GO_DISPLAY_LG_CONVERSIONS": KPIComposition(
-            components=(("conversions", "conv."),), operator="first",
-            rationale="Conversions from Display campaigns.",
+            components=(("conversions", "conv."), ("purchases", "purchase")),
+            operator="first",
+            rationale="Conversions preferred; Purchases accepted as a fallback.",
         ),
         _BUDGET: KPIComposition(
             components=(("cost", "spend"),), operator="first",
@@ -243,8 +288,9 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
     # ── Google Performance Max ─────────────────────────────────────────────
     "go_pmax": {
         "GO_PMAX_AW_IMPRESSION": KPIComposition(
-            components=(("impr.", "impressions", "impression"),), operator="first",
-            rationale="PMax impressions blended across Search / Display / YouTube / Shopping / Maps.",
+            components=(("impr.", "impressions", "impression"), ("view", "views")),
+            operator="first",
+            rationale="PMax impressions blended across surfaces; Views accepted as a fallback.",
         ),
         "GO_PMAX_EN_CTR": KPIComposition(
             components=(("ctr",),), operator="mean",
@@ -255,8 +301,17 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             rationale="Total PMax clicks across all surfaces.",
         ),
         "GO_PMAX_LG_CONVERSIONS": KPIComposition(
-            components=(("conversions", "conv."),), operator="first",
-            rationale="PMax conversions — Smart Bidding optimises for this directly.",
+            components=(
+                ("conversions", "conv."),
+                ("leads", "lead"),
+                ("purchases", "purchase"),
+                ("store visit", "store visits"),
+            ),
+            operator="first",
+            rationale=(
+                "Conversions preferred (Smart Bidding optimises for it); "
+                "Leads / Purchases / Store Visits accepted as fallbacks."
+            ),
         ),
         _BUDGET: KPIComposition(
             components=(("cost", "spend"),), operator="first",
@@ -268,22 +323,24 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
     # ── TikTok ─────────────────────────────────────────────────────────────
     "tt": {
         "TT_AW_VIEWS": KPIComposition(
-            components=(("video views", "views"),), operator="first",
-            rationale="Total video views (2 seconds+).",
+            components=(("video views", "views"), ("reach",)),
+            operator="first",
+            rationale="Total video views (2 seconds+); Reach accepted as a fallback.",
         ),
         "TT_EN_ENGRATERATE": KPIComposition(
             components=(("engagement rate", "er"),), operator="mean",
             rationale="Engagement rate.  If your export has likes/comments/shares as "
-                      "separate columns, use override to sum them as an alternative.",
+                      "separate columns, fill the Engagement Rate column directly.",
         ),
         "TT_WT_CLICKS": KPIComposition(
-            components=(("destination click", "clicks"),), operator="first",
-            rationale="Clicks to your destination URL (destination preferred over "
-                      "in-app clicks).",
+            components=(("destination click", "clicks"), ("profile view", "profile views")),
+            operator="first",
+            rationale="Destination clicks preferred; Profile Views accepted as a fallback.",
         ),
         "TT_LG_LEADS": KPIComposition(
-            components=(("leads", "lead"),), operator="first",
-            rationale="Lead form submissions.",
+            components=(("leads", "lead"), ("purchases", "purchase")),
+            operator="first",
+            rationale="Lead form submissions preferred; Purchases accepted as a fallback.",
         ),
         _BUDGET: KPIComposition(
             components=(("cost", "spend"),), operator="first",
@@ -295,20 +352,27 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
     # ── YouTube ────────────────────────────────────────────────────────────
     "yt": {
         "YT_AW_VIEWS": KPIComposition(
-            components=(("views",),), operator="first",
-            rationale="Total ad views (TrueView etc).",
+            components=(("views",), ("impression", "impressions"), ("unique viewer", "unique viewers")),
+            operator="first",
+            rationale="Total ad views preferred; Impressions / Unique Viewers accepted as fallbacks.",
         ),
         "YT_EN_ENGRATERATE": KPIComposition(
             components=(("view rate", "engagement rate"),), operator="mean",
             rationale="View-through rate as engagement proxy.",
         ),
         "YT_WT_CLICKS": KPIComposition(
-            components=(("clicks", "click"),), operator="first",
-            rationale="Clicks on the ad / companion banner.",
+            components=(
+                ("clicks", "click"),
+                ("card click", "card clicks"),
+                ("end screen click", "end screen clicks"),
+            ),
+            operator="first",
+            rationale="Total clicks preferred; Card / End Screen clicks accepted as fallbacks.",
         ),
         "YT_LG_LEADS": KPIComposition(
-            components=(("conversions", "leads"),), operator="first",
-            rationale="Tagged conversions.",
+            components=(("conversions", "leads"), ("purchases", "purchase")),
+            operator="first",
+            rationale="Tagged conversions preferred; Purchases accepted as a fallback.",
         ),
         _BUDGET: KPIComposition(
             components=(("cost", "spend"),), operator="first",
@@ -317,6 +381,166 @@ _CSV_PATTERNS: Dict[str, Dict[str, KPIComposition]] = {
             components=(("number of days", "days"),), operator="first",
         ),
     },
+    # ── Pinterest ──────────────────────────────────────────────────────────
+    "pt": {
+        "PT_AW_IMPRESSION": KPIComposition(
+            components=(("impression",), ("video view", "video views")),
+            operator="first",
+            rationale="Total impressions; Video Views accepted as a fallback.",
+        ),
+        "PT_EN_SAVES": KPIComposition(
+            # Pinterest engagement canonical IS specifically Saves (per
+            # KPI_CONFIG.kpi_label).  Closeups + Followers are surfaced
+            # as informational extras in the template — they're related
+            # signals but combining them into 'Saves' would change what
+            # that label means.
+            components=(("saves", "save"),), operator="first",
+            rationale="Pin saves — the canonical Pinterest engagement signal.",
+        ),
+        "PT_WT_CLICKS": KPIComposition(
+            components=(("outbound click", "outbound clicks"), ("pin click", "pin clicks")),
+            operator="first",
+            rationale="Outbound clicks preferred (off-platform traffic); Pin Clicks accepted as a fallback.",
+        ),
+        "PT_LG_LEADS": KPIComposition(
+            components=(("leads", "lead"), ("checkouts", "checkout")),
+            operator="first",
+            rationale="Leads preferred; Checkouts accepted as a fallback.",
+        ),
+        _BUDGET: KPIComposition(
+            components=(("cost", "spend"),), operator="first",
+        ),
+        _DAYS: KPIComposition(
+            components=(("number of days", "days"),), operator="first",
+        ),
+    },
+    # ── X (Twitter) ────────────────────────────────────────────────────────
+    "tw": {
+        "TW_AW_IMPRESSION": KPIComposition(
+            components=(("impression",), ("video view", "video views")),
+            operator="first",
+            rationale="Total impressions; Video Views accepted as a fallback.",
+        ),
+        "TW_EN_ENGRATERATE": KPIComposition(
+            components=(("engagement rate", "er"),), operator="mean",
+            rationale="Engagement rate (X reports a single percentage).",
+        ),
+        "TW_WT_CLICKS": KPIComposition(
+            components=(("link click", "link clicks"), ("profile visit", "profile visits")),
+            operator="first",
+            rationale="Link clicks preferred (off-platform traffic); Profile Visits accepted as a fallback.",
+        ),
+        "TW_LG_LEADS": KPIComposition(
+            components=(("leads", "lead"),),
+            operator="first",
+            rationale="Lead form submissions.",
+        ),
+        _BUDGET: KPIComposition(
+            components=(("cost", "spend", "amount spent"),), operator="first",
+        ),
+        _DAYS: KPIComposition(
+            components=(("number of days", "days"),), operator="first",
+        ),
+    },
+    # ── Snapchat ───────────────────────────────────────────────────────────
+    "sn": {
+        "SN_AW_REACH": KPIComposition(
+            components=(("reach",), ("impression", "impressions")),
+            operator="first",
+            rationale="Unique reach preferred; Impressions accepted as a fallback.",
+        ),
+        "SN_EN_ENGRATERATE": KPIComposition(
+            components=(("engagement rate", "er"),), operator="mean",
+            rationale="Engagement rate (single percentage).",
+        ),
+        "SN_WT_CLICKS": KPIComposition(
+            components=(("swipe-up", "swipe-ups", "swipe ups", "swipeups"),),
+            operator="first",
+            rationale="Swipe-ups (Snapchat's destination-click metric).",
+        ),
+        "SN_LG_LEADS": KPIComposition(
+            components=(("leads", "lead"), ("purchases", "purchase")),
+            operator="first",
+            rationale="Leads preferred; Purchases accepted as a fallback.",
+        ),
+        _BUDGET: KPIComposition(
+            components=(("cost", "spend", "amount spent"),), operator="first",
+        ),
+        _DAYS: KPIComposition(
+            components=(("number of days", "days"),), operator="first",
+        ),
+    },
+    # ── Reddit ─────────────────────────────────────────────────────────────
+    "rd": {
+        "RD_AW_IMPRESSION": KPIComposition(
+            components=(("impression",), ("video view", "video views")),
+            operator="first",
+            rationale="Total impressions; Video Views accepted as a fallback.",
+        ),
+        "RD_EN_ENGRATERATE": KPIComposition(
+            components=(("engagement rate", "er"),), operator="mean",
+            rationale="Engagement rate (single percentage).",
+        ),
+        "RD_WT_CLICKS": KPIComposition(
+            components=(("clicks", "click"),),
+            operator="first",
+            rationale="Clicks on the ad.",
+        ),
+        "RD_LG_LEADS": KPIComposition(
+            components=(("leads", "lead"), ("conversions", "conv.")),
+            operator="first",
+            rationale="Leads preferred; Conversions accepted as a fallback.",
+        ),
+        _BUDGET: KPIComposition(
+            components=(("cost", "spend", "amount spent"),), operator="first",
+        ),
+        _DAYS: KPIComposition(
+            components=(("number of days", "days"),), operator="first",
+        ),
+    },
+}
+
+
+# Informational template columns that aren't mapped to any canonical KPI.
+# These appear in the unified template so the user can record raw counts
+# (Likes, Reactions, Followers, etc.) on platforms whose engagement
+# canonical is a RATE — the rate is what the engine optimises against,
+# but capturing the raw counts is useful for the user's own analysis
+# and for future "derive rate from counts" extensions.
+#
+# Format: {platform: ((column_name, example_value), ...)}.  These columns
+# are silently ignored by the parser — they don't feed any canonical.
+_TEMPLATE_EXTRA_COLUMNS: Dict[str, Tuple[Tuple[str, str], ...]] = {
+    "ig": (
+        ("Likes", "8000"), ("Comments", "400"), ("Shares", "200"),
+        ("Saves", "500"), ("Follows", "100"),
+    ),
+    "li": (
+        ("Reactions", "1500"), ("Comments", "300"), ("Shares", "150"),
+        ("Followers", "80"),
+    ),
+    "yt": (
+        ("Likes", "3000"), ("Comments", "200"), ("Shares", "150"),
+        ("Subscribers", "100"),
+    ),
+    "tt": (
+        ("Likes", "10000"), ("Comments", "500"), ("Shares", "1000"),
+        ("Saves", "800"), ("Followers", "200"),
+    ),
+    "pt": (
+        ("Closeups", "3000"), ("Followers", "100"),
+    ),
+    "tw": (
+        ("Likes", "1500"), ("Replies", "200"), ("Reposts", "300"),
+        ("Bookmarks", "150"), ("Followers", "80"),
+    ),
+    "sn": (
+        ("Story Opens", "5000"), ("Shares", "400"), ("Subscribers", "150"),
+    ),
+    "rd": (
+        ("Upvotes", "1500"), ("Comments", "400"), ("Shares", "200"),
+        ("Followers", "100"),
+    ),
 }
 
 
@@ -324,6 +548,7 @@ _RATE_KPIS = {
     "IG_EN_ENGRATERATE", "LI_EN_ENGRATERATE",
     "GO_SEARCH_EN_CTR", "GO_DISPLAY_EN_CTR", "GO_PMAX_EN_CTR",
     "TT_EN_ENGRATERATE", "YT_EN_ENGRATERATE",
+    "TW_EN_ENGRATERATE", "SN_EN_ENGRATERATE", "RD_EN_ENGRATERATE",
 }
 
 
@@ -431,6 +656,15 @@ def _template_columns_and_examples(platform: str) -> Tuple[List[str], List[str]]
             seen.add(col_name)
             columns.append(col_name)
             examples.append(_template_example_value(var))
+    # Informational extras — raw count columns surfaced for the user's
+    # records on platforms whose engagement canonical is a rate.  The
+    # parser ignores these silently; they don't contribute to any KPI.
+    for col_name, example in _TEMPLATE_EXTRA_COLUMNS.get(plat, ()):
+        if col_name in seen:
+            continue
+        seen.add(col_name)
+        columns.append(col_name)
+        examples.append(example)
     return columns, examples
 
 
