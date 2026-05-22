@@ -19,7 +19,8 @@ from core.kpi_config import KPI_CONFIG
 from core.csv_import import (
     parse_platform_csv,
     SUPPORTED_PLATFORMS as CSV_SUPPORTED,
-    generate_csv_template,
+    generate_unified_template_xlsx,
+    parse_unified_template_xlsx,
 )
 from modules.module3 import finalise_module3_from_inputs
 from modules.module2 import run_module2
@@ -874,35 +875,80 @@ def module3_ui(state: WizardState) -> None:
             "ratios as upper bounds, not facts."
         )
 
-    # ── Top-of-step CSV template downloads ─────────────────────────────────
-    # Surface the template-download workflow prominently before the user
-    # gets into per-platform forms.  The workflow is: download a template
-    # for each platform you'll use, fill it in (in Excel / Numbers /
-    # Sheets), then upload it in the platform's section below.
+    # ── Top-of-step unified template download + upload ─────────────────────
+    # One workbook covers every platform the user selected in Module 2.
+    # Each sheet is one platform with the columns its parser recognises +
+    # one example row.  The user fills in the sheets they have data for,
+    # leaves the rest blank, and re-uploads — the parser routes each
+    # sheet to its platform's pre-fill slot in one shot.
     supported_platforms_for_active = [
         p for p in (state.active_platforms or []) if p in CSV_SUPPORTED
     ]
     if supported_platforms_for_active:
-        st.markdown("### Don't have the data ready? Download a CSV template.")
+        st.markdown("### Don't have the data ready? Download one template, fill it in for every platform.")
         st.caption(
-            "For each platform you've selected, you can download a CSV "
-            "template with the column headers the parser recognises plus "
-            "one example row.  Fill it in your spreadsheet tool, then "
-            "upload it in the platform's section below."
+            "One Excel workbook with a sheet per platform you selected. "
+            "Each sheet has the columns the parser recognises plus one "
+            "example row.  Fill in only the sheets you have data for "
+            "(leave the others blank) and upload the workbook back here."
         )
-        cols = st.columns(min(len(supported_platforms_for_active), 4))
-        for i, p in enumerate(supported_platforms_for_active):
-            with cols[i % len(cols)]:
-                template_bytes = generate_csv_template(p)
-                if template_bytes:
-                    st.download_button(
-                        f"📥 {_platform_display_name(state, p)}",
-                        data=template_bytes,
-                        file_name=f"{p}_template.csv",
-                        mime="text/csv",
-                        key=f"_top_template_{p}",
-                        use_container_width=True,
-                    )
+        col_dl, col_ul = st.columns([1, 3])
+        with col_dl:
+            template_bytes = generate_unified_template_xlsx(
+                supported_platforms_for_active,
+                platform_display_names=PLATFORM_NAMES,
+            )
+            if template_bytes:
+                st.download_button(
+                    "📥 Download unified template",
+                    data=template_bytes,
+                    file_name="campaign_data_template.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="_unified_template_download",
+                    use_container_width=True,
+                )
+        with col_ul:
+            unified_uploaded = st.file_uploader(
+                "Drop the filled-in workbook here to pre-fill every platform at once",
+                type=["xlsx"],
+                key="_unified_template_upload",
+                help=(
+                    "Parses every sheet whose name matches one of your "
+                    "selected platforms; sheets you renamed or left blank "
+                    "are skipped silently.  You can still adjust any "
+                    "value in the per-platform forms below after upload."
+                ),
+            )
+            if unified_uploaded is not None:
+                parsed_all = parse_unified_template_xlsx(
+                    unified_uploaded.getvalue(),
+                    platform_display_names=PLATFORM_NAMES,
+                )
+                if "__error__" in parsed_all:
+                    st.error(parsed_all["__error__"].get("error", "Could not read workbook."))
+                else:
+                    unknown = parsed_all.pop("__unknown_sheets__", None)
+                    filled_count = 0
+                    for p_code, parsed in parsed_all.items():
+                        if "error" in parsed:
+                            st.warning(
+                                f"{PLATFORM_NAMES.get(p_code, p_code)}: "
+                                f"{parsed['error']}"
+                            )
+                            continue
+                        st.session_state[f"_csv_defaults_{p_code}"] = parsed
+                        filled_count += 1
+                    if filled_count > 0:
+                        st.success(
+                            f"Pre-filled {filled_count} platform"
+                            f"{'s' if filled_count != 1 else ''} from the workbook."
+                        )
+                    if unknown:
+                        st.info(
+                            "These sheet names didn't match any selected "
+                            "platform and were skipped: "
+                            + ", ".join(unknown.get("sheets", []))
+                        )
         st.markdown("---")
 
     default_days = int(getattr(state, "campaign_duration_days", None) or 30)
@@ -917,38 +963,21 @@ def module3_ui(state: WizardState) -> None:
             # default to them when the user uploads a file.
             csv_defaults_key = f"_csv_defaults_{platform}"
             if platform in CSV_SUPPORTED:
-                # Upload + download-template side by side so the user can
-                # grab the canonical column-name template, fill it in, and
-                # re-upload — no guessing at column names.
-                col_upload, col_template = st.columns([3, 1])
-                with col_upload:
-                    uploaded = st.file_uploader(
-                        f"Drop a {platform_name} export here to pre-fill (optional)",
-                        type=["csv"],
-                        key=f"_csv_upload_{platform}",
-                        help="Upload the CSV you export from the platform's "
-                             "reporting UI.  Column names are matched "
-                             "heuristically — you can still adjust any "
-                             "value below.",
-                    )
-                with col_template:
-                    template_bytes = generate_csv_template(platform)
-                    if template_bytes:
-                        st.write("")  # vertical spacer to align with uploader
-                        st.download_button(
-                            "📥 Template",
-                            data=template_bytes,
-                            file_name=f"{platform}_template.csv",
-                            mime="text/csv",
-                            key=f"_csv_template_{platform}",
-                            help=(
-                                f"Download an empty {platform_name} template "
-                                "with every column the parser recognises "
-                                "(plus one example row).  Fill in your real "
-                                "values and re-upload."
-                            ),
-                            use_container_width=True,
-                        )
+                # Per-platform CSV upload accepts an actual platform export
+                # (filtered Google Ads CSV, Facebook Ads export, etc.) in
+                # case the user prefers that over filling the unified
+                # workbook.  The unified template at the top of the step
+                # is the easier path for most users.
+                uploaded = st.file_uploader(
+                    f"Drop a {platform_name} export here to pre-fill (optional)",
+                    type=["csv"],
+                    key=f"_csv_upload_{platform}",
+                    help="Upload the CSV you export from the platform's "
+                         "reporting UI.  Column names are matched "
+                         "heuristically — you can still adjust any "
+                         "value below.  Alternatively, use the unified "
+                         "Excel template at the top of this step.",
+                )
                 if uploaded is not None:
                     parsed = parse_platform_csv(uploaded.getvalue(), platform)
                     if "error" in parsed:

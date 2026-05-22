@@ -31,7 +31,7 @@ from __future__ import annotations
 import csv
 import io
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -385,20 +385,43 @@ def generate_csv_template(platform: str) -> bytes:
 
     Returns empty bytes if the platform isn't in the CSV-import set.
     """
+    columns, examples = _template_columns_and_examples(platform)
+    if not columns:
+        return b""
+    csv_text = ",".join(columns) + "\n" + ",".join(examples) + "\n"
+    return csv_text.encode("utf-8")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Unified xlsx template (one workbook covering every selected platform)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# Excel sheet names have a 31-character limit and forbid: \ / ? * [ ] :
+# Trim and sanitise display names against that before writing.
+_INVALID_SHEET_CHARS = set(r"\/?*[]:")
+
+
+def _sanitise_sheet_name(name: str) -> str:
+    cleaned = "".join("_" if c in _INVALID_SHEET_CHARS else c for c in str(name))
+    return cleaned[:31].strip() or "Sheet"
+
+
+def _template_columns_and_examples(platform: str) -> Tuple[List[str], List[str]]:
+    """Return (columns, example_values) for a platform's template.
+
+    Shared between the per-platform CSV template and the unified-workbook
+    template so both surface the same column shape — every component
+    group as its own column, deduplicated.
+    """
     plat = (platform or "").strip().lower()
     if plat not in _CSV_PATTERNS:
-        return b""
-
+        return [], []
     patterns = _CSV_PATTERNS[plat]
     columns: List[str] = []
-    example: List[str] = []
+    examples: List[str] = []
     seen: set = set()
-
     for var, comp in patterns.items():
-        # Surface every component group as its own column so the
-        # template captures the same atomic signals the parser will
-        # look for.  Saves the user from guessing whether the parser
-        # wants 'Engagement' or 'Reactions + Comments + Shares'.
         for needle_group in comp.components:
             if not needle_group:
                 continue
@@ -407,10 +430,179 @@ def generate_csv_template(platform: str) -> bytes:
                 continue
             seen.add(col_name)
             columns.append(col_name)
-            example.append(_template_example_value(var))
+            examples.append(_template_example_value(var))
+    return columns, examples
 
-    csv_text = ",".join(columns) + "\n" + ",".join(example) + "\n"
-    return csv_text.encode("utf-8")
+
+def generate_unified_template_xlsx(
+    platforms: Sequence[str],
+    platform_display_names: Optional[Dict[str, str]] = None,
+) -> bytes:
+    """Build one Excel workbook covering every supplied platform.
+
+    Each platform gets its own sheet named after its display label (or
+    platform code if no display name is provided).  Sheet 1 is an
+    instructions/index sheet listing each platform sheet and what the
+    user should fill in.
+
+    Platforms not in the CSV-import catalogue are skipped silently so a
+    caller can pass the full active_platforms list without filtering.
+
+    Returns empty bytes if openpyxl is unavailable or no platforms map
+    to a supported template.
+    """
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+    except ImportError:
+        return b""
+
+    display = platform_display_names or {}
+    eligible = [p for p in (platforms or []) if (p or "").strip().lower() in _CSV_PATTERNS]
+    if not eligible:
+        return b""
+
+    wb = Workbook()
+    # First sheet is the active default; rename it to the instructions page.
+    instructions = wb.active
+    instructions.title = "Instructions"
+
+    instructions["A1"] = "Unified historical-data template"
+    instructions["A1"].font = Font(bold=True, size=14)
+    instructions["A3"] = (
+        "Fill in one sheet per platform you ran during the historical window. "
+        "Leave a sheet completely empty (just the headers row) if you didn't "
+        "run that platform — the parser silently skips empty sheets."
+    )
+    instructions["A4"] = "Each platform sheet has only headers — add ONE row of your own data underneath."
+    instructions["A5"] = "  • 'Amount Spent' (or 'Cost') — total spend in the window you're reporting on."
+    instructions["A6"] = "  • 'Number of Days' — how many days of history you're reporting on."
+    instructions["A7"] = (
+        "  • One column per metric the platform's native export provides "
+        "(Reach, Impressions, Engagement, etc.).  Fill the columns you have; "
+        "leave the rest blank."
+    )
+    instructions["A8"] = "Then upload this workbook back into Module 3."
+    instructions["A10"] = "Realistic ranges for a £3k monthly campaign (illustrative, not required):"
+    instructions["A10"].font = Font(bold=True)
+    instructions["A11"] = "  • Reach / Impressions:  100,000 – 1,000,000"
+    instructions["A12"] = "  • Clicks:               1,000 – 10,000"
+    instructions["A13"] = "  • Leads / Conversions:  20 – 200"
+    instructions["A14"] = "  • Engagement / Saves:   1,000 – 5,000"
+    instructions["A15"] = "  • Engagement Rate / CTR: 0.005 – 0.10 (or 0.5% – 10%)"
+    instructions["A17"] = "Sheets in this workbook:"
+    instructions["A17"].font = Font(bold=True)
+
+    header_fill = PatternFill(start_color="DDDDDD", end_color="DDDDDD", fill_type="solid")
+    header_font = Font(bold=True)
+
+    used_sheet_names: Dict[str, str] = {}  # sheet_name → platform_code
+    for i, p in enumerate(eligible, start=1):
+        code = p.strip().lower()
+        sheet_label = display.get(code, code)
+        sheet_name = _sanitise_sheet_name(sheet_label)
+        # Disambiguate if two platforms share a sanitised name (shouldn't
+        # happen with the current catalogue but defend anyway)
+        base = sheet_name
+        suffix = 2
+        while sheet_name in used_sheet_names:
+            sheet_name = _sanitise_sheet_name(f"{base} {suffix}")
+            suffix += 1
+        used_sheet_names[sheet_name] = code
+
+        ws = wb.create_sheet(title=sheet_name)
+        # Header row only — no example row baked into the data area, so an
+        # untouched sheet is unambiguously empty and the parser skips it.
+        columns, _examples = _template_columns_and_examples(code)
+        for col_idx, col_name in enumerate(columns, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=col_name)
+            cell.font = header_font
+            cell.fill = header_fill
+            ws.column_dimensions[cell.column_letter].width = max(
+                14, min(40, len(col_name) + 2)
+            )
+
+        instructions.cell(row=17 + i, column=1, value=f"  • {sheet_name}: {len(columns)} columns")
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def parse_unified_template_xlsx(
+    xlsx_bytes: bytes,
+    platform_display_names: Optional[Dict[str, str]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Parse a filled-in unified template workbook.
+
+    Returns a {platform_code: parse_result} mapping where each parse_result
+    has the same shape as parse_platform_csv() — i.e. ``budget``, ``kpis``,
+    ``kpi_breakdown``, ``matched_columns``, ``missing_kpis``, plus an
+    optional ``error`` key.
+
+    Sheets that don't correspond to a known platform are reported under
+    the ``__unknown_sheets__`` key in the returned dict so the caller can
+    surface "you renamed a sheet" warnings.  Sheets with no data row (or
+    only the example row left untouched) are skipped silently.
+
+    Mapping rule: sheet name is matched against the sanitised display
+    name of each platform.  If the user renames a sheet, that sheet is
+    skipped — they have to either rename it back or upload the original
+    per-platform CSV through the per-platform upload widget.
+    """
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        return {"__error__": {"error": "openpyxl is required to parse the unified xlsx template."}}
+
+    try:
+        wb = load_workbook(io.BytesIO(xlsx_bytes), data_only=True)
+    except Exception as exc:  # invalid xlsx
+        return {"__error__": {"error": f"Could not open xlsx: {exc}"}}
+
+    display = platform_display_names or {}
+    # Build the inverse: sanitised-sheet-name → platform_code
+    sheet_to_code: Dict[str, str] = {}
+    for code in _CSV_PATTERNS:
+        label = display.get(code, code)
+        sheet_to_code[_sanitise_sheet_name(label)] = code
+
+    results: Dict[str, Dict[str, Any]] = {}
+    unknown_sheets: List[str] = []
+
+    for sheet_name in wb.sheetnames:
+        if sheet_name == "Instructions":
+            continue
+        code = sheet_to_code.get(sheet_name)
+        if code is None:
+            unknown_sheets.append(sheet_name)
+            continue
+
+        ws = wb[sheet_name]
+        # Read the sheet as CSV-like rows; openpyxl gives None for empty cells.
+        rows: List[List[str]] = []
+        for row in ws.iter_rows(values_only=True):
+            if all(c is None or str(c).strip() == "" for c in row):
+                continue
+            rows.append(["" if c is None else str(c) for c in row])
+
+        if len(rows) < 2:
+            # Header row only — user didn't fill anything in
+            continue
+
+        # Convert to a CSV byte stream so we can reuse parse_platform_csv unchanged
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        for r in rows:
+            writer.writerow(r)
+        csv_bytes = buf.getvalue().encode("utf-8")
+
+        results[code] = parse_platform_csv(csv_bytes, code)
+
+    if unknown_sheets:
+        results["__unknown_sheets__"] = {"sheets": unknown_sheets}
+    return results
 
 
 # ─────────────────────────────────────────────────────────────────────────────

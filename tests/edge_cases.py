@@ -1212,3 +1212,180 @@ def test_module1_error_examples_dont_anchor_on_pound_symbol() -> None:
     )
     # And the value example itself should be plain (no £ prefix on the numeric example)
     assert "£1,200.50" not in err
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Unified xlsx template (one workbook → many platforms)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _platform_display_names_for_test():
+    """Minimal display-names map mirroring app.py PLATFORM_NAMES, used so
+    the template tests don't import app.py (which pulls in streamlit)."""
+    return {
+        "fb": "Facebook", "ig": "Instagram", "li": "LinkedIn",
+        "yt": "YouTube", "tt": "TikTok", "pt": "Pinterest",
+        "tw": "X (Twitter)", "sn": "Snapchat", "rd": "Reddit",
+        "go_search":  "Google Search",
+        "go_display": "Google Display",
+        "go_pmax":    "Google Performance Max",
+    }
+
+
+def test_unified_template_one_sheet_per_selected_platform():
+    """The unified xlsx template includes one sheet per supported platform
+    passed in, plus an Instructions sheet at the front.  Unsupported
+    platforms (none of those exist today, but defend anyway) are skipped."""
+    import io
+    from openpyxl import load_workbook
+    from core.csv_import import generate_unified_template_xlsx
+
+    names = _platform_display_names_for_test()
+    xlsx = generate_unified_template_xlsx(
+        ["fb", "li", "go_search", "go_pmax"], platform_display_names=names
+    )
+    assert xlsx, "Generator returned empty bytes for a valid platform list"
+
+    wb = load_workbook(io.BytesIO(xlsx))
+    assert wb.sheetnames[0] == "Instructions"
+    # Subsequent sheets are in the order the platforms were passed
+    assert wb.sheetnames[1:] == ["Facebook", "LinkedIn", "Google Search", "Google Performance Max"]
+
+
+def test_unified_template_each_sheet_has_only_headers():
+    """An unfilled sheet must contain only the header row — no example row
+    that would otherwise be misread as user data when the workbook is
+    parsed.  This is the invariant that lets the parser skip unfilled
+    sheets unambiguously."""
+    import io
+    from openpyxl import load_workbook
+    from core.csv_import import generate_unified_template_xlsx
+
+    names = _platform_display_names_for_test()
+    xlsx = generate_unified_template_xlsx(["fb", "li"], platform_display_names=names)
+    wb = load_workbook(io.BytesIO(xlsx))
+
+    for sheet_name in ("Facebook", "LinkedIn"):
+        ws = wb[sheet_name]
+        # Row 1 = headers, row 2 onwards should be empty
+        rows = list(ws.iter_rows(values_only=True))
+        assert len(rows) >= 1, f"{sheet_name} has no header row"
+        # All cells from row 2 onwards must be None or empty
+        for row_idx, row in enumerate(rows[1:], start=2):
+            assert all(c is None or str(c).strip() == "" for c in row), (
+                f"{sheet_name} row {row_idx} should be empty but contains: {row}"
+            )
+
+
+def test_unified_template_round_trip_with_partial_fill():
+    """Round-trip: generate a template, fill in only one platform's data,
+    parse the workbook back.  The parser should return data for the
+    filled platform and silently skip the unfilled ones."""
+    import io
+    from openpyxl import load_workbook
+    from core.csv_import import (
+        generate_unified_template_xlsx,
+        parse_unified_template_xlsx,
+    )
+
+    names = _platform_display_names_for_test()
+    xlsx = generate_unified_template_xlsx(
+        ["fb", "li", "go_search"], platform_display_names=names
+    )
+    wb = load_workbook(io.BytesIO(xlsx))
+
+    # Fill ONLY the Facebook sheet with real values
+    ws = wb["Facebook"]
+    header = {c.value: c.column for c in ws[1] if c.value}
+    fb_data = {
+        "Reach": 200000,
+        "Impression": 500000,
+        "Post Reactions": 1500,
+        "Comments": 400,
+        "Shares": 150,
+        "Saves": 50,
+        "Link Click": 4000,
+        "On-facebook Lead": 80,
+        "Amount Spent": 3000,
+        "Number Of Days": 30,
+    }
+    for col_name, value in fb_data.items():
+        if col_name in header:
+            ws.cell(row=2, column=header[col_name], value=str(value))
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    results = parse_unified_template_xlsx(buf.getvalue(), platform_display_names=names)
+
+    # Strip metadata keys
+    parsed = {k: v for k, v in results.items() if not k.startswith("__")}
+
+    assert list(parsed.keys()) == ["fb"], (
+        f"Expected only 'fb' (the filled sheet); got {list(parsed.keys())}.  "
+        "LinkedIn and Google Search were left as headers-only and should "
+        "have been skipped silently."
+    )
+
+    fb = parsed["fb"]
+    assert fb["budget"] == pytest.approx(3000.0)
+    assert fb["kpis"]["FB_AW_REACH"] == pytest.approx(200000.0)
+    assert fb["kpis"]["FB_AW_IMPRESSION"] == pytest.approx(500000.0)
+    # Engagement composed from the four components: 1500 + 400 + 150 + 50 = 2100
+    assert fb["kpis"]["FB_EN_ENGAGEMENT"] == pytest.approx(2100.0)
+    assert fb["kpis"]["FB_WT_CLICKS"] == pytest.approx(4000.0)
+    assert fb["kpis"]["FB_LG_LEADS"] == pytest.approx(80.0)
+
+
+def test_unified_template_reports_unknown_sheets():
+    """Sheets whose names don't match any selected platform's display
+    name are listed under __unknown_sheets__ so the caller can surface
+    'looks like you renamed a sheet' to the user."""
+    import io
+    from openpyxl import Workbook
+    from core.csv_import import parse_unified_template_xlsx
+
+    names = _platform_display_names_for_test()
+
+    # Build a workbook by hand with a renamed sheet
+    wb = Workbook()
+    wb.active.title = "Instructions"
+    ws = wb.create_sheet("Faceboook")  # typo
+    ws.append(["Reach", "Amount Spent"])
+    ws.append(["100000", "1000"])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    results = parse_unified_template_xlsx(buf.getvalue(), platform_display_names=names)
+
+    parsed = {k: v for k, v in results.items() if not k.startswith("__")}
+    assert parsed == {}, (
+        f"No sheet matches a known platform name; expected empty parse, got {parsed}"
+    )
+    assert "__unknown_sheets__" in results
+    assert "Faceboook" in results["__unknown_sheets__"]["sheets"]
+
+
+def test_unified_template_skips_supported_platforms_filter():
+    """Passing platforms not in the CSV-supported set (e.g. a future
+    addition that hasn't been wired into csv_import yet) skips them
+    silently rather than crashing or producing empty sheets."""
+    import io
+    from openpyxl import load_workbook
+    from core.csv_import import generate_unified_template_xlsx
+
+    names = _platform_display_names_for_test()
+    xlsx = generate_unified_template_xlsx(
+        ["fb", "made_up_platform", "li"], platform_display_names=names
+    )
+    wb = load_workbook(io.BytesIO(xlsx))
+    # made_up_platform silently skipped
+    assert wb.sheetnames == ["Instructions", "Facebook", "LinkedIn"]
+
+
+def test_unified_template_corrupt_xlsx_returns_error():
+    """A truncated or non-xlsx byte stream should produce a readable
+    error rather than crashing the UI."""
+    from core.csv_import import parse_unified_template_xlsx
+    result = parse_unified_template_xlsx(b"not a valid xlsx file")
+    assert "__error__" in result
+    assert "error" in result["__error__"]
