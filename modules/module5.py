@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+import logging
+import math
+import random
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pulp
 
 from core.wizard_state import WizardState, FlowStateError
-from core.kpi_config import KPI_CONFIG
+from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE
+
+
+_LOG = logging.getLogger(__name__)
 
 
 class Module5ValidationError(Exception):
@@ -15,18 +21,96 @@ class Module5ValidationError(Exception):
 
 OBJECTIVE_SCALE = 1000.0
 
+# Industry-typical monthly spend needed for a platform's auction / learning
+# algorithm to leave the learning phase and produce stable performance.  These
+# are *guidelines*, not hard constraints — Module 5 surfaces a warning when
+# an allocation falls below the threshold so the user can choose to raise
+# their floor in Module 2, accept the risk, or drop the platform.
+#
+# Sources: published Meta / LinkedIn / Google guidance for monthly minimums
+# at which their delivery algorithms have enough signal to optimise.
+PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH: Dict[str, float] = {
+    # Meta family — Facebook / Instagram both need ~50 conversions/week per ad set
+    "fb": 1000.0,
+    "ig": 1000.0,
+    # LinkedIn auction premium + slower learning = highest minimum on the list
+    "li": 2000.0,
+    "yt": 1500.0,
+    # TikTok learning phase is similar to Meta but slightly higher to fund
+    # the 7-day attribution window comfortably
+    "tt": 1500.0,
+    # Pinterest, X, Snapchat are smaller-spend markets — algorithm learns
+    # on less data; thresholds reflect typical industry advice rather than
+    # vendor-published numbers (none of these platforms publish hard floors)
+    "pt": 800.0,
+    "tw": 800.0,
+    "sn": 1000.0,
+    "rd": 500.0,
+    # Google Search needs ~30 conversions/month for Target CPA bidding to
+    # exit the learning phase; £1k/month is the typical UK threshold at
+    # mid-funnel CPAs (£20–£35).
+    "go_search": 1000.0,
+    # Google Display Network auctions are thinner and CPMs are lower, so
+    # the smart-bidding learning phase finishes on less spend.  £500
+    # matches Reddit's threshold and reflects how little signal the
+    # Display auction needs.
+    "go_display": 500.0,
+    # Performance Max needs ~50 conversions across its blended surfaces
+    # before Smart Bidding stabilises — Google's published guidance puts
+    # the practical floor higher than Search.  £2,500 is the typical UK
+    # threshold at mid-funnel CPAs.
+    "go_pmax": 2500.0,
+}
+
+# Three diminishing-returns brackets per (platform, goal) cell.
+# Each tuple is (cap_fraction_of_total_budget, yield_multiplier).
+# The LP can pour budget into bracket b only after bracket b-1 is full,
+# at a yield = base_r_pg × yield_multiplier for that bracket.
+YIELD_BRACKETS: Tuple[Tuple[float, float], ...] = (
+    (0.25, 1.00),
+    (0.35, 0.65),
+    (0.40, 0.35),
+)
+
 
 @dataclass
 class Module5LPInput:
     valid_goals: List[str]
+    # The user's declared total budget.  Per-scenario LP caps are derived as
+    # (total_budget × scenario_scalar) × (1 - test_and_learn_pct), so the
+    # invariant lp_used + reserve ≤ total_budget × scenario_scalar always holds.
     total_budget: float
     system_goal_weights: Dict[str, float]
     platform_goal_weights: Dict[str, Dict[str, float]]
     r_pg: Dict[str, Dict[str, float]]
+    goals_by_platform: Dict[str, List[str]]
     min_spend_per_platform: Dict[str, float]
     min_budget_per_goal: Dict[str, float]
     scenario_multipliers: Dict[str, float]
     scenario_goal_multipliers: Dict[str, Dict[str, float]]
+    cpu_per_goal: Dict[str, Dict[str, Dict[str, float]]] = field(default_factory=dict)
+    # Fraction of every scenario's budget held back from the LP as a
+    # test-and-learn reserve.  The LP cap shrinks proportionally; the reserve
+    # scales with the scenario so the cross-scenario story is internally
+    # consistent ("X% of every plan's budget goes to testing").
+    test_and_learn_pct: float = 0.0
+    # Per-platform effective spend thresholds (already scaled to campaign
+    # duration).  Allocations below these are flagged as warnings on the
+    # result; the LP is not constrained to respect them.
+    effective_minimum_per_platform: Dict[str, float] = field(default_factory=dict)
+
+
+@dataclass
+class Module5BindingConstraint:
+    """A constraint the LP hit (slack ≈ 0).  These are the constraints that
+    are *actually shaping* the allocation — releasing one of them would let
+    the optimiser do better.
+    """
+    name: str
+    kind: str           # "budget_cap" | "min_platform" | "min_goal"
+    target: Optional[str] = None  # platform code or goal code, when applicable
+    rhs: float = 0.0    # the limit the LP hit
+    shadow_price: float = 0.0  # marginal objective value per unit relaxation
 
 
 @dataclass
@@ -39,6 +123,35 @@ class Module5LPResult:
     combined_weight_pg: Dict[str, Dict[str, float]]
     estimated_kpi_per_platform_goal: Dict[str, Dict[str, float]]
     objective_value_raw: float = 0.0
+    effective_budget_cap: float = 0.0
+    # M4's cost-per-unit-KPI table, attached for reporting/UI. Not used in the LP
+    # itself (the LP needs yields, which are the reciprocals); exposed here so
+    # downstream modules and the UI can present both views.
+    cpu_per_goal: Dict[str, Dict[str, Dict[str, float]]] = field(default_factory=dict)
+    # £ amount held back from the LP as a test-and-learn reserve.  Reported
+    # alongside the allocation so the user sees: total = optimised + reserve.
+    test_and_learn_reserve: float = 0.0
+    # ── Solver diagnostics ──────────────────────────────────────────────────
+    # Which constraints the LP actually hit (slack ≤ tolerance).  This is the
+    # auditable "why did the optimiser stop here?" answer.
+    binding_constraints: List[Module5BindingConstraint] = field(default_factory=list)
+    # Shadow prices on every named constraint (binding or not), keyed by name.
+    # Useful for sensitivity analysis: "if I raised the LinkedIn floor by £1,
+    # the objective would change by this much."
+    shadow_prices: Dict[str, float] = field(default_factory=dict)
+    # Groups of (platform, goal) cells whose normalised productivities were
+    # within the degeneracy tolerance (Fix C).  When this list is non-empty,
+    # the allocation between those cells was set by proportional
+    # redistribution, not by the LP — the user should know it's a tie.
+    near_degenerate_groups: List[Dict[str, Any]] = field(default_factory=list)
+    solver_status: str = "Optimal"
+    # Warnings for platforms whose allocation falls below the industry-typical
+    # effective spend (PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH, scaled by the
+    # campaign duration).  Below this threshold, the platform's auction /
+    # learning algorithm typically has too little signal to optimise; the
+    # campaign delivers but never tunes.  Informational only — the LP isn't
+    # forced to respect these floors unless the user puts them in Module 2.
+    effective_minimum_warnings: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -56,14 +169,23 @@ class Module5ScenarioBundle:
         raise Module5ValidationError("No scenario results available.")
 
 
-def _safe_float(value: Any, default: float = 0.0) -> float:
+def _to_finite_float(value: Any, *, label: str) -> float:
     try:
         x = float(value)
-    except Exception:
+    except (TypeError, ValueError) as e:
+        raise Module5ValidationError(f"{label} must be numeric, got {value!r}.") from e
+    if math.isnan(x) or math.isinf(x):
+        raise Module5ValidationError(f"{label} must be finite, got {value!r}.")
+    return x
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    # Lenient coercion used for optional inputs only. Bad data still raises elsewhere.
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
         return default
-    if x != x:
-        return default
-    if x == float("inf") or x == float("-inf"):
+    if math.isnan(x) or math.isinf(x):
         return default
     return x
 
@@ -82,23 +204,32 @@ def _nonneg_dict(d: Optional[Dict[str, Any]]) -> Dict[str, float]:
 
 def _build_r_pg_from_state(state: WizardState) -> Dict[str, Dict[str, float]]:
     if not getattr(state, "kpi_ratios", None):
-        raise Module5ValidationError("Module 5 cannot run, state.kpi_ratios is empty. Check Module 3.")
+        raise Module5ValidationError(
+            "Module 5 cannot run, state.kpi_ratios is empty. Check Module 3."
+        )
+    if not any(state.kpi_ratios.values()):
+        raise Module5ValidationError(
+            "Module 5 cannot run, state.kpi_ratios has no per-platform data. "
+            "Check Module 3 (shape mismatch or no KPI values collected)."
+        )
 
     if not getattr(state, "active_platforms", None):
-        raise Module5ValidationError("Module 5 cannot run, state.active_platforms is empty. Check Module 2.")
+        raise Module5ValidationError(
+            "Module 5 cannot run, state.active_platforms is empty. Check Module 2."
+        )
 
-    vars_by_platform_goal: Dict[str, Dict[str, List[str]]] = {}
-    for row in KPI_CONFIG:
-        p = str(row["platform"])
-        g = str(row["goal"])
-        var = str(row["var"])
-        vars_by_platform_goal.setdefault(p, {}).setdefault(g, []).append(var)
+    # Look up KPI kind per (platform, var) so we know whether to treat r as rate or per-money.
+    kind_lookup: Dict[Tuple[str, str], str] = {
+        (row["platform"], row["var"]): row.get("kind", KIND_COUNT)
+        for row in KPI_CONFIG
+    }
 
     r_pg: Dict[str, Dict[str, float]] = {}
+    populated_cells = 0
 
     for p in state.active_platforms:
         ratios_for_p = state.kpi_ratios.get(p, {})
-        if not isinstance(ratios_for_p, dict):
+        if not isinstance(ratios_for_p, dict) or not ratios_for_p:
             continue
 
         r_pg[p] = {}
@@ -107,32 +238,190 @@ def _build_r_pg_from_state(state: WizardState) -> Dict[str, Dict[str, float]]:
             if not isinstance(ratios_for_pg, dict):
                 ratios_for_pg = {}
 
-            kpi_vars = vars_by_platform_goal.get(p, {}).get(g, [])
-            productivities: List[float] = []
-
-            for var in kpi_vars:
-                if var not in ratios_for_pg:
+            # Separate counts (per-money productivity) from rates (dimensionless).
+            count_vals: List[float] = []
+            rate_vals: List[float] = []
+            for var, raw_val in ratios_for_pg.items():
+                kind = kind_lookup.get((p, var), KIND_COUNT)
+                val = _safe_float(raw_val, 0.0)
+                if val <= 0.0:
                     continue
-                val = _safe_float(ratios_for_pg.get(var, 0.0), 0.0)
-                if val > 0.0:
-                    productivities.append(val)
+                if kind == KIND_RATE:
+                    rate_vals.append(val)
+                else:
+                    count_vals.append(val)
 
-            if productivities:
-                r_pg[p][g] = sum(productivities) / float(len(productivities))
+            # When both kinds are present, the count productivity is the LP-meaningful
+            # signal (currency-scaled). The rate becomes a soft multiplicative boost
+            # without distorting units. Today every canonical KPI is a count, so the
+            # rate branches are dormant — but retained in case a future platform
+            # re-introduces a rate canonical.
+            if count_vals:
+                productivity = sum(count_vals) / float(len(count_vals))
+                if rate_vals:
+                    rate_mean = sum(rate_vals) / float(len(rate_vals))
+                    productivity *= (1.0 + rate_mean)
+            elif rate_vals:
+                productivity = sum(rate_vals) / float(len(rate_vals))
             else:
-                r_pg[p][g] = 0.0
+                productivity = 0.0
 
-    r_pg = {p: gdict for p, gdict in r_pg.items() if gdict}
+            r_pg[p][g] = productivity
+            if productivity > 0.0:
+                populated_cells += 1
 
-    if not r_pg:
+    r_pg = {p: gdict for p, gdict in r_pg.items() if any(v > 0 for v in gdict.values())}
+
+    if populated_cells == 0 or not r_pg:
         raise Module5ValidationError(
-            "Module 5 r_pg construction produced an empty dictionary. Check KPI_CONFIG, kpi_ratios, active_platforms and valid_goals."
+            "Module 5 r_pg construction produced no positive productivities. "
+            "Check that Module 3 KPI values align with KPI_CONFIG (variable names match) "
+            "and that goals_by_platform from Module 2 covers at least one KPI per cell."
         )
+
+    # ── Fix A: scale rate-only cells to count scale ───────────────────────────
+    # A raw engagement-rate value (0.045) and a count productivity (3 eng/£) are
+    # on different scales and cannot be compared directly.  When a (p,g) cell
+    # has only rate KPIs while other platforms report a count KPI for the same
+    # goal, multiply the rate-only values by the cross-platform count mean so
+    # they compete on the same numerical footing inside the LP.
+    for g in state.valid_goals:
+        count_productivities: List[float] = []
+        rate_only_ps: List[str] = []
+        for p in list(r_pg.keys()):
+            if g not in r_pg[p] or r_pg[p][g] <= 0.0:
+                continue
+            kpi_vars = state.kpi_ratios.get(p, {}).get(g, {})
+            has_count = any(
+                kind_lookup.get((p, var), KIND_COUNT) == KIND_COUNT
+                for var in kpi_vars
+            )
+            if has_count:
+                count_productivities.append(r_pg[p][g])
+            else:
+                rate_only_ps.append(p)
+        if count_productivities and rate_only_ps:
+            count_mean = sum(count_productivities) / len(count_productivities)
+            for p in rate_only_ps:
+                r_pg[p][g] *= count_mean
+
+    # ── Data-quality shrinkage (James-Stein style) ────────────────────────────
+    # Pool each (platform, goal) productivity estimate toward the cross-
+    # platform mean for that goal, weighted by how much historical data
+    # backs the platform's estimate.  Applied after Fix A so all values are
+    # on the same numerical footing, and before Fix B so the pooled values
+    # are what gets normalised.  Without this the LP treats a 7-day reading
+    # with the same authority as a 365-day one — which is exactly the
+    # reviewer's "garbage in, confident optimisation out" critique.
+    #
+    # shrinkage weight = REF / (REF + historical_days)
+    #   hist =   7 days → ~81% pulled toward mean (weak data, strong prior)
+    #   hist =  30 days → ~50% pulled toward mean
+    #   hist =  90 days → ~25% pulled toward mean
+    #   hist = 365 days → ~8%  pulled toward mean (rich data, prior recedes)
+    _apply_data_quality_shrinkage(r_pg, state)
+
+    # ── Fix B: normalise productivities per goal ──────────────────────────────
+    # Without normalisation, "100 reach/£" and "0.016 leads/£" live on a
+    # 6,000× scale gap; the LP then treats reach as far more valuable than
+    # leads regardless of the goal weights, making multi-objective campaigns
+    # uncontrollable.  After normalisation each goal's total sums to 1.0 across
+    # platforms, so the goal weights set by Module 2 become the actual control
+    # knob for cross-objective emphasis.
+    for g in state.valid_goals:
+        total = sum(r_pg.get(p, {}).get(g, 0.0) for p in r_pg)
+        if total > 0.0:
+            for p in r_pg:
+                if g in r_pg[p] and r_pg[p][g] > 0.0:
+                    r_pg[p][g] /= total
 
     return r_pg
 
 
+# Reference window for the James-Stein shrinkage prior.  Larger value =
+# stronger prior = more pooling toward the cross-platform mean for short
+# histories.  30 days is the conventional "campaign month" baseline.
+_DATA_QUALITY_SHRINKAGE_REFERENCE_DAYS = 30.0
+
+
+def _apply_data_quality_shrinkage(
+    r_pg: Dict[str, Dict[str, float]],
+    state: WizardState,
+) -> None:
+    """Pool short-history platform productivities toward the cross-platform
+    mean within each goal.
+
+    For each goal with two or more positive-productivity platforms, compute
+    the mean across those platforms and replace each platform's productivity
+    with a convex combination of its own estimate and the mean:
+
+        shrunk = (1 - w) × own + w × mean
+        w      = REF / (REF + historical_days)
+
+    A 7-day-history platform gets pulled hard toward the mean (w ≈ 0.81);
+    a 365-day-history platform keeps almost its own value (w ≈ 0.08).
+    Mutates r_pg in place.  Cells with only one positive platform are
+    untouched — there's nothing to shrink toward.
+    """
+    module3_data = getattr(state, "module3_data", None) or {}
+    ref = _DATA_QUALITY_SHRINKAGE_REFERENCE_DAYS
+
+    for g in state.valid_goals:
+        active: List[Tuple[str, float]] = []
+        for p, gdict in r_pg.items():
+            v = _safe_float(gdict.get(g, 0.0), 0.0)
+            if v > 0.0:
+                active.append((p, v))
+        if len(active) < 2:
+            continue  # nothing to pool toward
+
+        mean = sum(v for _, v in active) / len(active)
+        for p, v in active:
+            hist = _safe_float(
+                module3_data.get(p, {}).get("historical_days"), ref,
+            )
+            hist = max(1.0, hist)
+            w = ref / (ref + hist)
+            r_pg[p][g] = (1.0 - w) * v + w * mean
+
+
+def _representative_productivity_per_goal(state: WizardState) -> Dict[str, float]:
+    """Mean raw productivity per goal across active platforms (pre-normalisation).
+
+    For count KPIs the unit is count/£; for rate KPIs it is the rate value itself.
+    Used to convert user-provided £-value-per-unit into a goal weight via
+    weight[g] = value_per_unit[g] × representative_productivity[g] (= expected ROAS).
+    """
+    kind_lookup: Dict[Tuple[str, str], str] = {
+        (row["platform"], row["var"]): row.get("kind", KIND_COUNT)
+        for row in KPI_CONFIG
+    }
+    by_goal: Dict[str, List[float]] = {g: [] for g in state.valid_goals}
+    for p in (getattr(state, "active_platforms", []) or []):
+        for g in state.valid_goals:
+            ratios = state.kpi_ratios.get(p, {}).get(g, {})
+            if not ratios:
+                continue
+            count_vals: List[float] = []
+            rate_vals: List[float] = []
+            for var, val in ratios.items():
+                kind = kind_lookup.get((p, var), KIND_COUNT)
+                v = _safe_float(val, 0.0)
+                if v <= 0.0:
+                    continue
+                if kind == KIND_RATE:
+                    rate_vals.append(v)
+                else:
+                    count_vals.append(v)
+            if count_vals:
+                by_goal[g].append(sum(count_vals) / len(count_vals))
+            elif rate_vals:
+                by_goal[g].append(sum(rate_vals) / len(rate_vals))
+    return {g: (sum(v) / len(v) if v else 0.0) for g, v in by_goal.items()}
+
+
 def _build_system_goal_weights(state: WizardState) -> Dict[str, float]:
+    # 1) honour any caller-set weights
     if getattr(state, "system_goal_weights", None):
         raw = {
             g: max(0.0, _safe_float(w, 0.0))
@@ -146,6 +435,63 @@ def _build_system_goal_weights(state: WizardState) -> Dict[str, float]:
     if not getattr(state, "valid_goals", None):
         raise Module5ValidationError("Cannot build system_goal_weights because valid_goals is empty.")
 
+    # 2a) Prefer user-provided economic values when available.
+    # weight[g] = value_per_unit[g] × representative_productivity[g]
+    # The product expresses expected £-return per £ invested in goal g —
+    # i.e. a relative ROAS — which is what a CMO/strategist actually trades off.
+    goal_values = getattr(state, "goal_value_per_unit", None) or {}
+    if goal_values and any(_safe_float(v, 0.0) > 0 for v in goal_values.values()):
+        rep_prod = _representative_productivity_per_goal(state)
+        derived: Dict[str, float] = {}
+        for g in state.valid_goals:
+            val = max(0.0, _safe_float(goal_values.get(g, 0.0), 0.0))
+            prod = max(0.0, _safe_float(rep_prod.get(g, 0.0), 0.0))
+            if val > 0.0 and prod > 0.0:
+                derived[g] = val * prod
+        total = sum(derived.values())
+        if total > 0.0:
+            # When economic weights are present, the rank-based fallback at 2b
+            # is deliberately skipped: the two value frameworks (utility vs.
+            # ordinal preference) shouldn't compose.  Log once so operators
+            # can audit the path the optimiser took.
+            if getattr(state, "priority_rank", None):
+                _LOG.info(
+                    "Using economic goal weights from goal_value_per_unit; "
+                    "rank-based weights from priority_rank are not consulted in this run. "
+                    "derived_weights=%s",
+                    {g: round(w / total, 4) for g, w in derived.items()},
+                )
+            return {g: w / total for g, w in derived.items()}
+
+    # 2b) derive from Module 2 platform priorities: each platform contributes
+    #    rank-1 -> 2, rank-2 -> 1 to its respective goal. This makes the system-level
+    #    weight a frequency-weighted preference instead of inert uniformity.
+    #    Used only when goal_value_per_unit is absent; surfaces as the
+    #    "no per-goal economic values" caveat in Module 7.
+    derived: Dict[str, float] = {g: 0.0 for g in state.valid_goals}
+    priority_map = getattr(state, "priority_rank", {}) or {}
+    for p, ranks in priority_map.items():
+        if not isinstance(ranks, dict):
+            continue
+        for g, rank in ranks.items():
+            if g not in derived:
+                continue
+            if rank == 1:
+                derived[g] += 2.0
+            elif rank == 2:
+                derived[g] += 1.0
+
+    total = sum(derived.values())
+    if total > 0.0:
+        _LOG.info(
+            "Using rank-based goal weights (no goal_value_per_unit provided). "
+            "Supply economic values in Module 1 for utility-grounded weighting. "
+            "derived_weights=%s",
+            {g: round(w / total, 4) for g, w in derived.items()},
+        )
+        return {g: w / total for g, w in derived.items()}
+
+    # 3) last resort: uniform
     n = float(len(state.valid_goals))
     return {g: 1.0 / n for g in state.valid_goals}
 
@@ -173,12 +519,11 @@ def _default_scenario_multipliers() -> Dict[str, float]:
 
 
 def _default_scenario_goal_multipliers(valid_goals: List[str]) -> Dict[str, Dict[str, float]]:
-    scenarios = _default_scenario_multipliers()
-    out: Dict[str, Dict[str, float]] = {}
-    for s_name, m in scenarios.items():
-        out[s_name] = {g: float(m) for g in valid_goals}
-    if "base" not in out:
-        out["base"] = {g: 1.0 for g in valid_goals}
+    out: Dict[str, Dict[str, float]] = {
+        "base": {g: 1.0 for g in valid_goals},
+        "conservative": {g: 1.0 for g in valid_goals},
+        "optimistic": {g: 1.0 for g in valid_goals},
+    }
     return out
 
 
@@ -213,10 +558,7 @@ def _extract_policy_from_state(
                 continue
             scenario_goal_multipliers[str(scenario_name)] = {}
             for g in valid_goals:
-                if g in gmap:
-                    v = _safe_float(gmap.get(g, 1.0), 1.0)
-                else:
-                    v = 1.0
+                v = _safe_float(gmap.get(g, 1.0), 1.0) if g in gmap else 1.0
                 if v <= 0.0:
                     v = 1.0
                 scenario_goal_multipliers[str(scenario_name)][g] = float(v)
@@ -240,10 +582,13 @@ def _extract_policy_from_state(
     sum_min_platform = sum(min_spend_per_platform.values())
     sum_min_goal = sum(min_budget_per_goal.values())
 
-    if sum_min_platform > total_budget + 1e-9:
-        raise Module5ValidationError("Infeasible policy: sum of minimum platform spends exceeds total budget.")
-    if sum_min_goal > total_budget + 1e-9:
-        raise Module5ValidationError("Infeasible policy: sum of minimum goal budgets exceeds total budget.")
+    # Feasibility is checked against the *binding* floor (the larger of the two).
+    binding_floor = max(sum_min_platform, sum_min_goal)
+    if binding_floor > total_budget + 1e-9:
+        raise Module5ValidationError(
+            f"Infeasible policy: binding minimum spend {binding_floor:.2f} exceeds total "
+            f"budget {total_budget:.2f}."
+        )
 
     return min_spend_per_platform, min_budget_per_goal, sm, scenario_goal_multipliers
 
@@ -263,17 +608,107 @@ def build_module5_input_from_state(state: WizardState) -> Module5LPInput:
     if state.total_budget is None or float(state.total_budget) <= 1:
         raise Module5ValidationError("Module 5 cannot run, total_budget is missing or invalid.")
 
+    # Validate the test-and-learn carve-out strictly: bad state means a bug
+    # upstream, and silently clamping would produce a plan the user didn't ask for.
+    tl_pct = _safe_float(getattr(state, "test_and_learn_pct", 0.0), 0.0)
+    if tl_pct < 0.0 or tl_pct >= 0.5:
+        raise Module5ValidationError(
+            f"Invalid test_and_learn_pct={tl_pct} in state; must be in [0.0, 0.5). "
+            f"This is a Module 1 input — re-finalise Module 1 with a valid value."
+        )
+    base_lp_cap = float(state.total_budget) * (1.0 - tl_pct)
+    if base_lp_cap <= 1.0:
+        raise Module5ValidationError(
+            f"LP cap after test-and-learn carve-out is too small ({base_lp_cap:.2f}). "
+            f"Reduce test_and_learn_pct or raise total_budget."
+        )
+
     system_goal_weights = _build_system_goal_weights(state)
     platform_goal_weights = _build_platform_goal_weights_from_state(state)
     r_pg = _build_r_pg_from_state(state)
 
+    # Apply seasonality multipliers to expected productivities BEFORE the LP
+    # runs.  Scenario goal multipliers compose multiplicatively on top of
+    # this — seasonality is a calendar-driven prior, scenarios are uncertainty.
+    seasonality = getattr(state, "seasonality_index", None) or {}
+    if seasonality:
+        for p in list(r_pg.keys()):
+            for g in list(r_pg[p].keys()):
+                mult = _safe_float(seasonality.get(g, 1.0), 1.0)
+                if mult <= 0.0:
+                    mult = 1.0
+                r_pg[p][g] *= mult
+        _LOG.info("Applied seasonality_index=%s to r_pg before LP.", seasonality)
+
     active_platforms = list(r_pg.keys())
+    goals_by_platform = {
+        p: list(state.goals_by_platform.get(p, []) or list(state.valid_goals))
+        for p in active_platforms
+    }
+
+    # Feasibility check uses the base LP cap (post-carve-out, scalar=1.0).
+    # Per-scenario re-checks in run_module5_lp_scenarios handle the conservative
+    # case where the smaller cap may not clear the floors.
     min_spend_per_platform, min_budget_per_goal, scenario_multipliers, scenario_goal_multipliers = _extract_policy_from_state(
         state=state,
         valid_goals=list(state.valid_goals),
         active_platforms=active_platforms,
-        total_budget=float(state.total_budget),
+        total_budget=base_lp_cap,
     )
+
+    # Drop per-goal floors for goals no platform has positive r_pg for.
+    # The LP can't possibly hit a floor when no cell can absorb the budget;
+    # keeping the floor would cause Infeasible status.  This happens in
+    # practice when a goal is prioritised in Module 2 but the user only
+    # provides KPI data for a different goal in Module 3.
+    goals_with_capacity = {
+        g for g in state.valid_goals
+        if any(r_pg.get(p, {}).get(g, 0.0) > 0.0 for p in r_pg)
+    }
+    dropped_goal_floors = set(min_budget_per_goal.keys()) - goals_with_capacity
+    if dropped_goal_floors:
+        _LOG.info(
+            "Dropping per-goal floors for goals with no productivity data: %s. "
+            "Provide Module 3 KPIs for these goals to re-enable.",
+            sorted(dropped_goal_floors),
+        )
+    min_budget_per_goal = {
+        g: v for g, v in min_budget_per_goal.items()
+        if g in goals_with_capacity
+    }
+
+    module4_result = getattr(state, "module4_result", None)
+    cpu_per_goal = (
+        {p: {g: dict(kdict) for g, kdict in gdict.items()}
+         for p, gdict in module4_result.cpu_per_goal.items()}
+        if module4_result is not None
+        else {}
+    )
+
+    # Compute effective-minimum thresholds, scaled to campaign duration.
+    # A 60-day campaign should support twice the monthly threshold; a 15-day
+    # campaign half of it.  Defaults to 30-day equivalence when duration is
+    # unknown.
+    campaign_days = _safe_float(getattr(state, "campaign_duration_days", None) or 30.0, 30.0)
+    if campaign_days <= 0.0:
+        campaign_days = 30.0
+    scale = campaign_days / 30.0
+    # Merge built-in catalogue thresholds with any custom platforms registered
+    # on state.  Custom entries supply their own monthly_effective_minimum.
+    monthly_minimums: Dict[str, float] = dict(PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH)
+    for cp in (getattr(state, "custom_platforms", None) or []):
+        code = str(cp.get("code", "")).strip().lower()
+        mm = cp.get("monthly_effective_minimum")
+        if code and mm is not None:
+            try:
+                monthly_minimums[code] = max(0.0, float(mm))
+            except (TypeError, ValueError):
+                pass
+    effective_minimums: Dict[str, float] = {}
+    for p in active_platforms:
+        threshold = monthly_minimums.get(p, 0.0) * scale
+        if threshold > 0.0:
+            effective_minimums[p] = threshold
 
     return Module5LPInput(
         valid_goals=list(state.valid_goals),
@@ -281,10 +716,14 @@ def build_module5_input_from_state(state: WizardState) -> Module5LPInput:
         system_goal_weights=system_goal_weights,
         platform_goal_weights=platform_goal_weights,
         r_pg=r_pg,
+        goals_by_platform=goals_by_platform,
         min_spend_per_platform=min_spend_per_platform,
         min_budget_per_goal=min_budget_per_goal,
         scenario_multipliers=scenario_multipliers,
         scenario_goal_multipliers=scenario_goal_multipliers,
+        cpu_per_goal=cpu_per_goal,
+        test_and_learn_pct=tl_pct,
+        effective_minimum_per_platform=effective_minimums,
     )
 
 
@@ -295,13 +734,19 @@ def _solve_single_lp(
     system_goal_weights: Dict[str, float],
     platform_goal_weights: Dict[str, Dict[str, float]],
     r_pg: Dict[str, Dict[str, float]],
+    goals_by_platform: Dict[str, List[str]],
     min_spend_per_platform: Dict[str, float],
     min_budget_per_goal: Dict[str, float],
+    budget_cap: float,
+    cpu_per_goal: Optional[Dict[str, Dict[str, Dict[str, float]]]] = None,
+    effective_minimum_per_platform: Optional[Dict[str, float]] = None,
 ) -> Module5LPResult:
     if not valid_goals:
         raise Module5ValidationError("Module 5 LP, valid_goals is empty.")
     if total_budget <= 1:
         raise Module5ValidationError("Module 5 LP, total_budget must be greater than 1.")
+    if budget_cap <= 0:
+        raise Module5ValidationError("Module 5 LP, budget_cap must be greater than zero.")
     if not system_goal_weights:
         raise Module5ValidationError("Module 5 LP, system_goal_weights is empty.")
     if not platform_goal_weights:
@@ -310,6 +755,13 @@ def _solve_single_lp(
         raise Module5ValidationError("Module 5 LP, r_pg is empty.")
 
     platforms = list(r_pg.keys())
+
+    # Effective goals per platform: only those that Module 2 prioritised AND that have a
+    # positive productivity from Module 3.
+    eff_goals: Dict[str, List[str]] = {}
+    for p in platforms:
+        allowed = set(goals_by_platform.get(p, [])) or set(valid_goals)
+        eff_goals[p] = [g for g in valid_goals if g in allowed and r_pg.get(p, {}).get(g, 0.0) > 0]
 
     combined_weight_pg: Dict[str, Dict[str, float]] = {}
     for p in platforms:
@@ -322,34 +774,99 @@ def _solve_single_lp(
 
     model = pulp.LpProblem("Budget_Allocation_Per_Platform_And_Goal", pulp.LpMaximize)
 
-    x_vars: Dict[str, Dict[str, pulp.LpVariable]] = {}
-    for p in platforms:
-        x_vars[p] = {}
-        for g in valid_goals:
-            x_vars[p][g] = pulp.LpVariable(f"x_{p}_{g}", lowBound=0.0, cat="Continuous")
+    # Per-bracket decision variables: x[p][g][b]
+    x_brackets: Dict[str, Dict[str, List[pulp.LpVariable]]] = {}
+    bracket_caps: List[float] = [frac * total_budget for frac, _yield in YIELD_BRACKETS]
+    bracket_yields: List[float] = [y for _frac, y in YIELD_BRACKETS]
 
+    for p in platforms:
+        x_brackets[p] = {}
+        for g in valid_goals:
+            if g not in eff_goals[p]:
+                # Force allocation to zero by capping each bracket at zero.
+                x_brackets[p][g] = [
+                    pulp.LpVariable(f"x_{p}_{g}_b{i}", lowBound=0.0, upBound=0.0, cat="Continuous")
+                    for i in range(len(YIELD_BRACKETS))
+                ]
+                continue
+            x_brackets[p][g] = [
+                pulp.LpVariable(
+                    f"x_{p}_{g}_b{i}",
+                    lowBound=0.0,
+                    upBound=bracket_caps[i],
+                    cat="Continuous",
+                )
+                for i in range(len(YIELD_BRACKETS))
+            ]
+
+    # Objective: Σ combined_weight × r_pg × Σ_b (yield_b × x_b)
     model += pulp.lpSum(
-        combined_weight_pg[p][g] * _safe_float(r_pg.get(p, {}).get(g, 0.0), 0.0) * x_vars[p][g]
+        combined_weight_pg[p][g]
+        * _safe_float(r_pg.get(p, {}).get(g, 0.0), 0.0)
+        * bracket_yields[b]
+        * x_brackets[p][g][b]
         for p in platforms
         for g in valid_goals
+        for b in range(len(YIELD_BRACKETS))
     )
 
-    model += pulp.lpSum(x_vars[p][g] for p in platforms for g in valid_goals) <= total_budget
+    # Total budget cap (scenario-scaled).  Named so we can read its shadow
+    # price after solve.
+    model += (
+        pulp.lpSum(
+            x_brackets[p][g][b]
+            for p in platforms
+            for g in valid_goals
+            for b in range(len(YIELD_BRACKETS))
+        )
+        <= budget_cap,
+        "budget_cap",
+    )
 
+    # Per-platform minimums.
+    platform_floor_meta: Dict[str, Tuple[str, float]] = {}
     for p in platforms:
         min_p = _safe_float(min_spend_per_platform.get(p, 0.0), 0.0)
         if min_p > 0.0:
-            model += pulp.lpSum(x_vars[p][g] for g in valid_goals) >= min_p
+            name = f"min_platform_{p}"
+            model += (
+                pulp.lpSum(
+                    x_brackets[p][g][b]
+                    for g in valid_goals
+                    for b in range(len(YIELD_BRACKETS))
+                )
+                >= min_p,
+                name,
+            )
+            platform_floor_meta[name] = (p, min_p)
 
+    # Per-goal minimums.
+    goal_floor_meta: Dict[str, Tuple[str, float]] = {}
     for g in valid_goals:
         min_g = _safe_float(min_budget_per_goal.get(g, 0.0), 0.0)
         if min_g > 0.0:
-            model += pulp.lpSum(x_vars[p][g] for p in platforms) >= min_g
+            name = f"min_goal_{g}"
+            model += (
+                pulp.lpSum(
+                    x_brackets[p][g][b]
+                    for p in platforms
+                    for b in range(len(YIELD_BRACKETS))
+                )
+                >= min_g,
+                name,
+            )
+            goal_floor_meta[name] = (g, min_g)
 
     model.solve(pulp.PULP_CBC_CMD(msg=False))
 
     status = pulp.LpStatus.get(model.status, "Unknown")
     if status not in ("Optimal", "Feasible"):
+        _LOG.error(
+            "LP solve failed: status=%s budget_cap=%.2f sum_min_platform=%.2f sum_min_goal=%.2f",
+            status, budget_cap,
+            sum(min_spend_per_platform.values()),
+            sum(min_budget_per_goal.values()),
+        )
         raise Module5ValidationError(f"LP solve failed with status: {status}")
 
     budget_per_platform_goal: Dict[str, Dict[str, float]] = {}
@@ -362,22 +879,137 @@ def _solve_single_lp(
         total_p = 0.0
 
         for g in valid_goals:
-            val = _safe_float(getattr(x_vars[p][g], "varValue", 0.0), 0.0)
-            if val < 0.0:
-                val = 0.0
+            cell_total = 0.0
+            cell_yield_sum = 0.0
+            for b in range(len(YIELD_BRACKETS)):
+                v = _safe_float(getattr(x_brackets[p][g][b], "varValue", 0.0), 0.0)
+                if v < 0.0:
+                    v = 0.0
+                cell_total += v
+                cell_yield_sum += v * bracket_yields[b]
 
-            budget_per_platform_goal[p][g] = val
-            total_p += val
+            budget_per_platform_goal[p][g] = cell_total
+            total_p += cell_total
 
-            kpi_estimate = _safe_float(r_pg.get(p, {}).get(g, 0.0), 0.0) * val
-            estimated_kpi_per_platform_goal[p][g] = kpi_estimate
+            r_val = _safe_float(r_pg.get(p, {}).get(g, 0.0), 0.0)
+            estimated_kpi_per_platform_goal[p][g] = r_val * cell_yield_sum
 
         budget_per_platform[p] = total_p
 
-    total_budget_used = sum(budget_per_platform_goal[p][g] for p in platforms for g in valid_goals)
+    # ── Fix C: proportional redistribution for near-equal productivity cells ──
+    # LP problems with identical (or near-identical) objective coefficients are
+    # degenerate: any split across the tied cells is optimal, and the solver
+    # picks an arbitrary corner (e.g. 60/40 instead of 50/50).  When two or more
+    # platforms have the same goal and their normalised productivities are within
+    # 2 % of each other, redistribute the total goal budget proportionally so the
+    # allocation reflects relative efficiency rather than solver tie-breaking.
+    near_degenerate_groups: List[Dict[str, Any]] = []
+    for g in valid_goals:
+        active = {
+            p: _safe_float(r_pg.get(p, {}).get(g, 0.0), 0.0)
+            for p in platforms
+            if _safe_float(r_pg.get(p, {}).get(g, 0.0), 0.0) > 0.0
+        }
+        if len(active) < 2:
+            continue
+        max_r = max(active.values())
+        min_r = min(active.values())
+        if max_r <= 0.0 or (max_r - min_r) / max_r > 0.02:
+            continue  # clear winner — keep LP allocation as-is
+        total_g = sum(budget_per_platform_goal[p][g] for p in active)
+        total_r = sum(active.values())
+        if total_r > 0.0 and total_g > 0.0:
+            for p in active:
+                budget_per_platform_goal[p][g] = total_g * (active[p] / total_r)
+            near_degenerate_groups.append({
+                "goal": g,
+                "platforms": list(active.keys()),
+                "max_relative_gap": (max_r - min_r) / max_r,
+            })
+            _LOG.info(
+                "Near-degenerate cell group for goal=%s across platforms=%s "
+                "(max_relative_gap=%.4f); redistributed proportionally instead of "
+                "taking the LP's arbitrary corner.",
+                g, list(active.keys()), (max_r - min_r) / max_r,
+            )
+
+    # Recompute platform totals after any redistribution.
+    for p in platforms:
+        budget_per_platform[p] = sum(budget_per_platform_goal[p][g] for g in valid_goals)
+
+    total_budget_used = sum(
+        budget_per_platform_goal[p][g] for p in platforms for g in valid_goals
+    )
 
     objective_value_raw = _safe_float(pulp.value(model.objective), 0.0)
     objective_value = objective_value_raw * float(OBJECTIVE_SCALE)
+
+    # ── Solver diagnostics ─────────────────────────────────────────────────
+    # Walk the named constraints, capture slack + shadow prices, and surface
+    # which ones the LP actually hit.  Tolerance is relative to the RHS so a
+    # floor of £10,000 and a floor of £100 use a sensible threshold each.
+    binding: List[Module5BindingConstraint] = []
+    shadow_prices: Dict[str, float] = {}
+    for cons_name, cons in model.constraints.items():
+        try:
+            pi = _safe_float(getattr(cons, "pi", 0.0) or 0.0, 0.0)
+        except Exception:
+            pi = 0.0
+        shadow_prices[cons_name] = pi
+
+        rhs = -_safe_float(getattr(cons, "constant", 0.0), 0.0)  # PuLP stores -RHS
+        # slack = |lhs - rhs|; CBC sometimes reports tiny non-zero slacks
+        slack = abs(_safe_float(getattr(cons, "slack", 0.0), 0.0))
+        tol = max(1e-4, 1e-3 * max(1.0, abs(rhs)))
+        if slack <= tol:
+            kind = "budget_cap"
+            target: Optional[str] = None
+            if cons_name in platform_floor_meta:
+                kind = "min_platform"
+                target = platform_floor_meta[cons_name][0]
+                rhs = platform_floor_meta[cons_name][1]
+            elif cons_name in goal_floor_meta:
+                kind = "min_goal"
+                target = goal_floor_meta[cons_name][0]
+                rhs = goal_floor_meta[cons_name][1]
+            elif cons_name == "budget_cap":
+                rhs = budget_cap
+            binding.append(Module5BindingConstraint(
+                name=cons_name, kind=kind, target=target, rhs=rhs, shadow_price=pi,
+            ))
+
+    # ── Effective minimum spend warnings ───────────────────────────────────
+    # Platforms whose allocation falls below the industry-typical effective
+    # threshold typically can't exit the algorithm's learning phase; the
+    # campaign delivers impressions but doesn't optimise.  Surfaced as
+    # warnings (not enforced) so the user can decide whether to lift the
+    # floor in Module 2, drop the platform, or accept the risk.
+    effective_warnings: List[str] = []
+    for p, threshold in (effective_minimum_per_platform or {}).items():
+        if threshold <= 0.0:
+            continue
+        allocated = _safe_float(budget_per_platform.get(p, 0.0), 0.0)
+        # Only warn when the platform got *something* but below the threshold —
+        # a zero allocation means the LP chose to skip it entirely, which is
+        # a separate, intentional outcome.
+        if 0.0 < allocated < threshold:
+            shortfall = threshold - allocated
+            effective_warnings.append(
+                f"{p}: allocated {allocated:.0f} but the industry-typical effective "
+                f"minimum is {threshold:.0f} (short by {shortfall:.0f}). "
+                f"Below this threshold the platform may not exit its learning phase."
+            )
+            _LOG.warning(
+                "Platform %s allocated %.2f below effective minimum %.2f",
+                p, allocated, threshold,
+            )
+
+    _LOG.info(
+        "LP solved: status=%s objective_raw=%.4f budget_used=%.2f budget_cap=%.2f "
+        "binding=%d degenerate_groups=%d effective_warnings=%d",
+        status, objective_value_raw, total_budget_used, budget_cap,
+        len(binding), len(near_degenerate_groups), len(effective_warnings),
+    )
 
     return Module5LPResult(
         budget_per_platform_goal=budget_per_platform_goal,
@@ -388,30 +1020,65 @@ def _solve_single_lp(
         combined_weight_pg=combined_weight_pg,
         estimated_kpi_per_platform_goal=estimated_kpi_per_platform_goal,
         objective_value_raw=objective_value_raw,
+        effective_budget_cap=budget_cap,
+        cpu_per_goal=cpu_per_goal or {},
+        binding_constraints=binding,
+        shadow_prices=shadow_prices,
+        near_degenerate_groups=near_degenerate_groups,
+        solver_status=status,
+        effective_minimum_warnings=effective_warnings,
     )
 
 
 def run_module5_lp(input_data: Module5LPInput) -> Module5LPResult:
-    return _solve_single_lp(
+    tl_pct = _safe_float(input_data.test_and_learn_pct, 0.0)
+    if tl_pct < 0.0 or tl_pct >= 0.5:
+        raise Module5ValidationError(
+            f"Invalid test_and_learn_pct={tl_pct}; must be in [0.0, 0.5)."
+        )
+    lp_cap = input_data.total_budget * (1.0 - tl_pct)
+    result = _solve_single_lp(
         valid_goals=input_data.valid_goals,
-        total_budget=input_data.total_budget,
+        total_budget=lp_cap,
         system_goal_weights=input_data.system_goal_weights,
         platform_goal_weights=input_data.platform_goal_weights,
         r_pg=input_data.r_pg,
+        goals_by_platform=input_data.goals_by_platform,
         min_spend_per_platform=input_data.min_spend_per_platform,
         min_budget_per_goal=input_data.min_budget_per_goal,
+        budget_cap=lp_cap,
+        cpu_per_goal=input_data.cpu_per_goal,
+        effective_minimum_per_platform=input_data.effective_minimum_per_platform,
     )
+    result.test_and_learn_reserve = input_data.total_budget - lp_cap
+    return result
 
 
 def run_module5_lp_scenarios(input_data: Module5LPInput) -> Module5ScenarioBundle:
     if not input_data.scenario_multipliers:
         raise Module5ValidationError("scenario_multipliers is empty.")
 
+    tl_pct = _safe_float(input_data.test_and_learn_pct, 0.0)
+    if tl_pct < 0.0 or tl_pct >= 0.5:
+        raise Module5ValidationError(
+            f"Invalid test_and_learn_pct={tl_pct}; must be in [0.0, 0.5)."
+        )
+
     results: Dict[str, Module5LPResult] = {}
 
-    base_goal_map = input_data.scenario_goal_multipliers.get("base", {}) if input_data.scenario_goal_multipliers else {}
+    base_goal_map = (
+        dict(input_data.scenario_goal_multipliers.get("base", {}))
+        if input_data.scenario_goal_multipliers
+        else {}
+    )
     for g in input_data.valid_goals:
         base_goal_map.setdefault(g, 1.0)
+
+    # Bracket caps for diminishing returns are anchored to the base LP capacity
+    # (post-carve-out, scalar=1.0).  This stays constant across scenarios so
+    # diminishing-returns kick in at the same £ thresholds regardless of which
+    # scenario the user is looking at — cleaner cross-scenario comparison.
+    base_lp_cap = input_data.total_budget * (1.0 - tl_pct)
 
     for scenario_name, scalar_multiplier in input_data.scenario_multipliers.items():
         scalar_m = _safe_float(scalar_multiplier, 1.0)
@@ -422,6 +1089,7 @@ def run_module5_lp_scenarios(input_data: Module5LPInput) -> Module5ScenarioBundl
         if not isinstance(goal_multipliers, dict) or not goal_multipliers:
             goal_multipliers = base_goal_map
 
+        # Goal multipliers shift r_pg per-goal (genuine relative re-ranking of cells).
         adjusted_r_pg: Dict[str, Dict[str, float]] = {}
         for p, gdict in input_data.r_pg.items():
             adjusted_r_pg[p] = {}
@@ -430,17 +1098,42 @@ def run_module5_lp_scenarios(input_data: Module5LPInput) -> Module5ScenarioBundl
                 gm = _safe_float(goal_multipliers.get(g, 1.0), 1.0)
                 if gm <= 0.0:
                     gm = 1.0
-                adjusted_r_pg[p][g] = max(0.0, val * scalar_m * gm)
+                adjusted_r_pg[p][g] = max(0.0, val * gm)
 
-        results[scenario_name] = _solve_single_lp(
+        # Apply the carve-out per scenario so the invariant holds in every cell:
+        #   scenario_total = declared_total × scalar
+        #   budget_cap     = scenario_total × (1 - tl_pct)
+        #   reserve        = scenario_total × tl_pct
+        # which guarantees lp_used + reserve ≤ scenario_total for every scenario,
+        # including optimistic.  Without this, optimistic was spending the full
+        # scenario uplift PLUS the base reserve, exceeding the user's declared total.
+        scenario_total = input_data.total_budget * scalar_m
+        budget_cap = scenario_total * (1.0 - tl_pct)
+        scenario_reserve = scenario_total - budget_cap
+
+        # Re-check feasibility against the binding floor for this scenario.
+        sum_min_p = sum(input_data.min_spend_per_platform.values())
+        sum_min_g = sum(input_data.min_budget_per_goal.values())
+        binding_floor = max(sum_min_p, sum_min_g)
+        if binding_floor > budget_cap + 1e-9:
+            # Skip this scenario rather than fail outright — caller still sees others.
+            continue
+
+        result = _solve_single_lp(
             valid_goals=input_data.valid_goals,
-            total_budget=input_data.total_budget,
+            total_budget=base_lp_cap,
             system_goal_weights=input_data.system_goal_weights,
             platform_goal_weights=input_data.platform_goal_weights,
             r_pg=adjusted_r_pg,
+            goals_by_platform=input_data.goals_by_platform,
             min_spend_per_platform=input_data.min_spend_per_platform,
             min_budget_per_goal=input_data.min_budget_per_goal,
+            budget_cap=budget_cap,
+            cpu_per_goal=input_data.cpu_per_goal,
+            effective_minimum_per_platform=input_data.effective_minimum_per_platform,
         )
+        result.test_and_learn_reserve = scenario_reserve
+        results[scenario_name] = result
 
     if not results:
         raise Module5ValidationError("No scenario results were produced.")
@@ -452,6 +1145,65 @@ def run_module5_lp_scenarios(input_data: Module5LPInput) -> Module5ScenarioBundl
     )
 
 
+@dataclass
+class Module5MissingDataCell:
+    """One platform/goal cell where the LP couldn't even consider the cell
+    because no input data was available — distinct from a cell the LP
+    weighed and chose to skip.
+
+    reason ∈ {'no_platform_data', 'no_cell_data'}:
+      - 'no_platform_data': the user selected the platform in Module 2 but
+        provided no KPI values at all in Module 3 (kpis dict was empty).
+      - 'no_cell_data': the platform has KPIs for some goals but not this
+        one (e.g. user gave AW reach but no LG leads on Facebook even
+        though LG was prioritised on FB).
+    """
+    platform: str
+    goal: Optional[str]  # None when the whole platform was empty
+    reason: str
+
+
+def detect_missing_data_cells(state: WizardState) -> List[Module5MissingDataCell]:
+    """List the (platform, goal) cells that got zero LP allocation purely
+    because the user didn't supply data — separated from cells the LP
+    chose to skip on merit.
+
+    Use this in the results UI to surface a 'we got nothing on these
+    cells, that's why they're missing from the plan' warning, so the
+    user can't mistake silence for an optimiser decision.
+    """
+    issues: List[Module5MissingDataCell] = []
+    kpi_ratios = getattr(state, "kpi_ratios", None) or {}
+    active_platforms = getattr(state, "active_platforms", None) or []
+    goals_by_platform = getattr(state, "goals_by_platform", None) or {}
+
+    for p in active_platforms:
+        platform_ratios = kpi_ratios.get(p, {}) or {}
+        if not platform_ratios:
+            # Selected in Module 2 but Module 3 received nothing for it.
+            issues.append(Module5MissingDataCell(
+                platform=p, goal=None, reason="no_platform_data",
+            ))
+            continue
+
+        prioritised_goals = goals_by_platform.get(p, []) or []
+        for g in prioritised_goals:
+            goal_ratios = platform_ratios.get(g, {}) or {}
+            # Empty dict, or only non-positive values, both mean the LP
+            # can't optimise this cell.
+            if not goal_ratios:
+                issues.append(Module5MissingDataCell(
+                    platform=p, goal=g, reason="no_cell_data",
+                ))
+                continue
+            if not any(_safe_float(v, 0.0) > 0.0 for v in goal_ratios.values()):
+                issues.append(Module5MissingDataCell(
+                    platform=p, goal=g, reason="no_cell_data",
+                ))
+
+    return issues
+
+
 def run_module5(state: WizardState) -> WizardState:
     if state.module5_finalised:
         raise FlowStateError("Module 5 has already been finalised. Reset the wizard to change it.")
@@ -460,16 +1212,285 @@ def run_module5(state: WizardState) -> WizardState:
     bundle = run_module5_lp_scenarios(lp_input)
     base_result = bundle.get_base()
 
-    state.complete_module5_and_advance(module5_result=base_result)
-
-    try:
-        setattr(state, "module5_scenario_bundle", bundle)
-    except Exception:
-        pass
-
-    try:
-        setattr(state, "module5_results_by_scenario", bundle.results_by_scenario)
-    except Exception:
-        pass
+    state.complete_module5_and_advance(
+        module5_result=base_result,
+        module5_scenario_bundle=bundle,
+        module5_results_by_scenario=bundle.results_by_scenario,
+    )
 
     return state
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Monte Carlo robustness analysis
+# ────────────────────────────────────────────────────────────────────────────
+# A reviewer-driven addition: the LP gives a single deterministic allocation,
+# but a wrong productivity estimate can dominate the result without the
+# system flagging the underlying uncertainty.  This block re-solves the LP
+# many times with the productivities perturbed by their observed (or
+# window-scaled) coefficient of variation, then reports the *distribution*
+# of allocations.  Cells whose allocation has a wide spread are explicitly
+# called out as unstable — that's the honest answer to "how robust are the
+# assumptions?"
+
+# Default cap on Monte Carlo trials.  200 keeps the runtime under ~5 s on
+# typical small problems while giving stable p5/p95 estimates.
+DEFAULT_MC_TRIALS = 200
+
+# CV above which a per-platform total is treated as "unstable" — i.e. the
+# rank ordering of platforms is sensitive to plausible productivity noise.
+# 0.20 means "the platform's share moves by more than 20% of its mean
+# under realistic data perturbation."
+DEFAULT_INSTABILITY_CV = 0.20
+
+
+@dataclass
+class Module5MCCellSummary:
+    platform: str
+    goal: str               # empty string for platform totals
+    mean: float
+    std: float
+    cv: float               # std / mean (0 when mean ≈ 0)
+    p5: float
+    p50: float
+    p95: float
+
+
+@dataclass
+class Module5MonteCarloResult:
+    n_trials: int
+    seed: Optional[int]
+    per_cell: List[Module5MCCellSummary] = field(default_factory=list)
+    per_platform: List[Module5MCCellSummary] = field(default_factory=list)
+    # Platforms whose share is sensitive to plausible productivity perturbation.
+    # Populated when CV > instability_threshold.  These are the platforms whose
+    # rank in the plan should be treated with caution.
+    unstable_platforms: List[str] = field(default_factory=list)
+    instability_threshold: float = DEFAULT_INSTABILITY_CV
+    # Per-cell sigma used for sampling (the lognormal scale parameter).
+    # Surfaced so the user can see *which* assumptions had the most noise.
+    cell_sigma: Dict[str, Dict[str, float]] = field(default_factory=dict)
+
+
+def _per_cell_sigma(state: WizardState) -> Dict[str, Dict[str, float]]:
+    """Best estimate of per-(platform, goal) productivity noise.
+
+    For each cell, prefer the coefficient of variation computed from
+    module3_data['kpi_observations'] when ≥3 observations exist.  Else
+    scale Module 6's DEFAULT_UNCERTAINTY_BAND by sqrt(30/historical_days).
+    Final fallback: the flat default.
+    """
+    # Late import to avoid module-load cycle (module6 imports module5).
+    from modules.module6 import (
+        _coefficient_of_variation,
+        DEFAULT_UNCERTAINTY_BAND,
+    )
+
+    module3_data = getattr(state, "module3_data", {}) or {}
+    out: Dict[str, Dict[str, float]] = {}
+
+    for p in (getattr(state, "active_platforms", []) or []):
+        pdata = module3_data.get(p, {}) or {}
+        hist_days = pdata.get("historical_days")
+        observations_map = pdata.get("kpi_observations", {}) or {}
+        kpi_ratios = (getattr(state, "kpi_ratios", {}) or {}).get(p, {}) or {}
+
+        out[p] = {}
+        for g in (getattr(state, "valid_goals", []) or []):
+            # Aggregate CVs across all KPI vars in this cell — typically just
+            # one or two count KPIs per (platform, goal).
+            cell_cvs: List[float] = []
+            for var in (kpi_ratios.get(g, {}) or {}).keys():
+                cv = _coefficient_of_variation(observations_map.get(var) or [])
+                if cv is not None:
+                    cell_cvs.append(cv)
+
+            if cell_cvs:
+                sigma = sum(cell_cvs) / len(cell_cvs)
+            elif hist_days and hist_days > 0:
+                days = max(7.0, float(hist_days))
+                sigma = DEFAULT_UNCERTAINTY_BAND * math.sqrt(30.0 / days)
+            else:
+                sigma = DEFAULT_UNCERTAINTY_BAND
+
+            # Clamp: extreme values usually indicate bad data, and very large
+            # sigmas turn the LP into white noise (every solve is different).
+            sigma = max(0.05, min(1.0, sigma))
+            out[p][g] = sigma
+
+    return out
+
+
+def _percentile(values: Sequence[float], q: float) -> float:
+    """Linear-interpolation percentile (q in [0, 100]).  Avoids the numpy dep."""
+    if not values:
+        return 0.0
+    s = sorted(values)
+    if len(s) == 1:
+        return s[0]
+    idx = (q / 100.0) * (len(s) - 1)
+    lo = int(math.floor(idx))
+    hi = int(math.ceil(idx))
+    if lo == hi:
+        return s[lo]
+    return s[lo] + (s[hi] - s[lo]) * (idx - lo)
+
+
+def _summarise(values: List[float], platform: str, goal: str) -> Module5MCCellSummary:
+    n = len(values)
+    if n == 0:
+        return Module5MCCellSummary(platform=platform, goal=goal,
+                                    mean=0.0, std=0.0, cv=0.0, p5=0.0, p50=0.0, p95=0.0)
+    mean = sum(values) / n
+    var = sum((v - mean) ** 2 for v in values) / max(1, n - 1)
+    std = math.sqrt(var)
+    cv = (std / mean) if mean > 1e-9 else 0.0
+    return Module5MCCellSummary(
+        platform=platform, goal=goal,
+        mean=mean, std=std, cv=cv,
+        p5=_percentile(values, 5),
+        p50=_percentile(values, 50),
+        p95=_percentile(values, 95),
+    )
+
+
+def run_module5_montecarlo(
+    state: WizardState,
+    n_trials: int = DEFAULT_MC_TRIALS,
+    seed: Optional[int] = None,
+    instability_cv_threshold: float = DEFAULT_INSTABILITY_CV,
+) -> Module5MonteCarloResult:
+    """Re-solve the base-scenario LP with productivities perturbed by their
+    observed noise, then report the resulting distribution over allocations.
+
+    Each trial multiplies every r_pg[p][g] by a mean-preserving lognormal
+    shock with scale sigma = the cell's coefficient of variation (from
+    Module 3 observations, the historical-window prior, or the default).
+    Productivities are re-normalised per goal after the shock so the LP's
+    cross-platform comparison stays calibrated.
+
+    Returns per-cell and per-platform mean/std/p5/p50/p95 of the allocation
+    in £, plus the list of platforms whose share is sensitive (CV >
+    instability_cv_threshold).
+
+    Cost: n_trials LP solves.  At n=200 this is typically 1–5 s.
+    """
+    if not state.module4_finalised:
+        raise FlowStateError("Monte Carlo analysis requires Module 4 to be finalised.")
+    if n_trials < 10:
+        raise Module5ValidationError(
+            f"n_trials={n_trials} is too small to estimate percentiles. Use ≥10."
+        )
+    if n_trials > 1000:
+        raise Module5ValidationError(
+            f"n_trials={n_trials} > 1000 — refuse to run; that's >25 s of LP solves. "
+            f"Reduce n_trials or implement a proper parallel runner first."
+        )
+
+    lp_input = build_module5_input_from_state(state)
+    cell_sigma = _per_cell_sigma(state)
+    rng = random.Random(seed)
+
+    tl_pct = _safe_float(lp_input.test_and_learn_pct, 0.0)
+    lp_cap = lp_input.total_budget * (1.0 - tl_pct)
+
+    # Per-cell accumulator: platform → goal → list[£ allocated across trials]
+    cell_alloc: Dict[str, Dict[str, List[float]]] = {
+        p: {g: [] for g in lp_input.valid_goals} for p in lp_input.r_pg.keys()
+    }
+    platform_alloc: Dict[str, List[float]] = {p: [] for p in lp_input.r_pg.keys()}
+
+    failed_trials = 0
+    for _ in range(n_trials):
+        # Perturb r_pg with mean-preserving lognormal shocks.
+        perturbed: Dict[str, Dict[str, float]] = {}
+        for p, gdict in lp_input.r_pg.items():
+            perturbed[p] = {}
+            for g, r in gdict.items():
+                # Cell sigma is populated for every (p, g) that has a
+                # ratio in Module 3.  0.30 fallback only fires if r_pg has
+                # an entry the sigma table doesn't — defensive, not load-bearing.
+                sigma = cell_sigma.get(p, {}).get(g, 0.30)
+                # E[exp(sigma·Z - sigma²/2)] = 1, so the multiplier is unbiased.
+                z = rng.gauss(0.0, 1.0)
+                shock = math.exp(sigma * z - 0.5 * sigma * sigma)
+                perturbed[p][g] = max(0.0, _safe_float(r, 0.0) * shock)
+
+        # Re-normalise per goal so the cross-platform comparison stays at
+        # the same overall scale the LP was calibrated for.
+        for g in lp_input.valid_goals:
+            tot = sum(perturbed[p].get(g, 0.0) for p in perturbed)
+            if tot > 0.0:
+                for p in perturbed:
+                    if g in perturbed[p]:
+                        perturbed[p][g] /= tot
+
+        try:
+            result = _solve_single_lp(
+                valid_goals=lp_input.valid_goals,
+                total_budget=lp_cap,
+                system_goal_weights=lp_input.system_goal_weights,
+                platform_goal_weights=lp_input.platform_goal_weights,
+                r_pg=perturbed,
+                goals_by_platform=lp_input.goals_by_platform,
+                min_spend_per_platform=lp_input.min_spend_per_platform,
+                min_budget_per_goal=lp_input.min_budget_per_goal,
+                budget_cap=lp_cap,
+                cpu_per_goal=lp_input.cpu_per_goal,
+                effective_minimum_per_platform=lp_input.effective_minimum_per_platform,
+            )
+        except Module5ValidationError:
+            # An individual trial can fail (e.g. all productivity zero by
+            # chance).  Track but don't abort.
+            failed_trials += 1
+            continue
+
+        for p, gdict in result.budget_per_platform_goal.items():
+            ptotal = 0.0
+            for g in lp_input.valid_goals:
+                v = _safe_float(gdict.get(g, 0.0), 0.0)
+                cell_alloc.setdefault(p, {}).setdefault(g, []).append(v)
+                ptotal += v
+            platform_alloc.setdefault(p, []).append(ptotal)
+
+    if failed_trials >= n_trials:
+        raise Module5ValidationError(
+            f"All {n_trials} Monte Carlo trials failed. Check that historical "
+            f"productivities are positive and CVs aren't extreme."
+        )
+    if failed_trials > 0:
+        _LOG.warning(
+            "Monte Carlo: %d/%d trials failed (skipped in aggregation).",
+            failed_trials, n_trials,
+        )
+
+    per_cell: List[Module5MCCellSummary] = []
+    for p, gdict in cell_alloc.items():
+        for g, values in gdict.items():
+            if values:
+                per_cell.append(_summarise(values, platform=p, goal=g))
+
+    per_platform: List[Module5MCCellSummary] = []
+    unstable: List[str] = []
+    for p, values in platform_alloc.items():
+        if not values:
+            continue
+        summary = _summarise(values, platform=p, goal="")
+        per_platform.append(summary)
+        if summary.cv > instability_cv_threshold and summary.mean > 1.0:
+            unstable.append(p)
+
+    _LOG.info(
+        "Monte Carlo: n_trials=%d failed=%d unstable=%s",
+        n_trials, failed_trials, unstable,
+    )
+
+    return Module5MonteCarloResult(
+        n_trials=n_trials - failed_trials,
+        seed=seed,
+        per_cell=per_cell,
+        per_platform=per_platform,
+        unstable_platforms=unstable,
+        instability_threshold=instability_cv_threshold,
+        cell_sigma=cell_sigma,
+    )

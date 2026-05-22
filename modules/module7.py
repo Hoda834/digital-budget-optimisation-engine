@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from core.wizard_state import WizardState
+from core.kpi_config import KIND_RATE
 from modules.module5 import Module5LPResult, Module5ScenarioBundle
 from modules.module6 import Module6Result
 
@@ -21,6 +22,57 @@ GOAL_NAMES: Dict[str, str] = {
     "wt": "Website Traffic",
     "lg": "Lead Generation",
 }
+
+
+@dataclass(frozen=True)
+class Module7Policy:
+    """Tunable thresholds for Module 7's classification, confidence scoring,
+    and Plan B construction.  Defaults preserve the original hardcoded values
+    so existing callers see no behaviour change.
+
+    Pass a custom instance to ``run_module7`` to make the interpretation layer
+    sensitive to a different business policy — e.g. a tighter
+    ``corner_concentration`` for risk-averse organisations, or a lower
+    ``plan_b_top_platform_cap`` for clients that demand more diversification.
+    """
+    # ── Classification thresholds ───────────────────────────────────────────
+    # Top-platform share at or above which we call the allocation
+    # "Corner-dominant" (extreme concentration on one platform).
+    corner_concentration: float = 0.90
+    # Top-platform share at or below which a multi-platform allocation
+    # counts as "Balanced" (between this and corner_concentration is
+    # "Concentrated").
+    balanced_concentration: float = 0.75
+    # Maximum number of funded (>0) platform-goal cells for a corner solution.
+    corner_max_nonzero_cells: int = 2
+
+    # ── Confidence-score penalties ─────────────────────────────────────────
+    # Concentration breakpoints and the deductions applied at each.
+    confidence_high_concentration: float = 0.90
+    confidence_high_concentration_penalty: int = 20
+    confidence_med_concentration: float = 0.80
+    confidence_med_concentration_penalty: int = 12
+    confidence_few_cells_penalty: int = 8
+    confidence_unstable_scenarios_penalty: int = 10
+    confidence_missing_forecast_penalty: int = 18
+    confidence_dq_issue_penalty: int = 12
+    confidence_floor: int = 40
+
+    # ── Data-quality heuristics ────────────────────────────────────────────
+    # Fraction of count-KPI forecast rows below dq_small_kpi_threshold that
+    # triggers the "small values" data-quality flag.
+    dq_small_kpi_share: float = 0.50
+    dq_small_kpi_threshold: float = 5.0
+
+    # ── Plan B (risk-managed) ──────────────────────────────────────────────
+    # Cap on the top platform's share when constructing the risk-managed
+    # alternative plan.  Lower = more diversification, larger trade-off.
+    plan_b_top_platform_cap: float = 0.70
+    # Trade-off (%) above which Plan B is worth surfacing prominently.
+    plan_b_meaningful_tradeoff_pct: float = 5.0
+
+
+_DEFAULT_POLICY = Module7Policy()
 
 
 @dataclass
@@ -58,6 +110,31 @@ class Module7BundleInsight:
     global_stability_explanation: str = ""
     global_data_quality_note: Optional[str] = None
     global_notes: List[str] = field(default_factory=list)
+    # Standard caveat shown alongside every plan: digital ad performance changes
+    # week to week, so historical ratios should be validated against live
+    # platform data before committing the full budget.
+    forecast_caveat: str = ""
+
+
+_FORECAST_CAVEAT = (
+    "Forecasts assume historical KPI ratios will hold over the campaign window. "
+    "Actual results commonly differ by 20-40% due to algorithm updates, "
+    "seasonality, competitive bidding pressure, audience saturation, and "
+    "creative fatigue. The historical KPIs also reflect each platform's own "
+    "(typically last-click) attribution — Facebook tends to over-claim leads "
+    "that Search also influenced, Search tends to over-claim conversions that "
+    "brand awareness created.  Incrementality is not modelled.  Treat the "
+    "productivity ratios as upper bounds, not measurements, and validate "
+    "against current platform benchmarks before committing the full budget."
+)
+
+_NO_VALUE_WEIGHTS_NOTE = (
+    " No per-goal economic values were provided, so goal weights were derived "
+    "from priority frequency. This approximates but does not measure the relative "
+    "business value of each objective. For multi-objective campaigns, supply "
+    "raw_goal_values (e.g. {'lg': 100.0, 'aw': 0.001}) in Module 1 to get a "
+    "ROAS-weighted allocation."
+)
 
 
 def _f(x: object) -> float:
@@ -165,12 +242,13 @@ def _stability_text(bundle: Module5ScenarioBundle) -> str:
         return "Only one scenario result is available."
     if _allocations_identical(bundle):
         return (
-            "The allocation decision is stable across scenarios. Scenario multipliers scale objective values, "
-            "but they do not change the optimal ranking of channel and objective options in the tested range."
+            "The allocation decision is stable across scenarios. Scenario multipliers change the available "
+            "budget cap, but they do not shift the optimal ranking of channel and objective options in the "
+            "tested range."
         )
     return (
-        "The allocation changes across scenarios. This indicates the scenario assumptions shift the ranking "
-        "between channel and objective options, so the decision is scenario sensitive."
+        "The allocation changes across scenarios. Scenario multipliers change the budget cap, which shifts "
+        "how much can flow into each channel and objective, making the decision scenario-sensitive."
     )
 
 
@@ -208,20 +286,31 @@ def _constraints(state: WizardState, lp: Module5LPResult) -> Tuple[List[str], Li
     return b, nb
 
 
-def _classification(bundle: Module5ScenarioBundle, lp: Module5LPResult) -> str:
+def _classification(
+    bundle: Module5ScenarioBundle,
+    lp: Module5LPResult,
+    policy: Module7Policy = _DEFAULT_POLICY,
+) -> str:
     if not _allocations_identical(bundle):
         return "Scenario-sensitive"
     pt = _platform_totals(lp)
     pr = _ratio(pt)
     nz = _nonzero_allocations(lp)
-    if pr >= 0.80 or nz <= 2:
+    # Corner-dominant: a literal corner solution (few funded cells) or extreme
+    # concentration. A 3-platform 80/10/10 split does NOT qualify under the
+    # default 0.90 corner_concentration threshold.
+    if nz <= policy.corner_max_nonzero_cells or pr >= policy.corner_concentration:
         return "Corner-dominant"
-    if nz >= 3 and pr <= 0.70:
+    if nz >= 3 and pr <= policy.balanced_concentration:
         return "Balanced"
-    return "Unclear"
+    return "Concentrated"
 
 
-def _data_quality_note(lp: Module5LPResult, fc: Optional[Module6Result]) -> Optional[str]:
+def _data_quality_note(
+    lp: Module5LPResult,
+    fc: Optional[Module6Result],
+    policy: Module7Policy = _DEFAULT_POLICY,
+) -> Optional[str]:
     issues: List[str] = []
 
     if fc is None or not getattr(fc, "rows", None):
@@ -230,10 +319,16 @@ def _data_quality_note(lp: Module5LPResult, fc: Optional[Module6Result]) -> Opti
         small = 0
         total = 0
         for r in fc.rows:
+            # Rate KPIs would be naturally in [0, 1] — applying a count-KPI
+            # "small value" threshold would always fire falsely. No canonical KPI
+            # is a rate today, but this guard keeps the threshold honest if one
+            # is re-introduced.
+            if getattr(r, "kpi_kind", None) == KIND_RATE:
+                continue
             total += 1
-            if _f(getattr(r, "predicted_kpi", 0.0)) < 5.0:
+            if _f(getattr(r, "predicted_kpi", 0.0)) < policy.dq_small_kpi_threshold:
                 small += 1
-        if total > 0 and small / float(total) >= 0.50:
+        if total > 0 and small / float(total) >= policy.dq_small_kpi_share:
             issues.append("Many forecast KPI values are very small, which may indicate unit or scaling issues in the input data.")
 
     rpg = getattr(lp, "r_pg", None)
@@ -246,32 +341,40 @@ def _data_quality_note(lp: Module5LPResult, fc: Optional[Module6Result]) -> Opti
     return None
 
 
-def _confidence(lp: Module5LPResult, bundle: Module5ScenarioBundle, fc: Optional[Module6Result], dq_note: Optional[str]) -> int:
+def _confidence(
+    lp: Module5LPResult,
+    bundle: Module5ScenarioBundle,
+    fc: Optional[Module6Result],
+    dq_note: Optional[str],
+    policy: Module7Policy = _DEFAULT_POLICY,
+) -> int:
     score = 100
 
     pt = _platform_totals(lp)
     pr = _ratio(pt)
     nz = _nonzero_allocations(lp)
 
-    if pr >= 0.90:
-        score -= 20
-    elif pr >= 0.80:
-        score -= 12
+    if pr >= policy.confidence_high_concentration:
+        score -= policy.confidence_high_concentration_penalty
+    elif pr >= policy.confidence_med_concentration:
+        score -= policy.confidence_med_concentration_penalty
 
-    if nz <= 2:
-        score -= 8
+    if nz <= policy.corner_max_nonzero_cells:
+        score -= policy.confidence_few_cells_penalty
 
     if not _allocations_identical(bundle):
-        score -= 10
+        score -= policy.confidence_unstable_scenarios_penalty
 
     if fc is None or not getattr(fc, "rows", None):
-        score -= 18
+        # Missing forecast is a single root cause — don't also deduct for the
+        # dq_note that was itself triggered by the missing forecast.
+        score -= policy.confidence_missing_forecast_penalty
+    elif dq_note:
+        # Only penalise for data-quality issues when the forecast actually exists.
+        score -= policy.confidence_dq_issue_penalty
 
-    if dq_note:
-        score -= 12
-
-    if score < 40:
-        score = 40
+    if score < policy.confidence_floor:
+        score = policy.confidence_floor
     if score > 100:
         score = 100
 
@@ -349,63 +452,19 @@ def _plan_a(lp: Module5LPResult) -> PlanOutput:
     )
 
 
-def _apply_minimums(
-    state: WizardState,
-    allocation: Dict[str, Dict[str, float]],
-    total_budget: float,
-    valid_goals: List[str],
-    active_platforms: List[str],
-) -> Dict[str, Dict[str, float]]:
-    out: Dict[str, Dict[str, float]] = {p: dict(allocation.get(p, {})) for p in active_platforms}
-
-    min_p = getattr(state, "min_spend_per_platform", {}) or {}
-    for p in active_platforms:
-        req = max(0.0, _f(min_p.get(p, 0.0)))
-        if req <= 0:
-            continue
-        cur = sum(max(0.0, _f(v)) for v in out.get(p, {}).values())
-        if cur + 1e-9 < req:
-            need = req - cur
-            g0 = valid_goals[0] if valid_goals else "aw"
-            out.setdefault(p, {})
-            out[p][g0] = max(0.0, _f(out[p].get(g0, 0.0))) + need
-
-    min_g = getattr(state, "min_budget_per_goal", {}) or {}
-    for g in valid_goals:
-        req = max(0.0, _f(min_g.get(g, 0.0)))
-        if req <= 0:
-            continue
-        cur = 0.0
-        for p in active_platforms:
-            cur += max(0.0, _f(out.get(p, {}).get(g, 0.0)))
-        if cur + 1e-9 < req:
-            need = req - cur
-            p0 = active_platforms[0] if active_platforms else "fb"
-            out.setdefault(p0, {})
-            out[p0][g] = max(0.0, _f(out[p0].get(g, 0.0))) + need
-
-    used = 0.0
-    for p in active_platforms:
-        for g in valid_goals:
-            used += max(0.0, _f(out.get(p, {}).get(g, 0.0)))
-
-    if used <= 0:
-        return out
-
-    if used > total_budget + 1e-6:
-        scale = total_budget / used
-        for p in active_platforms:
-            for g in list(out.get(p, {}).keys()):
-                out[p][g] = max(0.0, _f(out[p][g])) * scale
-
-    return out
-
-
 def _plan_b_risk_managed(
     state: WizardState,
     lp: Module5LPResult,
     cap_top_platform_share: float = 0.70,
 ) -> Optional[PlanOutput]:
+    """Return a diversified alternative that caps the dominant platform.
+
+    The LP (Plan A) already satisfies all minimum-spend constraints set in
+    Module 2, so we do not re-enforce them here — that would re-implement
+    policy independently and risk inconsistency.  We simply scale down the
+    top platform and redistribute the freed budget to the remaining platforms
+    in proportion to their LP productivity scores.
+    """
     total_budget = max(0.0, _f(getattr(lp, "total_budget_used", 0.0)))
     if total_budget <= 0:
         total_budget = max(0.0, _f(getattr(state, "total_budget", 0.0)))
@@ -413,14 +472,14 @@ def _plan_b_risk_managed(
         return None
 
     valid_goals = [_k(g) for g in (getattr(state, "valid_goals", []) or [])]
-    active_platforms = [_k(p) for p in (getattr(state, "active_platforms", []) or [])]
-    if not valid_goals or not active_platforms:
+    if not valid_goals:
         return None
 
     plan_a = _plan_a(lp)
-    pt_a: Dict[str, float] = {}
-    for p, gmap in plan_a.allocation.items():
-        pt_a[p] = sum(max(0.0, _f(v)) for v in (gmap or {}).values())
+    pt_a: Dict[str, float] = {
+        p: sum(max(0.0, _f(v)) for v in (gmap or {}).values())
+        for p, gmap in plan_a.allocation.items()
+    }
 
     top_p = _dominant(pt_a)
     if not top_p:
@@ -430,10 +489,10 @@ def _plan_b_risk_managed(
     current_top = max(0.0, _f(pt_a.get(top_p, 0.0)))
 
     if current_top <= cap_value + 1e-6:
-        obj_est = _estimate_objective_value(plan_a.allocation, lp)
+        # Already within the cap — Plan B = Plan A.
         return PlanOutput(
             allocation=plan_a.allocation,
-            objective_value_estimate=obj_est,
+            objective_value_estimate=_estimate_objective_value(plan_a.allocation, lp),
             kpi_focus="Diversified execution",
             tradeoff_percent=0.0,
         )
@@ -442,21 +501,22 @@ def _plan_b_risk_managed(
     if not scores:
         return None
 
-    alloc_b: Dict[str, Dict[str, float]] = {p: {} for p in active_platforms}
-    for p in active_platforms:
-        for g in valid_goals:
-            alloc_b[p][g] = 0.0
+    # Start from Plan A and scale down the top platform.
+    alloc_b: Dict[str, Dict[str, float]] = {
+        p: {_k(g): max(0.0, _f(v)) for g, v in (gmap or {}).items()}
+        for p, gmap in plan_a.allocation.items()
+    }
+    factor = cap_value / current_top
+    for g in list(alloc_b.get(top_p, {}).keys()):
+        alloc_b[top_p][g] *= factor
 
-    top_alloc = plan_a.allocation.get(top_p, {})
-    if current_top > 0:
-        factor = cap_value / current_top
-        for g, v in top_alloc.items():
-            alloc_b[top_p][_k(g)] = max(0.0, _f(v)) * factor
+    freed = total_budget - sum(
+        sum(v for v in gmap.values()) for gmap in alloc_b.values()
+    )
+    if freed < 0:
+        freed = 0.0
 
-    remaining = total_budget - sum(sum(max(0.0, _f(v)) for v in alloc_b[p].values()) for p in active_platforms)
-    if remaining < 0:
-        remaining = 0.0
-
+    # Distribute freed budget to other platforms proportionally by LP scores.
     weights: List[Tuple[str, str, float]] = []
     for p, gmap in scores.items():
         pk = _k(p)
@@ -471,20 +531,11 @@ def _plan_b_risk_managed(
                 weights.append((pk, gk, w))
 
     total_w = sum(w for _, _, w in weights)
-    if total_w <= 0:
-        alloc_b = _apply_minimums(state, alloc_b, total_budget, valid_goals, active_platforms)
-        obj_est = _estimate_objective_value(alloc_b, lp)
-        return PlanOutput(
-            allocation=alloc_b,
-            objective_value_estimate=obj_est,
-            kpi_focus="Diversified execution",
-            tradeoff_percent=None,
-        )
-
-    for pk, gk, w in weights:
-        alloc_b[pk][gk] += remaining * (w / total_w)
-
-    alloc_b = _apply_minimums(state, alloc_b, total_budget, valid_goals, active_platforms)
+    if total_w > 0 and freed > 0:
+        for pk, gk, w in weights:
+            alloc_b.setdefault(pk, {})[gk] = (
+                alloc_b.get(pk, {}).get(gk, 0.0) + freed * (w / total_w)
+            )
 
     obj_a = _estimate_objective_value(plan_a.allocation, lp)
     obj_b = _estimate_objective_value(alloc_b, lp)
@@ -507,6 +558,7 @@ def _risks_recs(
     stability_text: str,
     dq_note: Optional[str],
     plan_b: Optional[PlanOutput],
+    policy: Module7Policy = _DEFAULT_POLICY,
 ) -> Tuple[List[str], List[str]]:
     risks: List[str] = []
     recs: List[str] = []
@@ -514,6 +566,10 @@ def _risks_recs(
     if classification == "Corner-dominant":
         risks.append("Budget is highly concentrated, which increases dependency on a single channel.")
         recs.append("Use the risk managed plan if you want to reduce concentration risk.")
+
+    if classification == "Concentrated":
+        risks.append("Budget leans toward one channel; performance is sensitive to that channel's delivery.")
+        recs.append("Monitor the dominant channel closely and consider the risk managed plan as a hedge.")
 
     if classification == "Scenario-sensitive":
         risks.append("The recommended allocation changes across scenarios, which suggests higher uncertainty.")
@@ -527,11 +583,8 @@ def _risks_recs(
         risks.append("Overall confidence is moderate to low.")
         recs.append("Use this allocation as a starting point and validate with a short test cycle before committing the full budget.")
 
-    if plan_b and plan_b.tradeoff_percent is not None and plan_b.tradeoff_percent >= 5.0:
+    if plan_b and plan_b.tradeoff_percent is not None and plan_b.tradeoff_percent >= policy.plan_b_meaningful_tradeoff_pct:
         recs.append("Expect some efficiency loss when diversifying. The trade off is reported in Plan B.")
-
-    if stability_text:
-        recs.append(stability_text)
 
     return risks, recs
 
@@ -585,7 +638,9 @@ def run_module7(
     bundle: Module5ScenarioBundle,
     forecasts: Optional[Dict[str, Module6Result]] = None,
     decision_mode: str = "Performance first",
+    policy: Optional[Module7Policy] = None,
 ) -> Module7BundleInsight:
+    pol = policy or _DEFAULT_POLICY
     out = Module7BundleInsight()
 
     stability_text = _stability_text(bundle)
@@ -596,9 +651,9 @@ def run_module7(
     for s_name, lp in (bundle.results_by_scenario or {}).items():
         fc = forecasts.get(s_name) if forecasts else None
 
-        classification = _classification(bundle, lp)
-        dq_note = _data_quality_note(lp, fc)
-        confidence = _confidence(lp, bundle, fc, dq_note)
+        classification = _classification(bundle, lp, pol)
+        dq_note = _data_quality_note(lp, fc, pol)
+        confidence = _confidence(lp, bundle, fc, dq_note, pol)
 
         bindings, non_bindings = _constraints(state, lp)
 
@@ -611,11 +666,11 @@ def run_module7(
         plan_a = _plan_a(lp)
         plan_b = None
         if decision_mode.strip().lower() == "risk managed":
-            plan_b = _plan_b_risk_managed(state, lp, cap_top_platform_share=0.70)
+            plan_b = _plan_b_risk_managed(state, lp, cap_top_platform_share=pol.plan_b_top_platform_cap)
         elif classification == "Corner-dominant":
-            plan_b = _plan_b_risk_managed(state, lp, cap_top_platform_share=0.70)
+            plan_b = _plan_b_risk_managed(state, lp, cap_top_platform_share=pol.plan_b_top_platform_cap)
 
-        risks, recs = _risks_recs(classification, confidence, stability_text, dq_note, plan_b)
+        risks, recs = _risks_recs(classification, confidence, stability_text, dq_note, plan_b, pol)
 
         executive = _summary_text(
             scenario_name=str(s_name).capitalize(),
@@ -652,5 +707,30 @@ def run_module7(
 
     if global_dq:
         out.global_data_quality_note = " ".join(sorted(set(global_dq)))
+
+    # Standard forecast caveat, extended when goal-value weights are missing.
+    caveat = _FORECAST_CAVEAT
+    if not (getattr(state, "goal_value_per_unit", None) or {}):
+        caveat += _NO_VALUE_WEIGHTS_NOTE
+    out.forecast_caveat = caveat
+
+    # Populate global notes with campaign-level context.
+    n_platforms = len(getattr(state, "active_platforms", []) or [])
+    n_goals = len(getattr(state, "valid_goals", []) or [])
+    if n_platforms > 0 and n_goals > 0:
+        out.global_notes.append(
+            f"Optimisation covers {n_platforms} platform{'s' if n_platforms != 1 else ''} "
+            f"across {n_goals} objective{'s' if n_goals != 1 else ''}."
+        )
+
+    scalars = list((bundle.scenario_multipliers or {}).values())
+    if len(scalars) >= 2:
+        lo, hi = min(scalars), max(scalars)
+        out.global_notes.append(
+            f"Scenario budget caps range from {lo:.0%} to {hi:.0%} of the total budget."
+        )
+
+    state.module7_finalised = True
+    state.current_step = max(state.current_step, 8)
 
     return out

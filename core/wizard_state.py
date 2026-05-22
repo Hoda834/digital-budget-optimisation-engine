@@ -15,8 +15,23 @@ PLATFORM_FB = "fb"
 PLATFORM_IG = "ig"
 PLATFORM_LI = "li"
 PLATFORM_YT = "yt"
+PLATFORM_TT = "tt"   # TikTok
+PLATFORM_PT = "pt"   # Pinterest
+PLATFORM_TW = "tw"   # X / Twitter (kept "tw" code for backwards compatibility headroom)
+PLATFORM_SN = "sn"   # Snapchat
+PLATFORM_RD = "rd"   # Reddit
+PLATFORM_GO_SEARCH  = "go_search"   # Google Search (keyword auction, intent-driven)
+PLATFORM_GO_DISPLAY = "go_display"  # Google Display Network (CPM placements, lower intent)
+PLATFORM_GO_PMAX    = "go_pmax"     # Google Performance Max (Smart Bidding across all surfaces)
 
-ALLOWED_PLATFORMS: Set[str] = {PLATFORM_FB, PLATFORM_IG, PLATFORM_LI, PLATFORM_YT}
+ALLOWED_PLATFORMS: Set[str] = {
+    PLATFORM_FB, PLATFORM_IG, PLATFORM_LI, PLATFORM_YT,
+    PLATFORM_TT, PLATFORM_PT, PLATFORM_TW, PLATFORM_SN, PLATFORM_RD,
+    PLATFORM_GO_SEARCH, PLATFORM_GO_DISPLAY, PLATFORM_GO_PMAX,
+}
+
+ALLOWED_CURRENCIES: Set[str] = {"GBP", "USD", "EUR"}
+DEFAULT_CURRENCY = "GBP"
 
 
 class FlowStateError(Exception):
@@ -33,9 +48,36 @@ class WizardState:
     module4_finalised: bool = False
     module5_finalised: bool = False
     module6_finalised: bool = False
+    module7_finalised: bool = False
 
     valid_goals: List[str] = field(default_factory=list)
     total_budget: Optional[float] = None
+    currency: str = DEFAULT_CURRENCY
+    campaign_duration_days: Optional[int] = None
+
+    # User-provided economic value per unit of each goal's KPI
+    # (e.g. {"lg": 100.0, "aw": 0.001} = "1 lead is worth £100, 1 impression
+    # is worth £0.001 to my business").  When set, Module 5 derives system
+    # goal weights from value × productivity (expected ROAS per goal)
+    # instead of from priority-frequency.
+    goal_value_per_unit: Dict[str, float] = field(default_factory=dict)
+
+    # Fraction of the total budget held back from optimisation as a
+    # test-and-learn reserve (new audiences, creative tests, emerging
+    # placements).  Module 5 optimises (1 - test_and_learn_pct) × total_budget
+    # and surfaces the held-back amount separately.  Standard strategist
+    # practice is 10–15%; capped at 50% so the LP always has something to
+    # allocate.
+    test_and_learn_pct: float = 0.0
+
+    # Per-goal seasonality multipliers applied to historical productivities
+    # before the LP runs.  >1 means cheaper auctions during the campaign
+    # window than historical (e.g. reach productivity higher in January);
+    # <1 means more expensive (e.g. December CPM inflation).  Module 5
+    # multiplies r_pg[p][g] and Module 6 multiplies count-KPI forecasts by
+    # the same factor so allocation and forecast stay consistent.  Empty
+    # by default ⇒ no adjustment (historical productivities used as-is).
+    seasonality_index: Dict[str, float] = field(default_factory=dict)
 
     system_goal_weights: Dict[str, float] = field(default_factory=dict)
 
@@ -68,7 +110,22 @@ class WizardState:
         if self.current_step != expected_step:
             raise FlowStateError(f"Invalid flow: current_step={self.current_step}, expected={expected_step}.")
 
-    def complete_module1_and_advance(self, *, valid_goals: Sequence[str], total_budget: float) -> None:
+    def reset(self) -> None:
+        fresh = WizardState()
+        for f in fresh.__dataclass_fields__:
+            setattr(self, f, getattr(fresh, f))
+
+    def complete_module1_and_advance(
+        self,
+        *,
+        valid_goals: Sequence[str],
+        total_budget: float,
+        currency: str = DEFAULT_CURRENCY,
+        campaign_duration_days: Optional[int] = None,
+        goal_value_per_unit: Optional[Dict[str, float]] = None,
+        test_and_learn_pct: Optional[float] = None,
+        seasonality_index: Optional[Dict[str, float]] = None,
+    ) -> None:
         self._ensure_step(expected_step=1)
         if self.module1_finalised:
             raise FlowStateError("Module 1 has already been finalised. Reset the wizard to change it.")
@@ -82,8 +139,70 @@ class WizardState:
         if b <= 1.0:
             raise ValueError("Total budget must be greater than 1 in Module 1.")
 
+        cur = str(currency).strip().upper()
+        if cur not in ALLOWED_CURRENCIES:
+            raise ValueError(f"Currency {cur!r} is not supported. Allowed: {sorted(ALLOWED_CURRENCIES)}.")
+
+        if campaign_duration_days is not None:
+            d = int(campaign_duration_days)
+            if d <= 0:
+                raise ValueError("campaign_duration_days must be a positive integer.")
+            self.campaign_duration_days = d
+
         self.valid_goals = list(dict.fromkeys(goals))
         self.total_budget = b
+        self.currency = cur
+
+        if goal_value_per_unit:
+            cleaned: Dict[str, float] = {}
+            for g, v in goal_value_per_unit.items():
+                gk = str(g).strip().lower()
+                if gk not in self.valid_goals:
+                    continue
+                try:
+                    fv = float(v)
+                except (TypeError, ValueError):
+                    raise ValueError(f"goal_value_per_unit[{gk!r}] must be numeric.")
+                if fv > 0:
+                    cleaned[gk] = fv
+            self.goal_value_per_unit = cleaned
+
+        if test_and_learn_pct is not None:
+            try:
+                tl = float(test_and_learn_pct)
+            except (TypeError, ValueError):
+                raise ValueError("test_and_learn_pct must be numeric.")
+            if tl < 0.0 or tl >= 0.5:
+                raise ValueError(
+                    "test_and_learn_pct must be in [0.0, 0.5). "
+                    f"Got {tl}. A 10–15% carve-out is standard practice."
+                )
+            self.test_and_learn_pct = tl
+
+        if seasonality_index:
+            cleaned_si: Dict[str, float] = {}
+            for g, v in seasonality_index.items():
+                gk = str(g).strip().lower()
+                if gk not in self.valid_goals:
+                    continue
+                try:
+                    fv = float(v)
+                except (TypeError, ValueError):
+                    raise ValueError(f"seasonality_index[{gk!r}] must be numeric.")
+                if fv <= 0.0:
+                    raise ValueError(
+                        f"seasonality_index[{gk!r}] must be positive, got {fv}."
+                    )
+                # Sanity ceiling: 10× is already an extreme adjustment; values
+                # beyond that are almost certainly a typo (entered as % rather
+                # than multiplier, e.g. 250 instead of 2.5).
+                if fv > 10.0 or fv < 0.1:
+                    raise ValueError(
+                        f"seasonality_index[{gk!r}]={fv} is implausible "
+                        f"(expected ~0.1–10×). Did you enter a percentage instead of a multiplier?"
+                    )
+                cleaned_si[gk] = fv
+            self.seasonality_index = cleaned_si
 
         self.module1_finalised = True
         self.current_step = 2
@@ -152,19 +271,26 @@ class WizardState:
                     cleaned[str(s_name)][g] = fv
             self.scenario_goal_multipliers = cleaned
         else:
+            # Convention: multiplier > 1 means the scenario expects the goal to outperform
+            # its base productivity; < 1 means it underperforms. Optimistic raises
+            # downstream/conversion goals (LG, WT); conservative raises upper-funnel
+            # goals (AW, EN) since reach is more predictable than conversion.
             base_map = {g: 1.0 for g in self.valid_goals}
             conservative_map = {g: 1.0 for g in self.valid_goals}
             optimistic_map = {g: 1.0 for g in self.valid_goals}
 
             if GOAL_AW in self.valid_goals:
-                conservative_map[GOAL_AW] = 1.1
-                optimistic_map[GOAL_AW] = 0.9
-            if GOAL_LG in self.valid_goals:
-                conservative_map[GOAL_LG] = 0.9
-                optimistic_map[GOAL_LG] = 1.1
+                conservative_map[GOAL_AW] = 1.05
+                optimistic_map[GOAL_AW] = 0.95
+            if GOAL_EN in self.valid_goals:
+                conservative_map[GOAL_EN] = 1.05
+                optimistic_map[GOAL_EN] = 0.95
             if GOAL_WT in self.valid_goals:
                 conservative_map[GOAL_WT] = 0.95
-                optimistic_map[GOAL_WT] = 1.05
+                optimistic_map[GOAL_WT] = 1.10
+            if GOAL_LG in self.valid_goals:
+                conservative_map[GOAL_LG] = 0.85
+                optimistic_map[GOAL_LG] = 1.20
 
             self.scenario_goal_multipliers = {
                 "base": base_map,

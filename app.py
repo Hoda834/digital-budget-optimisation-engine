@@ -11,10 +11,28 @@ from reportlab.lib.styles import getSampleStyleSheet  # type: ignore
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle  # type: ignore
 
 from core.wizard_state import WizardState, GOAL_AW, GOAL_EN, GOAL_LG, GOAL_WT
+from modules.module1 import (
+    complete_module1_and_advance as finalise_module1,
+    Module1ValidationError,
+)
 from core.kpi_config import KPI_CONFIG
+from core.csv_import import (
+    parse_platform_csv,
+    SUPPORTED_PLATFORMS as CSV_SUPPORTED,
+    generate_unified_template_xlsx,
+    parse_unified_template_xlsx,
+)
+from modules.module3 import finalise_module3_from_inputs
 from modules.module2 import run_module2
 from modules.module4 import run_module4
-from modules.module5 import Module5LPResult, Module5ScenarioBundle, run_module5
+from modules.module5 import (
+    Module5LPResult,
+    Module5ScenarioBundle,
+    run_module5,
+    run_module5_montecarlo,
+    DEFAULT_MC_TRIALS,
+    detect_missing_data_cells,
+)
 from modules.module6 import Module6Result, Module6ScenarioResult, run_module6
 
 from modules.module7 import Module7BundleInsight, run_module7
@@ -25,6 +43,14 @@ PLATFORM_NAMES: Dict[str, str] = {
     "ig": "Instagram",
     "li": "LinkedIn",
     "yt": "YouTube",
+    "tt": "TikTok",
+    "pt": "Pinterest",
+    "tw": "X (Twitter)",
+    "sn": "Snapchat",
+    "rd": "Reddit",
+    "go_search": "Google Search",
+    "go_display": "Google Display",
+    "go_pmax": "Google Performance Max",
 }
 
 GOAL_NAMES: Dict[str, str] = {
@@ -62,12 +88,142 @@ def reset_state() -> None:
     safe_rerun()
 
 
-def money(x: Any) -> str:
+def _roll_back_to_step(state: WizardState, target_step: int) -> None:
+    """Rewind the wizard to *target_step* without losing the input values.
+
+    All module-finalised flags from target_step onwards are reset so the
+    user can re-enter that step.  WizardState's data fields (valid_goals,
+    total_budget, active_platforms, etc.) are preserved so the forms can
+    re-render with the user's previous selections as defaults.
+    """
+    if target_step <= 1:
+        state.module1_finalised = False
+    if target_step <= 2:
+        state.module2_finalised = False
+    if target_step <= 3:
+        state.module3_finalised = False
+    if target_step <= 4:
+        state.module4_finalised = False
+    if target_step <= 5:
+        state.module5_finalised = False
+    if target_step <= 6:
+        state.module6_finalised = False
+    if target_step <= 7:
+        state.module7_finalised = False
+    state.current_step = target_step
+    # Drop the cached Monte Carlo too; new policy may invalidate it.
+    st.session_state.pop("_mc_result", None)
+
+
+_CURRENCY_SYMBOLS = {"GBP": "£", "USD": "$", "EUR": "€"}
+
+
+def _render_sidebar(state: WizardState) -> None:
+    """Persistent left rail: progress, decisions so far, back-nav buttons.
+
+    Visible on every step so the user always sees where they are in the
+    wizard, what they've already chosen, and how to edit a previous step
+    without nuking the whole session.
+    """
+    with st.sidebar:
+        st.markdown("### Wizard")
+        steps = [
+            ("1. Objectives & Budget", 1, state.module1_finalised),
+            ("2. Platforms & Priorities", 2, state.module2_finalised),
+            ("3. Historical Data", 3, state.module3_finalised),
+            ("4. Results & Refine", 4, state.module6_finalised),
+        ]
+        for label, step_num, done in steps:
+            current = (state.current_step == step_num) or \
+                      (step_num == 4 and state.current_step >= 4)
+            if done and not current:
+                icon = "✅"
+            elif current:
+                icon = "▶"
+            else:
+                icon = "○"
+            st.markdown(f"{icon} {label}")
+
+        # Summary of decisions made so far
+        if state.valid_goals or state.total_budget or state.active_platforms:
+            st.markdown("---")
+            st.markdown("**So far:**")
+            if state.valid_goals:
+                labels = [_GOAL_LABEL.get(g, g) for g in state.valid_goals]
+                st.caption(f"_Objectives:_ {', '.join(labels)}")
+            if state.total_budget:
+                sym = _CURRENCY_SYMBOLS.get(state.currency or "GBP", "")
+                st.caption(f"_Budget:_ {sym}{state.total_budget:,.0f} "
+                           f"({state.currency or 'GBP'})")
+            if state.campaign_duration_days:
+                st.caption(f"_Duration:_ {state.campaign_duration_days} days")
+            if getattr(state, "test_and_learn_pct", 0.0) > 0:
+                st.caption(
+                    f"_Test reserve:_ {state.test_and_learn_pct*100:.0f}%"
+                )
+            if state.active_platforms:
+                names = [_platform_display_name(state, p)
+                         for p in state.active_platforms]
+                st.caption(f"_Platforms:_ {', '.join(names)}")
+
+        # Back-navigation: jump to any earlier completed step
+        any_complete = (state.module1_finalised or state.module2_finalised
+                        or state.module3_finalised)
+        if any_complete:
+            st.markdown("---")
+            st.markdown("**Edit a previous step:**")
+            if state.module1_finalised and state.current_step != 1:
+                if st.button("← Module 1: Objectives & Budget",
+                             key="_back_m1",
+                             use_container_width=True):
+                    _roll_back_to_step(state, 1)
+                    safe_rerun()
+            if state.module2_finalised and state.current_step != 2:
+                if st.button("← Module 2: Platforms",
+                             key="_back_m2",
+                             use_container_width=True):
+                    _roll_back_to_step(state, 2)
+                    safe_rerun()
+            if state.module3_finalised and state.current_step != 3:
+                if st.button("← Module 3: Historical Data",
+                             key="_back_m3",
+                             use_container_width=True):
+                    _roll_back_to_step(state, 3)
+                    safe_rerun()
+
+        st.markdown("---")
+        if st.button("Start over (reset everything)", key="_sidebar_reset",
+                     type="secondary"):
+            reset_state()
+
+
+def _current_currency_symbol() -> str:
+    """Resolve the currency symbol from the active WizardState.
+
+    Read once per money() / format call rather than threaded through every
+    caller, because Streamlit's session-state already gives us a single
+    canonical state per session.  Falls back to '£' if state isn't
+    initialised yet (initial page load) or the currency is unknown.
+    """
+    state = st.session_state.get("wizard_state") if hasattr(st, "session_state") else None
+    code = getattr(state, "currency", None) or "GBP"
+    return _CURRENCY_SYMBOLS.get(code, "£")
+
+
+def money(x: Any, currency_symbol: Optional[str] = None) -> str:
+    """Format a money value with the campaign's currency symbol.
+
+    Pass currency_symbol explicitly to override (useful in tests and PDF
+    generation where state isn't accessible).  Default reads from the
+    active WizardState so every UI panel shows £/$/€ consistently with
+    the user's Module 1 choice.
+    """
+    sym = currency_symbol if currency_symbol is not None else _current_currency_symbol()
     try:
         v = float(x)
     except Exception:
-        return "£0.00"
-    return f"£{v:,.2f}"
+        return f"{sym}0.00"
+    return f"{sym}{v:,.2f}"
 
 
 def number(x: Any, decimals: int = 2) -> str:
@@ -89,6 +245,7 @@ def build_kpi_meta() -> Dict[str, Dict[str, Any]]:
             "platform": str(row.get("platform", "")).strip(),
             "goal": str(row.get("goal", "")).strip(),
             "kpi_label": str(row.get("kpi_label", "")).strip(),
+            "kind": str(row.get("kind", "count")).strip().lower() or "count",
         }
     return meta
 
@@ -129,9 +286,33 @@ def build_platform_totals_df(lp_res: Module5LPResult) -> pd.DataFrame:
     return df
 
 
-def build_forecast_df(module6_res: Module6Result) -> pd.DataFrame:
+def build_forecast_df(
+    module6_res: Module6Result,
+    goal_values: Optional[Dict[str, float]] = None,
+) -> pd.DataFrame:
+    """Build the per-KPI forecast table.
+
+    When ``goal_values`` is provided and contains at least one positive value,
+    the table gains ``Expected Revenue`` and ``ROAS`` columns.  Revenue is
+    computed as predicted volume × £/unit for every count KPI (all canonical
+    KPIs are counts after the uniform-units refactor — Engagement is now a
+    sum of likes/comments/shares/etc., not a rate).  Any future rate KPI
+    would leave those cells at zero since rate × £/unit is dimensionally
+    meaningless.
+    """
     kpi_meta = build_kpi_meta()
     rows: List[Dict[str, Any]] = []
+
+    gv: Dict[str, float] = {}
+    if goal_values:
+        for k, v in goal_values.items():
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+            if fv > 0:
+                gv[str(k)] = fv
+    revenue_enabled = bool(gv)
 
     for r in (module6_res.rows or []):
         var = str(r.kpi_name)
@@ -144,16 +325,31 @@ def build_forecast_df(module6_res: Module6Result) -> pd.DataFrame:
         objective_name = GOAL_NAMES.get(objective_code, objective_code) if objective_code else ""
 
         kpi_label = str(meta.get("kpi_label", "")).strip() or "KPI"
+        kind = str(meta.get("kind", "count")).strip().lower() or "count"
 
-        rows.append(
-            {
-                "Platform": platform_name,
-                "Objective": objective_name,
-                "KPI": kpi_label,
-                "Allocated Budget": float(r.allocated_budget or 0.0),
-                "Predicted KPI": float(r.predicted_kpi or 0.0),
-            }
-        )
+        budget = float(r.allocated_budget or 0.0)
+        predicted = float(r.predicted_kpi or 0.0)
+
+        row: Dict[str, Any] = {
+            "Platform": platform_name,
+            "Objective": objective_name,
+            "KPI": kpi_label,
+            "Allocated Budget": budget,
+            "Predicted KPI": predicted,
+        }
+
+        if revenue_enabled:
+            goal_value = gv.get(objective_code, 0.0)
+            if kind == "count" and goal_value > 0 and predicted > 0:
+                revenue = predicted * goal_value
+                roas = revenue / budget if budget > 0 else 0.0
+            else:
+                revenue = 0.0
+                roas = 0.0
+            row["Expected Revenue"] = revenue
+            row["ROAS"] = roas
+
+        rows.append(row)
 
     df = pd.DataFrame(rows)
     if not df.empty:
@@ -270,6 +466,7 @@ def _scenario_goal_multiplier_table(state: WizardState) -> pd.DataFrame:
 
 def create_excel_bytes(
     scenario_payload: List[Tuple[str, Module5LPResult, Optional[Module6Result]]],
+    goal_values: Optional[Dict[str, float]] = None,
 ) -> bytes:
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
@@ -289,6 +486,16 @@ def create_excel_bytes(
                     }
                 )
 
+            if forecast_res is not None and goal_values:
+                fdf_for_totals = build_forecast_df(forecast_res, goal_values=goal_values)
+                if "Expected Revenue" in fdf_for_totals.columns:
+                    total_rev = float(fdf_for_totals["Expected Revenue"].sum())
+                    spend = float(lp_res.total_budget_used or 0.0)
+                    summary_rows.append({"Metric": "Expected Revenue", "Value": total_rev})
+                    summary_rows.append(
+                        {"Metric": "ROAS", "Value": (total_rev / spend) if spend > 0 else 0.0}
+                    )
+
             summary_df = pd.DataFrame(summary_rows)
             budget_df = build_budget_allocation_df(lp_res)
             platform_df = build_platform_totals_df(lp_res)
@@ -298,7 +505,7 @@ def create_excel_bytes(
             platform_df.to_excel(writer, sheet_name=f"Platforms_{suffix}"[:31], index=False)
 
             if forecast_res is not None:
-                forecast_df = build_forecast_df(forecast_res)
+                forecast_df = build_forecast_df(forecast_res, goal_values=goal_values)
                 forecast_df.to_excel(writer, sheet_name=f"Forecast_{suffix}"[:31], index=False)
 
     buffer.seek(0)
@@ -597,10 +804,16 @@ def create_pdf_bytes(
             story.append(Spacer(1, 10))
 
         if forecast_res is not None:
-            forecast_df = build_forecast_df(forecast_res)
+            forecast_df = build_forecast_df(
+                forecast_res,
+                goal_values=getattr(state, "goal_value_per_unit", None) or None,
+            )
             if not forecast_df.empty:
                 story.append(Paragraph("Forecast KPIs (goal-aligned)", styles["Heading3"]))
-                t = Table(_df_to_table_data(forecast_df, money_columns=["Allocated Budget"]))
+                money_cols = ["Allocated Budget"]
+                if "Expected Revenue" in forecast_df.columns:
+                    money_cols.append("Expected Revenue")
+                t = Table(_df_to_table_data(forecast_df, money_columns=money_cols))
                 t.setStyle(
                     TableStyle(
                         [
@@ -618,208 +831,369 @@ def create_pdf_bytes(
     return buffer.getvalue()
 
 
-def module1_ui(state: WizardState) -> None:
-    st.header("Objectives and total budget")
-
-    goals = st.multiselect(
-        "Choose one or more marketing objectives:",
-        options=[
-            (GOAL_AW, "Awareness"),
-            (GOAL_EN, "Engagement"),
-            (GOAL_WT, "Website Traffic"),
-            (GOAL_LG, "Lead Generation"),
-        ],
-        format_func=lambda x: x[1],
-    )
-    goal_codes = [code for code, _ in goals]
-
-    total_budget = st.number_input(
-        "Enter your total budget (must be greater than 1)",
-        min_value=1.0,
-        value=1000.0,
-        step=100.0,
-    )
-
-    if st.button("Continue", disabled=not goal_codes or total_budget <= 1):
-        state.complete_module1_and_advance(valid_goals=goal_codes, total_budget=total_budget)
-        safe_rerun()
-
-
-def module2_ui(state: WizardState) -> None:
-    st.header("Platforms and priorities")
-
-    platforms = ["fb", "ig", "li", "yt"]
-    selected_platforms = st.multiselect(
-        "Choose one or more platforms:",
-        options=platforms,
-        format_func=lambda p: PLATFORM_NAMES.get(str(p).lower(), str(p)),
-    )
-
-    priorities_input: Dict[str, Dict[str, Optional[str]]] = {}
-    is_valid = True
-
-    for p in selected_platforms:
-        platform_name = PLATFORM_NAMES.get(p, p)
-        st.subheader(platform_name)
-
-        p1_key = f"{p}_p1"
-        p2_key = f"{p}_p2"
-
-        p1 = st.selectbox(
-            f"Priority 1 objective for {platform_name}",
-            options=[None] + list(state.valid_goals),
-            format_func=lambda x: {
-                None: "(none)",
-                GOAL_AW: "Awareness",
-                GOAL_EN: "Engagement",
-                GOAL_WT: "Website Traffic",
-                GOAL_LG: "Lead Generation",
-            }.get(x, str(x)),
-            key=p1_key,
-        )
-
-        allowed_p2_options = [None] + [g for g in state.valid_goals if g != p1]
-
-        current_p2 = st.session_state.get(p2_key, None)
-        if current_p2 == p1 and current_p2 is not None:
-            st.session_state[p2_key] = None
-            current_p2 = None
-
-        p2 = st.selectbox(
-            f"Priority 2 objective for {platform_name}",
-            options=allowed_p2_options,
-            format_func=lambda x: {
-                None: "(none)",
-                GOAL_AW: "Awareness",
-                GOAL_EN: "Engagement",
-                GOAL_WT: "Website Traffic",
-                GOAL_LG: "Lead Generation",
-            }.get(x, str(x)),
-            key=p2_key,
-        )
-
-        if p2 is not None and p1 is None:
-            is_valid = False
-            st.error("Priority 2 cannot be set without Priority 1.")
-
-        if p1 is not None and p2 is not None and p1 == p2:
-            is_valid = False
-            st.error("Priority 1 and Priority 2 must be different.")
-
-        if len(state.valid_goals) == 1 and p2 is not None:
-            is_valid = False
-            st.error("Priority 2 cannot be set when there is only one selected objective.")
-
-        priorities_input[p] = {"priority_1": p1, "priority_2": p2}
-
-    if st.button("Continue", disabled=(not selected_platforms) or (not is_valid)):
-        try:
-            run_module2(state, selected_platforms, priorities_input)
-            safe_rerun()
-        except Exception:
-            st.error("Please review your selections and try again.")
-
-
 def module3_ui(state: WizardState) -> None:
     st.header("Historical data")
+    sym = _current_currency_symbol()
+    st.caption(
+        f"Tell the optimiser what each platform delivered for {sym}X over the historical window. "
+        "Every KPI is a count — reach, engagement (sum of likes/comments/shares/etc.), clicks, "
+        "leads, purchases — so just enter the totals.  Decimals are fine."
+    )
+    # Consolidate three notices (placeholders, normalisation, attribution) into
+    # one collapsible disclosure.  Each is real and worth surfacing the first
+    # time the user sees this step, but three stacked yellow boxes create
+    # warning fatigue and get skimmed past.
+    with st.expander("How Module 3 works (read once)", expanded=False):
+        st.markdown(
+            "**Form fields are pre-filled with placeholder values** "
+            "(e.g. 1,000 leads, 8,000 engagements). These are *not* "
+            "defaults you should accept — they're starter numbers to keep "
+            "the form interactive. Replace each cell with your actual "
+            "historical KPI, or upload a CSV to pre-fill from real data. "
+            "The results page will warn you about any cells with no data, "
+            "but it cannot tell when a placeholder was submitted as real."
+        )
+        st.markdown("---")
+        st.markdown(
+            "**How your numbers are used.** Values are compared *relative "
+            "to other platforms* within the same objective — doubling every "
+            "platform's reach won't shift the allocation, only their "
+            "ranking does. Platforms with shorter historical windows are "
+            "partially pooled toward the cross-platform average: the LP "
+            "trusts a 90-day estimate more than a 7-day one. If you want "
+            "your raw numbers honoured without pooling, give each platform "
+            "a long history (180+ days)."
+        )
+        st.markdown("---")
+        st.markdown(
+            "**Attribution caveat.** The KPIs you enter reflect each "
+            "platform's own attribution model — typically last-click. "
+            "Platforms over-credit their own conversions: Meta tends to "
+            "claim leads that Search also influenced; Google tends to "
+            "claim conversions that brand awareness created. The "
+            "optimiser treats these numbers as truth, so its "
+            "recommendation is *conditional on your attribution model "
+            "being correct*. Incrementality — would these conversions "
+            "have happened anyway? — is not modelled. Treat productivity "
+            "ratios as upper bounds, not facts."
+        )
 
-    m3_data: Dict[str, Dict[str, Any]] = {}
-    platform_budgets: Dict[str, float] = {}
-    platform_kpis: Dict[str, Dict[str, float]] = {}
+    # ── Top-of-step unified template download + upload ─────────────────────
+    # One workbook covers every platform the user selected in Module 2.
+    # Each sheet is one platform with the columns its parser recognises +
+    # one example row.  The user fills in the sheets they have data for,
+    # leaves the rest blank, and re-uploads — the parser routes each
+    # sheet to its platform's pre-fill slot in one shot.
+    supported_platforms_for_active = [
+        p for p in (state.active_platforms or []) if p in CSV_SUPPORTED
+    ]
+    if supported_platforms_for_active:
+        st.markdown("### Don't have the data ready? Download one template, fill it in for every platform.")
+        st.caption(
+            "One Excel workbook with a sheet per platform you selected. "
+            "Each sheet has the columns the parser recognises plus one "
+            "example row.  Fill in only the sheets you have data for "
+            "(leave the others blank) and upload the workbook back here."
+        )
+        col_dl, col_ul = st.columns([1, 3])
+        with col_dl:
+            template_bytes = generate_unified_template_xlsx(
+                supported_platforms_for_active,
+                platform_display_names=PLATFORM_NAMES,
+            )
+            if template_bytes:
+                st.download_button(
+                    "📥 Download unified template",
+                    data=template_bytes,
+                    file_name="campaign_data_template.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="_unified_template_download",
+                    use_container_width=True,
+                )
+        with col_ul:
+            unified_uploaded = st.file_uploader(
+                "Drop the filled-in workbook here to pre-fill every platform at once",
+                type=["xlsx"],
+                key="_unified_template_upload",
+                help=(
+                    "Parses every sheet whose name matches one of your "
+                    "selected platforms; sheets you renamed or left blank "
+                    "are skipped silently.  You can still adjust any "
+                    "value in the per-platform forms below after upload."
+                ),
+            )
+            if unified_uploaded is not None:
+                parsed_all = parse_unified_template_xlsx(
+                    unified_uploaded.getvalue(),
+                    platform_display_names=PLATFORM_NAMES,
+                )
+                if "__error__" in parsed_all:
+                    st.error(parsed_all["__error__"].get("error", "Could not read workbook."))
+                else:
+                    unknown = parsed_all.pop("__unknown_sheets__", None)
+                    filled_count = 0
+                    for p_code, parsed in parsed_all.items():
+                        if "error" in parsed:
+                            st.warning(
+                                f"{PLATFORM_NAMES.get(p_code, p_code)}: "
+                                f"{parsed['error']}"
+                            )
+                            continue
+                        st.session_state[f"_csv_defaults_{p_code}"] = parsed
+                        filled_count += 1
+                    if filled_count > 0:
+                        st.success(
+                            f"Pre-filled {filled_count} platform"
+                            f"{'s' if filled_count != 1 else ''} from the workbook."
+                        )
+                    if unknown:
+                        st.info(
+                            "These sheet names didn't match any selected "
+                            "platform and were skipped: "
+                            + ", ".join(unknown.get("sheets", []))
+                        )
+        st.markdown("---")
+
+    default_days = int(getattr(state, "campaign_duration_days", None) or 30)
+    catalog = KPI_CONFIG
+    m3_inputs: Dict[str, Dict[str, Any]] = {}
 
     for platform in state.active_platforms:
-        platform_name = PLATFORM_NAMES.get(platform, platform.upper())
-        st.subheader(f"Data for {platform_name}")
+        platform_name = _platform_display_name(state, platform)
+        with st.expander(platform_name, expanded=True):
+            # ── CSV import (for supported platforms) ──────────────────────
+            # Stored extracted values in session_state so the widgets below
+            # default to them when the user uploads a file.
+            csv_defaults_key = f"_csv_defaults_{platform}"
+            if platform in CSV_SUPPORTED:
+                # Per-platform CSV upload accepts an actual platform export
+                # (filtered Google Ads CSV, Facebook Ads export, etc.) in
+                # case the user prefers that over filling the unified
+                # workbook.  The unified template at the top of the step
+                # is the easier path for most users.
+                uploaded = st.file_uploader(
+                    f"Drop a {platform_name} export here to pre-fill (optional)",
+                    type=["csv"],
+                    key=f"_csv_upload_{platform}",
+                    help="Upload the CSV you export from the platform's "
+                         "reporting UI.  Column names are matched "
+                         "heuristically — you can still adjust any "
+                         "value below.  Alternatively, use the unified "
+                         "Excel template at the top of this step.",
+                )
+                if uploaded is not None:
+                    parsed = parse_platform_csv(uploaded.getvalue(), platform)
+                    if "error" in parsed:
+                        st.error(parsed["error"])
+                    else:
+                        st.session_state[csv_defaults_key] = parsed
+                        matched = parsed.get("matched_columns", {})
+                        if matched:
+                            st.success(
+                                f"Matched {len(matched)} column"
+                                f"{'s' if len(matched) != 1 else ''} "
+                                f"from {parsed.get('row_count', 0)} row"
+                                f"{'s' if parsed.get('row_count', 0) != 1 else ''}."
+                            )
+                        if parsed.get("missing_kpis"):
+                            st.info(
+                                "Couldn't find columns for: "
+                                + ", ".join(parsed["missing_kpis"])
+                                + ". Enter them manually below."
+                            )
 
-        time_window = st.text_input(
-            f"Time window for {platform_name} (for example: last 30 days)",
-            key=f"time_{platform}",
-        )
+            csv_defaults = st.session_state.get(csv_defaults_key, {}) or {}
 
-        budget = st.number_input(
-            f"Total historical budget on {platform_name} (must be greater than 1)",
-            min_value=1.01,
-            value=1000.0,
-            step=100.0,
-            key=f"budget_{platform}",
-        )
+            # ── KPI composition breakdown (auditable view) ────────────────
+            # Show how each canonical KPI was built from the raw CSV
+            # columns so the user can audit the LP's input.  Marketers can
+            # also use the "Customise composition" panel below to override
+            # the default aggregation rules.
+            breakdown = (csv_defaults.get("kpi_breakdown") or {}) if csv_defaults else {}
+            if breakdown:
+                with st.expander("How your KPIs were composed", expanded=False):
+                    st.caption(
+                        "Each canonical KPI is built from one or more raw columns "
+                        "in your CSV.  This view shows the components and the "
+                        "operator (sum / first / max) used to combine them."
+                    )
+                    for var, bd in breakdown.items():
+                        components = bd.get("components", [])
+                        op = bd.get("operator", "first")
+                        total = bd.get("value", 0.0)
+                        rationale = bd.get("rationale", "")
+                        used_fallback = bd.get("used_fallback", False)
 
-        kpi_defs = [
-            row for row in KPI_CONFIG if row["platform"] == platform and row["goal"] in state.goals_by_platform.get(platform, [])
-        ]
+                        st.markdown(f"**{var}** = `{total:,.2f}` (operator: `{op}`)")
+                        for c in components:
+                            col_name = c.get("column", "?")
+                            cval = c.get("value", 0.0)
+                            st.caption(f"  • {col_name}: {cval:,.2f}")
+                        if rationale:
+                            if used_fallback:
+                                st.warning(rationale, icon="⚠️")
+                            else:
+                                st.caption(f"_{rationale}_")
+                        st.markdown("---")
 
-        kpi_values: Dict[str, float] = {}
-        for kpi_def in kpi_defs:
-            var = kpi_def["var"]
-            label = kpi_def["kpi_label"]
-            goal_code = kpi_def["goal"]
-            goal_name = GOAL_NAMES.get(goal_code, goal_code)
-            descriptive_label = f"{goal_name} - {label} on {platform_name} (must be greater than 1)"
+            # ── Composition override (Option C) ──────────────────────────
+            # Per-component weight editor.  The composed value is recomputed
+            # live from the weights and replaces csv_defaults['kpis'][var]
+            # so the form's number_input below picks up the new value.
+            overrides_key = f"_csv_overrides_{platform}"
+            if breakdown:
+                with st.expander("Customise composition (advanced)",
+                                 expanded=False):
+                    st.caption(
+                        "Re-weight the components that build each canonical "
+                        "KPI.  Useful if you want to count saves more than "
+                        "reactions, or exclude a component entirely (weight = 0)."
+                    )
+                    overrides = st.session_state.get(overrides_key, {}) or {}
+                    new_overrides: Dict[str, Dict[str, float]] = {}
+                    for var, bd in breakdown.items():
+                        components = bd.get("components", [])
+                        if len(components) < 2:
+                            continue  # nothing to re-weight on a single-component KPI
 
-            val = st.number_input(
-                descriptive_label,
-                min_value=1.01,
-                value=1.01,
-                step=0.1,
-                key=f"{platform}_{var}",
-            )
-            kpi_values[var] = float(val)
+                        st.markdown(f"**{var}** weights:")
+                        var_overrides = overrides.get(var, {})
+                        new_var_overrides: Dict[str, float] = {}
+                        ccols = st.columns(min(len(components), 4))
+                        for i, c in enumerate(components):
+                            col_name = c.get("column", f"comp_{i}")
+                            with ccols[i % len(ccols)]:
+                                w = st.number_input(
+                                    col_name,
+                                    min_value=0.0, max_value=10.0,
+                                    value=float(var_overrides.get(col_name, 1.0)),
+                                    step=0.5,
+                                    key=f"_cw_{platform}_{var}_{i}",
+                                )
+                                new_var_overrides[col_name] = float(w)
+                        new_overrides[var] = new_var_overrides
 
-        m3_data[platform] = {"time_window": time_window, "budget": float(budget), "kpis": kpi_values}
-        platform_budgets[platform] = float(budget)
-        platform_kpis[platform] = kpi_values
+                    if st.button(
+                        f"Apply composition weights for {platform_name}",
+                        key=f"_apply_overrides_{platform}",
+                    ):
+                        st.session_state[overrides_key] = new_overrides
+                        # Recompose KPI values in csv_defaults so the form
+                        # below picks them up on rerun.
+                        for var, weights in new_overrides.items():
+                            components = breakdown.get(var, {}).get("components", [])
+                            if not components:
+                                continue
+                            op = breakdown[var].get("operator", "first")
+                            vals = []
+                            for c in components:
+                                col_name = c.get("column")
+                                w = float(weights.get(col_name, 1.0))
+                                vals.append(float(c.get("value", 0.0)) * w)
+                            if not vals:
+                                continue
+                            if op == "sum":
+                                recomposed = sum(vals)
+                            elif op == "max":
+                                recomposed = max(vals)
+                            elif op == "mean":
+                                recomposed = sum(vals) / len(vals)
+                            else:
+                                recomposed = vals[0]
+                            csv_defaults["kpis"][var] = recomposed
+                        st.session_state[csv_defaults_key] = csv_defaults
+                        safe_rerun()
 
-    can_run = True
-    for _, d in m3_data.items():
-        if not d.get("time_window"):
-            can_run = False
-            break
+            col_days, col_budget = st.columns([1, 2])
+            with col_days:
+                hist_days = st.number_input(
+                    "Historical window (days)",
+                    min_value=1,
+                    value=int(csv_defaults.get("historical_days") or default_days),
+                    step=1,
+                    key=f"hist_days_{platform}",
+                    help="How many days of past performance these numbers cover. "
+                         "Confidence bands shrink as the window grows (more data → less noise).",
+                )
+            with col_budget:
+                budget = st.number_input(
+                    "Total budget spent in that window",
+                    min_value=1.01,
+                    value=float(csv_defaults.get("budget") or 1000.0),
+                    step=100.0, format="%.2f",
+                    key=f"budget_{platform}",
+                    help="Combined ad spend over the historical window. Decimals OK.",
+                )
+
+            kpi_defs = [
+                row for row in catalog
+                if row["platform"] == platform
+                and row["goal"] in state.goals_by_platform.get(platform, [])
+            ]
+            csv_kpis = (csv_defaults.get("kpis") or {}) if csv_defaults else {}
+
+            kpi_values: Dict[str, float] = {}
+            for kpi_def in kpi_defs:
+                var = kpi_def["var"]
+                label = kpi_def["kpi_label"]
+                kind = kpi_def.get("kind", "count")
+                goal_code = kpi_def["goal"]
+                goal_name = _GOAL_LABEL.get(goal_code, goal_code)
+
+                csv_val = csv_kpis.get(var)
+
+                if kind == "rate":
+                    # Rate KPIs are dimensionless ratios in [0, 1].  Show as a
+                    # percent slider — much easier to reason about than typing
+                    # "0.045"; store as fraction.
+                    default_pct = float(csv_val) * 100.0 if csv_val else 2.5
+                    default_pct = max(0.0, min(100.0, default_pct))
+                    pct = st.slider(
+                        f"{goal_name} · {label} (%)",
+                        min_value=0.0, max_value=100.0, value=default_pct, step=0.1,
+                        key=f"{platform}_{var}",
+                        help=f"Average {label.lower()} as a percentage. Stored as a decimal."
+                             + (" Pre-filled from CSV." if csv_val else ""),
+                    )
+                    kpi_values[var] = pct / 100.0
+                else:
+                    # Count KPIs: total units over the historical window.
+                    # Decimals are accepted (some platforms report fractional values).
+                    default_val = float(csv_val) if csv_val else 1000.0
+                    val = st.number_input(
+                        f"{goal_name} · {label} (total over window)",
+                        min_value=0.0, value=default_val, step=10.0, format="%.2f",
+                        key=f"{platform}_{var}",
+                        help=f"Total {label.lower()} recorded during the historical window. "
+                             f"Decimals OK (e.g. 1500.5 leads if you're averaging across multiple ad sets)."
+                             + (" Pre-filled from CSV." if csv_val else ""),
+                    )
+                    kpi_values[var] = float(val)
+
+            m3_inputs[platform] = {
+                "time_window": f"{int(hist_days)} days",
+                "historical_days": int(hist_days),
+                "budget": float(budget),
+                "kpis": kpi_values,
+            }
+
+    # Validate before allowing submit — keeps the button enabled until the
+    # user has at least one positive KPI value per platform.
+    can_run = bool(state.active_platforms)
+    for d in m3_inputs.values():
         if float(d.get("budget", 0.0)) <= 1.0:
             can_run = False
             break
-        for _, kpi_val in (d.get("kpis", {}) or {}).items():
-            if float(kpi_val) <= 1.0:
-                can_run = False
-                break
-        if not can_run:
+        if not any(float(v) > 0 for v in d.get("kpis", {}).values()):
+            can_run = False
             break
 
-    if st.button("Run optimisation", disabled=not can_run):
-        kpi_ratios: Dict[str, Dict[str, Dict[str, float]]] = {}
-
-        for platform in m3_data:
-            b = float(m3_data[platform]["budget"])
-            goals_for_platform = state.goals_by_platform.get(platform, [])
-
-            kpi_ratios[platform] = {}
-            for g in goals_for_platform:
-                kpi_ratios[platform][g] = {}
-
-            for row in KPI_CONFIG:
-                p = row["platform"]
-                g = row["goal"]
-                var = row["var"]
-
-                if p != platform:
-                    continue
-                if g not in goals_for_platform:
-                    continue
-
-                val = float(m3_data[platform]["kpis"].get(var, 0.0))
-                if val <= 0.0 or b <= 0.0:
-                    continue
-
-                kpi_ratios[platform][g][var] = val / b
-
-            kpi_ratios[platform] = {g: d for g, d in kpi_ratios[platform].items() if d}
-
-        state.complete_module3_and_advance(
-            module3_data=m3_data,
-            platform_budgets=platform_budgets,
-            platform_kpis=platform_kpis,
-            kpi_ratios=kpi_ratios,
-        )
-        safe_rerun()
+    if st.button("Run optimisation", disabled=not can_run, type="primary"):
+        try:
+            finalise_module3_from_inputs(state, platform_inputs=m3_inputs)
+            safe_rerun()
+        except (ValueError, RuntimeError) as e:
+            st.error(f"Could not finalise Module 3: {e}")
 
 
 def _get_module5_scenarios(state: WizardState) -> Dict[str, Module5LPResult]:
@@ -851,6 +1225,10 @@ def _get_module6_scenarios(state: WizardState) -> Dict[str, Module6Result]:
 def results_ui(state: WizardState) -> None:
     st.header("Results")
 
+    goal_values_for_results: Optional[Dict[str, float]] = (
+        getattr(state, "goal_value_per_unit", None) or None
+    )
+
     if st.button("Reset", type="secondary"):
         reset_state()
         return
@@ -867,6 +1245,43 @@ def results_ui(state: WizardState) -> None:
         return
 
     st.markdown("Optimisation method: Linear Programming (LP) to allocate budget across platform and objective.")
+    st.caption(
+        "⚠️ Recommendations inherit the attribution your KPIs came from.  If the "
+        "platform-reported numbers over-credit one channel (a known last-click "
+        "bias), the LP will over-allocate to that channel.  Cross-check against "
+        "incrementality tests (geo lifts, holdout splits) before committing to "
+        "material reallocations."
+    )
+
+    # ── Missing-data warning (silent zeros made loud) ──────────────────────
+    # A platform/goal cell that got £0 because the user provided no input
+    # data looks identical in the allocation table to one the optimiser
+    # actively chose to skip.  Surface the distinction so users can't
+    # mistake "we had no information" for "the LP ranked this low."
+    missing_cells = detect_missing_data_cells(state)
+    if missing_cells:
+        lines = []
+        for cell in missing_cells:
+            pname = _platform_display_name(state, cell.platform)
+            if cell.reason == "no_platform_data":
+                lines.append(
+                    f"- **{pname}** — no KPI data provided for any objective"
+                )
+            else:
+                gname = _GOAL_LABEL.get(cell.goal or "", cell.goal or "")
+                lines.append(
+                    f"- **{pname} · {gname}** — no KPI value provided for this cell"
+                )
+        sym = _current_currency_symbol()
+        st.warning(
+            "**Some cells couldn't be optimised because input data was missing.**\n\n"
+            + "\n".join(lines)
+            + f"\n\n_These platforms/goals got {sym}0 not because the optimiser "
+              "ranked them low, but because there was nothing to rank.  "
+              "Go back to Module 3 and supply the missing values if you "
+              "want them considered._",
+            icon="⚠️",
+        )
 
     df_p, df_g, df_s = _policy_tables(state)
     df_sgm = _scenario_goal_multiplier_table(state)
@@ -996,6 +1411,251 @@ def results_ui(state: WizardState) -> None:
 
             st.markdown("---")
 
+    # ── Refine policy and re-solve ────────────────────────────────────────
+    # A marketer iterates: "what if I bump the LI floor by £2k?", "what if
+    # I cut the carve-out to 5%?".  Walking the wizard from Module 1 to
+    # explore those is painful.  This expander mutates the policy fields
+    # on state and re-runs Modules 4-7 in place — sub-second on typical
+    # problems.
+    with st.expander("Refine policy and re-solve", expanded=False):
+        st.caption(
+            "Adjust the policy levers below and click Re-solve.  Historical "
+            "data and platform selection from Modules 1-3 are preserved."
+        )
+
+        col_budget, col_carve = st.columns(2)
+        with col_budget:
+            new_budget = st.number_input(
+                "Total budget",
+                min_value=1.01,
+                value=float(state.total_budget or 0.0),
+                step=500.0, format="%.2f",
+                key="_resolve_budget",
+            )
+        with col_carve:
+            new_tl_pct = st.slider(
+                "Test-and-learn reserve",
+                min_value=0.0, max_value=0.40,
+                value=float(getattr(state, "test_and_learn_pct", 0.0)),
+                step=0.01, format="%.0f%%",
+                key="_resolve_tl",
+            )
+
+        new_seasonality: Dict[str, float] = {}
+        if state.valid_goals:
+            st.markdown("**Seasonality multipliers** (1.0 = no adjustment):")
+            current_si = getattr(state, "seasonality_index", None) or {}
+            scols = st.columns(min(len(state.valid_goals), 4))
+            for i, g in enumerate(state.valid_goals):
+                with scols[i % len(scols)]:
+                    cur = float(current_si.get(g, 1.0))
+                    m = st.slider(
+                        _GOAL_LABEL.get(g, g),
+                        min_value=0.2, max_value=3.0, value=cur, step=0.05,
+                        key=f"_resolve_seasonality_{g}",
+                    )
+                    if abs(m - 1.0) > 1e-6:
+                        new_seasonality[g] = m
+
+        new_min_spend: Dict[str, float] = {}
+        if state.active_platforms:
+            st.markdown("**Per-platform minimum spend** (LP must allocate at least this much):")
+            current_floors = getattr(state, "min_spend_per_platform", None) or {}
+            fcols = st.columns(min(len(state.active_platforms), 4))
+            for i, p in enumerate(state.active_platforms):
+                with fcols[i % len(fcols)]:
+                    cur = float(current_floors.get(p, 0.0))
+                    floor = st.number_input(
+                        _platform_display_name(state, p),
+                        min_value=0.0, value=cur, step=100.0, format="%.0f",
+                        key=f"_resolve_floor_{p}",
+                    )
+                    new_min_spend[p] = float(floor)
+
+        if st.button("Re-solve with these changes", type="primary", key="_resolve_button"):
+            try:
+                # Mutate the policy fields, then unset the M4-M7 finalised
+                # flags so results_ui's auto-run picks them up on rerun.
+                state.total_budget = float(new_budget)
+                state.test_and_learn_pct = float(new_tl_pct)
+                state.seasonality_index = dict(new_seasonality)
+                state.min_spend_per_platform = dict(new_min_spend)
+                state.module4_finalised = False
+                state.module5_finalised = False
+                state.module6_finalised = False
+                state.module7_finalised = False
+                # current_step is at 7+ after a full run; the per-module
+                # entry guards check it before running.  Roll back to 4.
+                state.current_step = 4
+                # Drop the cached Monte Carlo too; the new policy invalidates it.
+                st.session_state.pop("_mc_result", None)
+                safe_rerun()
+            except Exception as e:
+                st.error(f"Could not re-solve: {e}")
+
+    # ── Solver diagnostics (auditable "why this allocation?") ──────────────
+    # Surfaces the LP signals that already exist on every Module5LPResult
+    # but were previously hidden from the UI.  Focused on the base scenario;
+    # the per-scenario tabs below still let the user dig deeper.
+    base_lp = lp_by_scenario.get("base") or (
+        lp_by_scenario.get(scenario_keys[0]) if scenario_keys else None
+    )
+    if base_lp is not None and (
+        base_lp.binding_constraints
+        or base_lp.shadow_prices
+        or base_lp.effective_minimum_warnings
+        or base_lp.near_degenerate_groups
+        or base_lp.test_and_learn_reserve > 0.0
+    ):
+        with st.expander("Solver diagnostics", expanded=False):
+            st.caption(
+                "What constraints actually shaped the optimiser's choice, "
+                "and how sensitive the allocation is to each one."
+            )
+
+            if base_lp.test_and_learn_reserve > 0.0:
+                st.markdown(
+                    f"**Test-and-learn reserve (base scenario):** "
+                    f"{money(base_lp.test_and_learn_reserve)} held back from the LP."
+                )
+
+            if base_lp.binding_constraints:
+                st.markdown("**Binding constraints** — these stopped the LP from doing better:")
+                binding_rows = []
+                for bc in base_lp.binding_constraints:
+                    target_label = ""
+                    if bc.kind == "min_platform":
+                        target_label = PLATFORM_NAMES.get(str(bc.target).lower(), str(bc.target))
+                    elif bc.kind == "min_goal":
+                        target_label = _GOAL_LABEL.get(str(bc.target).lower(), str(bc.target))
+                    elif bc.kind == "budget_cap":
+                        target_label = "(total)"
+                    binding_rows.append({
+                        "Constraint": bc.name,
+                        "Kind": bc.kind,
+                        "Target": target_label,
+                        "Limit": money(bc.rhs),
+                        "Shadow price": number(bc.shadow_price, 4),
+                    })
+                st.dataframe(pd.DataFrame(binding_rows),
+                             use_container_width=True, hide_index=True)
+                st.caption(
+                    "Shadow price ≈ how much the objective would change if you "
+                    "relaxed the constraint by one unit.  Positive on min floors "
+                    "(forcing spend hurts the objective), negative on the budget cap "
+                    "(more budget would help)."
+                )
+
+            # Top-3 shadow prices (by absolute value), excluding the already-shown bindings
+            if base_lp.shadow_prices:
+                already_shown = {bc.name for bc in base_lp.binding_constraints}
+                other = [
+                    (name, pi) for name, pi in base_lp.shadow_prices.items()
+                    if name not in already_shown and abs(pi) > 1e-9
+                ]
+                if other:
+                    other.sort(key=lambda kv: abs(kv[1]), reverse=True)
+                    top = other[:3]
+                    st.markdown("**Largest non-binding sensitivities:**")
+                    st.dataframe(
+                        pd.DataFrame([
+                            {"Constraint": name, "Shadow price": number(pi, 4)}
+                            for name, pi in top
+                        ]),
+                        use_container_width=True, hide_index=True,
+                    )
+
+            if base_lp.effective_minimum_warnings:
+                st.markdown("**Below industry-effective spend** — these platforms may not exit the learning phase:")
+                for w in base_lp.effective_minimum_warnings:
+                    st.warning(w)
+
+            if base_lp.near_degenerate_groups:
+                st.markdown("**Near-degenerate cells** — productivity was effectively tied:")
+                for grp in base_lp.near_degenerate_groups:
+                    g_label = _GOAL_LABEL.get(str(grp.get("goal", "")).lower(), str(grp.get("goal", "")))
+                    plats = ", ".join(
+                        PLATFORM_NAMES.get(str(p).lower(), str(p)) for p in grp.get("platforms", [])
+                    )
+                    st.caption(
+                        f"{g_label}: {plats} — split was set by proportional "
+                        f"redistribution, not by a meaningful productivity gap."
+                    )
+
+    # ── Monte Carlo robustness ─────────────────────────────────────────────
+    # On-demand because n_trials LP solves is the expensive bit (~1-5 s).
+    # Caches the result in session state so toggling other UI elements
+    # doesn't re-run the whole batch.
+    with st.expander("Robustness check (Monte Carlo)", expanded=False):
+        st.caption(
+            "Re-solves the base scenario hundreds of times with productivities "
+            "perturbed by their observed noise.  Surfaces platforms whose share "
+            "is sensitive to the underlying assumptions."
+        )
+        col_n, col_seed, col_run = st.columns([1, 1, 1])
+        with col_n:
+            n_trials = st.number_input(
+                "Trials", min_value=20, max_value=500,
+                value=int(DEFAULT_MC_TRIALS), step=20,
+                help="More trials = tighter percentiles, more runtime.",
+            )
+        with col_seed:
+            seed = st.number_input(
+                "Seed", min_value=0, max_value=2_147_483_647,
+                value=42, step=1,
+                help="Reproducibility — same seed gives the same distribution.",
+            )
+        with col_run:
+            st.write("")  # vertical spacer to line up with inputs
+            run_mc = st.button("Run robustness check", type="primary")
+
+        if run_mc:
+            try:
+                with st.spinner(f"Running {int(n_trials)} LP solves..."):
+                    mc_result = run_module5_montecarlo(
+                        state, n_trials=int(n_trials), seed=int(seed),
+                    )
+                st.session_state["_mc_result"] = mc_result
+            except Exception as e:
+                st.error(f"Monte Carlo failed: {e}")
+
+        mc_result = st.session_state.get("_mc_result")
+        if mc_result is not None:
+            st.caption(
+                f"{mc_result.n_trials} trials completed (seed={mc_result.seed}). "
+                f"Instability threshold: CV > {mc_result.instability_threshold:.0%}."
+            )
+
+            if mc_result.unstable_platforms:
+                names = ", ".join(
+                    PLATFORM_NAMES.get(p, p) for p in mc_result.unstable_platforms
+                )
+                st.warning(
+                    f"Unstable platforms: {names}. "
+                    f"Allocation rank for these platforms is sensitive to "
+                    f"plausible productivity noise — don't bet the campaign on them."
+                )
+            else:
+                st.success(
+                    "No platform's allocation moved meaningfully under perturbation — "
+                    "the plan is robust to the noise in the input data."
+                )
+
+            platform_rows = []
+            for s in mc_result.per_platform:
+                platform_rows.append({
+                    "Platform": PLATFORM_NAMES.get(s.platform, s.platform),
+                    "Mean": money(s.mean),
+                    "p5": money(s.p5),
+                    "Median": money(s.p50),
+                    "p95": money(s.p95),
+                    "CV": f"{s.cv:.1%}",
+                })
+            if platform_rows:
+                st.markdown("**Per-platform allocation distribution:**")
+                st.dataframe(pd.DataFrame(platform_rows),
+                             use_container_width=True, hide_index=True)
+
     tabs = st.tabs([_human_scenario_name(k) for k in scenario_keys])
     scenario_payload_for_exports: List[Tuple[str, Module5LPResult, Optional[Module6Result]]] = []
 
@@ -1015,10 +1675,18 @@ def results_ui(state: WizardState) -> None:
                 bullets.append(f"Highest allocated objective: {top_g['Objective']} with {money(top_g['Allocated Budget'])}.")
 
         if fc_res is not None:
-            fdf = build_forecast_df(fc_res)
+            fdf = build_forecast_df(fc_res, goal_values=goal_values_for_results)
             if not fdf.empty:
                 top_kpi = fdf.sort_values("Predicted KPI", ascending=False).iloc[0]
                 bullets.append(f"Top predicted KPI: {top_kpi['KPI']} on {top_kpi['Platform']} at {number(top_kpi['Predicted KPI'], 2)}.")
+                if "Expected Revenue" in fdf.columns:
+                    total_rev = float(fdf["Expected Revenue"].sum())
+                    spend = float(lp_res.total_budget_used or 0.0)
+                    if total_rev > 0 and spend > 0:
+                        bullets.append(
+                            f"Expected revenue: {money(total_rev)} on {money(spend)} spend "
+                            f"(ROAS {number(total_rev / spend, 2)}×)."
+                        )
 
         if hasattr(lp_res, "objective_value_raw"):
             bullets.append(f"Objective (raw): {number(getattr(lp_res, 'objective_value_raw') or 0.0, 6)}.")
@@ -1034,11 +1702,46 @@ def results_ui(state: WizardState) -> None:
 
         with tab:
             st.subheader("Summary")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.metric("Total budget used", money(lp_res.total_budget_used or 0.0))
-            with c2:
-                st.metric("Objective value", number(lp_res.objective_value or 0.0, 2))
+
+            # Pre-compute revenue totals for both the metric row and the
+            # downstream forecast table so we render the same numbers in
+            # both places.
+            scenario_total_revenue = 0.0
+            scenario_roas = 0.0
+            if forecast_res is not None and goal_values_for_results:
+                fdf_preview = build_forecast_df(
+                    forecast_res, goal_values=goal_values_for_results
+                )
+                if "Expected Revenue" in fdf_preview.columns:
+                    scenario_total_revenue = float(fdf_preview["Expected Revenue"].sum())
+                    spend_for_roas = float(lp_res.total_budget_used or 0.0)
+                    if spend_for_roas > 0:
+                        scenario_roas = scenario_total_revenue / spend_for_roas
+
+            if scenario_total_revenue > 0:
+                c1, c2, c3, c4 = st.columns(4)
+                with c1:
+                    st.metric("Total budget used", money(lp_res.total_budget_used or 0.0))
+                with c2:
+                    st.metric("Expected revenue", money(scenario_total_revenue))
+                with c3:
+                    st.metric("ROAS", f"{number(scenario_roas, 2)}×")
+                with c4:
+                    st.metric("Objective value", number(lp_res.objective_value or 0.0, 2))
+                st.caption(
+                    "Expected revenue = predicted volume × goal value.  Every canonical KPI "
+                    "is a count (the uniform-units refactor folded Engagement Rate / CTR into "
+                    "summed count KPIs), so all KPIs contribute.  Cells with multiple KPIs for "
+                    "the same objective (e.g. Facebook Awareness: Reach + Impression) sum each "
+                    "KPI's contribution — treat the total as an upper bound when those KPIs "
+                    "measure overlapping value."
+                )
+            else:
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.metric("Total budget used", money(lp_res.total_budget_used or 0.0))
+                with c2:
+                    st.metric("Objective value", number(lp_res.objective_value or 0.0, 2))
 
             if hasattr(lp_res, "objective_value_raw"):
                 st.caption(f"Objective value (raw): {number(getattr(lp_res, 'objective_value_raw') or 0.0, 6)}")
@@ -1094,13 +1797,23 @@ def results_ui(state: WizardState) -> None:
             if forecast_res is None:
                 st.info("Forecast is not available for this scenario.")
             else:
-                forecast_df = build_forecast_df(forecast_res)
+                forecast_df = build_forecast_df(
+                    forecast_res, goal_values=goal_values_for_results
+                )
                 if forecast_df.empty:
                     st.warning("No forecast KPIs to display.")
                 else:
                     show_forecast = forecast_df.copy()
                     show_forecast["Allocated Budget"] = show_forecast["Allocated Budget"].apply(money)
                     show_forecast["Predicted KPI"] = show_forecast["Predicted KPI"].apply(lambda x: number(x, 2))
+                    if "Expected Revenue" in show_forecast.columns:
+                        show_forecast["Expected Revenue"] = show_forecast["Expected Revenue"].apply(
+                            lambda x: money(x) if float(x) > 0 else ""
+                        )
+                    if "ROAS" in show_forecast.columns:
+                        show_forecast["ROAS"] = show_forecast["ROAS"].apply(
+                            lambda x: f"{number(x, 2)}×" if float(x) > 0 else ""
+                        )
                     st.dataframe(show_forecast, use_container_width=True, hide_index=True)
 
     st.subheader("Downloads")
@@ -1120,7 +1833,9 @@ def results_ui(state: WizardState) -> None:
         excel_available = False
 
     if excel_available:
-        xlsx_bytes = create_excel_bytes(scenario_payload_for_exports)
+        xlsx_bytes = create_excel_bytes(
+            scenario_payload_for_exports, goal_values=goal_values_for_results
+        )
         st.download_button(
             label="Download Excel",
             data=xlsx_bytes,
@@ -1134,106 +1849,271 @@ def results_ui(state: WizardState) -> None:
         reset_state()
 
 
+# Default value-per-unit illustrations for the Module 1 form.  The numeric
+# magnitudes are anchored in UK B2B SaaS; the leading symbol is filled in at
+# render time so the label matches whatever currency the user picked in
+# Module 1 (GBP / USD / EUR).
+_GOAL_VALUE_HINTS: Dict[str, Tuple[str, float]] = {
+    GOAL_LG: ("{sym} per qualified lead", 100.0),
+    GOAL_WT: ("{sym} per website click", 0.50),
+    GOAL_EN: ("{sym} per engagement", 0.20),
+    GOAL_AW: ("{sym} per reach impression", 0.001),
+}
+
+_GOAL_LABEL: Dict[str, str] = {
+    GOAL_AW: "Awareness",
+    GOAL_EN: "Engagement",
+    GOAL_WT: "Website Traffic",
+    GOAL_LG: "Lead Generation",
+}
+
+
 def module1_ui(state: WizardState) -> None:
     st.header("Objectives and total budget")
 
+    # ── Core inputs ────────────────────────────────────────────────────────
+    # Defaults read from state when present so back-navigation shows the
+    # user's previous selections instead of a blank form.
+    objective_options = [
+        (GOAL_AW, "Awareness"),
+        (GOAL_EN, "Engagement"),
+        (GOAL_WT, "Website Traffic"),
+        (GOAL_LG, "Lead Generation"),
+    ]
+    prior_goals = set(state.valid_goals or [])
     goals = st.multiselect(
         "Choose one or more marketing objectives:",
-        options=[
-            (GOAL_AW, "Awareness"),
-            (GOAL_EN, "Engagement"),
-            (GOAL_WT, "Website Traffic"),
-            (GOAL_LG, "Lead Generation"),
-        ],
+        options=objective_options,
+        default=[opt for opt in objective_options if opt[0] in prior_goals],
         format_func=lambda x: x[1],
     )
     goal_codes = [code for code, _ in goals]
 
-    total_budget = st.number_input(
-        "Enter your total budget (must be greater than 1)",
-        min_value=1.0,
-        value=1000.0,
-        step=100.0,
-    )
+    col_budget, col_currency, col_duration = st.columns([2, 1, 1])
+    with col_budget:
+        total_budget = st.number_input(
+            "Total budget",
+            min_value=1.0,
+            value=float(state.total_budget) if state.total_budget else 10000.0,
+            step=500.0,
+            help="The full campaign budget — including any test-and-learn reserve.",
+        )
+    with col_currency:
+        currency_options = ["GBP", "USD", "EUR"]
+        currency = st.selectbox(
+            "Currency", options=currency_options,
+            index=currency_options.index(state.currency)
+                  if state.currency in currency_options else 0,
+        )
+    with col_duration:
+        duration_days = st.number_input(
+            "Campaign days",
+            min_value=1,
+            value=int(state.campaign_duration_days or 30),
+            step=1,
+            help="Used to scale industry-effective minimums and historical-window confidence bands.",
+        )
+
+    # ── Goal values (utility weights) ──────────────────────────────────────
+    goal_values: Dict[str, float] = {}
+    if goal_codes:
+        st.markdown("### What is each result worth to the business?")
+        sym_display = _CURRENCY_SYMBOLS.get(currency, "£")
+        st.caption(
+            f"Set the {sym_display} value of one unit of each objective's KPI.  "
+            "The optimiser uses these as utility weights — without them it "
+            "falls back to rank-based heuristics.  Leave at 0 to skip."
+        )
+        st.info(
+            f"ℹ️ **The values pre-filled below are illustrative — sized for "
+            f"UK B2B SaaS** ({sym_display}100/lead, {sym_display}0.50/click, "
+            f"{sym_display}0.20/engagement, {sym_display}0.001/impression).  "
+            f"A B2C e-commerce business would use very different numbers: a "
+            f"lead might be worth {sym_display}20, a click {sym_display}0.05, "
+            f"an impression {sym_display}0.001.  **Replace them with your own "
+            "economics before relying on the plan** — these aren't universal "
+            "defaults, they're a starter for one specific vertical."
+        )
+        cols = st.columns(min(len(goal_codes), 4))
+        prior_values = state.goal_value_per_unit or {}
+        sym = _CURRENCY_SYMBOLS.get(currency, "£")
+        for i, gcode in enumerate(goal_codes):
+            label_tpl, default = _GOAL_VALUE_HINTS.get(
+                gcode, ("{sym} per " + gcode, 1.0),
+            )
+            label = label_tpl.format(sym=sym)
+            current = float(prior_values.get(gcode, default))
+            with cols[i % len(cols)]:
+                v = st.number_input(
+                    f"{_GOAL_LABEL.get(gcode, gcode)} — {label}",
+                    min_value=0.0,
+                    value=current,
+                    step=max(default / 10.0, 0.001),
+                    format="%.4f",
+                    key=f"goal_value_{gcode}",
+                )
+                if v > 0:
+                    goal_values[gcode] = v
+
+    # ── Advanced policy inputs ─────────────────────────────────────────────
+    with st.expander("Advanced policy (test-and-learn, seasonality)",
+                     expanded=bool(getattr(state, "test_and_learn_pct", 0.0)
+                                    or getattr(state, "seasonality_index", {}))):
+        test_and_learn_pct = st.slider(
+            "Test-and-learn reserve",
+            min_value=0.0,
+            max_value=0.40,
+            value=float(getattr(state, "test_and_learn_pct", 0.0) or 0.10),
+            step=0.01,
+            format="%.0f%%",
+            help=(
+                "Fraction of every scenario's budget held back from the LP for "
+                "new audiences, creative tests, and emerging placements. "
+                "Standard strategist practice is 10–15%."
+            ),
+        )
+
+        st.markdown(
+            "**Seasonality multipliers** — set to >1 if you expect productivity "
+            "to beat the historical baseline during the campaign window "
+            "(e.g. January after the Q4 auction spike clears); <1 if you expect "
+            "underperformance (e.g. December CPM inflation). Leave at 1.0 for no adjustment."
+        )
+        seasonality_index: Dict[str, float] = {}
+        prior_seasonality = getattr(state, "seasonality_index", {}) or {}
+        if goal_codes:
+            scols = st.columns(min(len(goal_codes), 4))
+            for i, gcode in enumerate(goal_codes):
+                with scols[i % len(scols)]:
+                    mult = st.slider(
+                        _GOAL_LABEL.get(gcode, gcode),
+                        min_value=0.2,
+                        max_value=3.0,
+                        value=float(prior_seasonality.get(gcode, 1.0)),
+                        step=0.05,
+                        key=f"seasonality_{gcode}",
+                    )
+                    if abs(mult - 1.0) > 1e-6:
+                        seasonality_index[gcode] = mult
 
     if st.button("Continue", disabled=not goal_codes or total_budget <= 1):
-        state.complete_module1_and_advance(valid_goals=goal_codes, total_budget=total_budget)
-        safe_rerun()
+        try:
+            finalise_module1(
+                state,
+                raw_objectives=goal_codes,
+                raw_budget=total_budget,
+                raw_currency=currency,
+                raw_duration_days=int(duration_days),
+                raw_goal_values=goal_values or None,
+                raw_test_and_learn_pct=test_and_learn_pct or None,
+                raw_seasonality_index=seasonality_index or None,
+            )
+            safe_rerun()
+        except (Module1ValidationError, ValueError) as e:
+            st.error(f"Could not finalise Module 1: {e}")
+
+
+def _platform_display_name(state: WizardState, code: str) -> str:
+    """Display label for a platform code (built-in catalogue only)."""
+    code_l = str(code).lower()
+    return PLATFORM_NAMES.get(code_l, code_l)
 
 
 def module2_ui(state: WizardState) -> None:
     st.header("Platforms and priorities")
 
-    platforms = ["fb", "ig", "li", "yt"]
+    platforms = [
+        "fb", "ig", "li", "yt", "tt", "pt", "tw", "sn", "rd",
+        "go_search", "go_display", "go_pmax",
+    ]
+
+    # Default to previously-selected platforms on rollback so the user
+    # doesn't have to re-pick them.
+    prior_active = [p for p in (state.active_platforms or []) if p in platforms]
     selected_platforms = st.multiselect(
         "Choose one or more platforms:",
         options=platforms,
-        format_func=lambda p: PLATFORM_NAMES.get(str(p).lower(), str(p)),
+        default=prior_active,
+        format_func=lambda p: _platform_display_name(state, str(p)),
     )
 
     priorities_input: Dict[str, Dict[str, Optional[str]]] = {}
     is_valid = True
 
-    for p in selected_platforms:
-        platform_name = PLATFORM_NAMES.get(p, p)
-        st.subheader(platform_name)
-
-        p1_key = f"{p}_p1"
-        p2_key = f"{p}_p2"
-
-        p1 = st.selectbox(
-            f"Priority 1 objective for {platform_name}",
-            options=[None] + list(state.valid_goals),
-            format_func=lambda x: {
-                None: "(none)",
-                GOAL_AW: "Awareness",
-                GOAL_EN: "Engagement",
-                GOAL_WT: "Website Traffic",
-                GOAL_LG: "Lead Generation",
-            }.get(x, str(x)),
-            key=p1_key,
+    if selected_platforms:
+        st.markdown("### Set objective priorities per platform")
+        st.caption(
+            "Each platform must have a Priority 1 objective; Priority 2 "
+            "is optional.  Priorities determine which objectives the "
+            "platform competes in inside the LP."
         )
 
-        allowed_p2_options = [None] + [g for g in state.valid_goals if g != p1]
+    # Compact grid: 2 platforms per row instead of one column per platform.
+    # On a typical screen this halves the vertical scroll for a 6-platform
+    # plan and lets the user see most/all selections at once.
+    goal_options = [None] + list(state.valid_goals)
+    goal_format = lambda x: {
+        None: "(none)",
+        GOAL_AW: "Awareness",
+        GOAL_EN: "Engagement",
+        GOAL_WT: "Website Traffic",
+        GOAL_LG: "Lead Generation",
+    }.get(x, str(x))
 
-        current_p2 = st.session_state.get(p2_key, None)
-        if current_p2 == p1 and current_p2 is not None:
-            st.session_state[p2_key] = None
-            current_p2 = None
+    for i in range(0, len(selected_platforms), 2):
+        cols = st.columns(2, gap="large")
+        for j, p in enumerate(selected_platforms[i:i + 2]):
+            platform_name = _platform_display_name(state, p)
+            with cols[j]:
+                st.markdown(f"**{platform_name}**")
+                p1_key = f"{p}_p1"
+                p2_key = f"{p}_p2"
 
-        p2 = st.selectbox(
-            f"Priority 2 objective for {platform_name}",
-            options=allowed_p2_options,
-            format_func=lambda x: {
-                None: "(none)",
-                GOAL_AW: "Awareness",
-                GOAL_EN: "Engagement",
-                GOAL_WT: "Website Traffic",
-                GOAL_LG: "Lead Generation",
-            }.get(x, str(x)),
-            key=p2_key,
-        )
+                # Defensive cleanup: if the user went back to Module 1 and
+                # removed a goal, the cached priority for this platform may
+                # now reference a removed goal.
+                if st.session_state.get(p1_key) not in goal_options:
+                    st.session_state[p1_key] = None
 
-        if p2 is not None and p1 is None:
-            is_valid = False
-            st.error("Priority 2 cannot be set without Priority 1.")
+                p1 = st.selectbox(
+                    "Priority 1",
+                    options=goal_options,
+                    format_func=goal_format,
+                    key=p1_key,
+                )
 
-        if p1 is not None and p2 is not None and p1 == p2:
-            is_valid = False
-            st.error("Priority 1 and Priority 2 must be different.")
+                allowed_p2 = [None] + [g for g in state.valid_goals if g != p1]
+                if st.session_state.get(p2_key) == p1 and p1 is not None:
+                    st.session_state[p2_key] = None
+                if st.session_state.get(p2_key) not in allowed_p2:
+                    st.session_state[p2_key] = None
 
-        if len(state.valid_goals) == 1 and p2 is not None:
-            is_valid = False
-            st.error("Priority 2 cannot be set when there is only one selected objective.")
+                p2 = st.selectbox(
+                    "Priority 2 (optional)",
+                    options=allowed_p2,
+                    format_func=goal_format,
+                    key=p2_key,
+                )
 
-        priorities_input[p] = {"priority_1": p1, "priority_2": p2}
+                if p2 is not None and p1 is None:
+                    is_valid = False
+                    st.error("Priority 2 needs Priority 1.")
+                if p1 is not None and p2 is not None and p1 == p2:
+                    is_valid = False
+                    st.error("Priorities must differ.")
+                if len(state.valid_goals) == 1 and p2 is not None:
+                    is_valid = False
+                    st.error("Only one objective selected.")
 
-    if st.button("Continue", disabled=(not selected_platforms) or (not is_valid)):
+                priorities_input[p] = {"priority_1": p1, "priority_2": p2}
+
+    if st.button("Continue", disabled=(not selected_platforms) or (not is_valid),
+                 type="primary"):
         try:
             run_module2(state, selected_platforms, priorities_input)
             safe_rerun()
-        except Exception:
-            st.error("Please review your selections and try again.")
+        except Exception as e:
+            st.error(f"Could not finalise Module 2: {e}")
 
 
 def main() -> None:
@@ -1241,6 +2121,8 @@ def main() -> None:
     initialise_state()
 
     state: WizardState = st.session_state["wizard_state"]
+    _render_sidebar(state)
+
     if state.current_step == 1:
         module1_ui(state)
         return

@@ -1,5 +1,7 @@
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Set
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import math
 
 from core.wizard_state import (
@@ -8,11 +10,20 @@ from core.wizard_state import (
     GOAL_EN,
     GOAL_WT,
     GOAL_LG,
+    ALLOWED_CURRENCIES,
+    DEFAULT_CURRENCY,
     FlowStateError,
 )
 
 
 ALLOWED_OBJECTIVES: Set[str] = {GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG}
+
+# Currency symbol → ISO code.  Used to auto-detect currency from budget strings like "£1,200".
+CURRENCY_SYMBOL_TO_CODE: Dict[str, str] = {"£": "GBP", "$": "USD", "€": "EUR"}
+
+# Hard ceiling on total budget. 1e9 covers any plausible single-campaign budget
+# in major currencies; values above this are almost certainly a typo or unit error.
+MAX_REASONABLE_BUDGET = 1e9
 
 OBJECTIVE_DEFINITIONS: List[Dict[str, str]] = [
     {
@@ -46,6 +57,19 @@ class Module1ValidationError(Exception):
 class Module1Result:
     selected_objectives: List[str]
     total_budget: float
+    currency: str = DEFAULT_CURRENCY
+    campaign_duration_days: Optional[int] = None
+    # £ value the user assigns to one unit of each goal's KPI.
+    # e.g. {"lg": 100.0, "aw": 0.001} = a lead is worth £100, an impression £0.001.
+    goal_value_per_unit: Dict[str, float] = field(default_factory=dict)
+    # Fraction of total_budget held back from optimisation as a test-and-learn
+    # reserve.  0.10 = "reserve 10% for new audiences / creative tests"; the LP
+    # in Module 5 only optimises the remaining 90%.
+    test_and_learn_pct: float = 0.0
+    # Per-goal seasonality multipliers, applied to productivities before LP.
+    # >1 = expected to outperform historical (cheaper auctions);
+    # <1 = expected to underperform (e.g. December CPM inflation).
+    seasonality_index: Dict[str, float] = field(default_factory=dict)
 
 
 def _normalise_objectives(raw_objectives: Sequence[str]) -> List[str]:
@@ -78,45 +102,273 @@ def _validate_objectives(selected_objectives: Sequence[str]) -> None:
         )
 
 
-def _parse_budget(raw_budget: Any) -> float:
+def _parse_numeric_string(value: str) -> float:
+    """Parse a budget string with EU-style decimal/thousands support.
+
+    Examples:
+        "1200"      → 1200.0
+        "1,200"     → 1200.0  (comma = thousands separator, 3 digits after)
+        "1,50"      → 1.5     (comma = decimal separator, 2 digits after)
+        "1,200.50"  → 1200.50 (comma = thousands, period = decimal)
+        "1.200,50"  → 1200.50 (period = thousands, comma = decimal)
+    """
+    # Standard form (no ambiguity)
+    try:
+        return float(value)
+    except ValueError:
+        pass
+
+    # Both comma and period present
+    if "," in value and "." in value:
+        last_comma = value.rfind(",")
+        last_period = value.rfind(".")
+        if last_comma > last_period:
+            # "1.234,56" — period is thousands, comma is decimal
+            cleaned = value.replace(".", "").replace(",", ".")
+        else:
+            # "1,234.56" — comma is thousands, period is decimal
+            cleaned = value.replace(",", "")
+        return float(cleaned)
+
+    # Only comma
+    if "," in value:
+        after = value.rsplit(",", 1)[1]
+        if len(after) <= 2:
+            # "1,50" or "1,5" — comma is decimal separator
+            cleaned = value.replace(",", ".")
+        else:
+            # "1,200" or "1,200,000" — comma is thousands separator
+            cleaned = value.replace(",", "")
+        return float(cleaned)
+
+    raise ValueError(f"Cannot parse numeric value: {value!r}")
+
+
+def _parse_budget(raw_budget: Any) -> Tuple[float, Optional[str]]:
+    """Parse budget input.  Returns (numeric_value, detected_currency_code_or_None)."""
     if isinstance(raw_budget, (int, float)):
-        numeric_budget = float(raw_budget)
-    else:
-        if raw_budget is None:
+        numeric = float(raw_budget)
+        if math.isnan(numeric) or math.isinf(numeric):
             raise Module1ValidationError(
-                "Please enter your total budget as a valid monetary amount "
-                "(for example: 1200 or £1,200.50)."
+                "Your total budget must be a valid finite number."
             )
+        return numeric, None
 
-        value = str(raw_budget).strip()
+    if raw_budget is None:
+        raise Module1ValidationError(
+            "Please enter your total budget as a valid monetary amount "
+            "(for example: 1200 or 1,200.50; currency symbols £, $, € are accepted)."
+        )
 
-        if not value:
-            raise Module1ValidationError(
-                "Please enter your total budget as a valid monetary amount "
-                "(for example: 1200 or £1,200.50)."
-            )
+    value = str(raw_budget).strip()
+    if not value:
+        raise Module1ValidationError(
+            "Please enter your total budget as a valid monetary amount "
+            "(for example: 1200 or 1,200.50; currency symbols £, $, € are accepted)."
+        )
 
-        for symbol in ("£", "$", "€"):
-            if value.startswith(symbol):
-                value = value[len(symbol):].strip()
-                break
+    # Strip leading currency symbol and remember which one
+    detected_currency: Optional[str] = None
+    for symbol, code in CURRENCY_SYMBOL_TO_CODE.items():
+        if value.startswith(symbol):
+            value = value[len(symbol):].strip()
+            detected_currency = code
+            break
 
-        value = value.replace(",", "")
+    try:
+        numeric = _parse_numeric_string(value)
+    except ValueError:
+        raise Module1ValidationError(
+            "Please enter your total budget as a valid monetary amount "
+            "(for example: 1200 or 1,200.50; currency symbols £, $, € are accepted)."
+        )
 
-        try:
-            numeric_budget = float(value)
-        except ValueError:
-            raise Module1ValidationError(
-                "Please enter your total budget as a valid monetary amount "
-                "(for example: 1200 or £1,200.50)."
-            )
-
-    if math.isnan(numeric_budget) or math.isinf(numeric_budget):
+    if math.isnan(numeric) or math.isinf(numeric):
         raise Module1ValidationError(
             "Your total budget must be a valid finite number."
         )
 
-    return numeric_budget
+    return numeric, detected_currency
+
+
+def _parse_currency(raw_currency: Any, fallback: Optional[str] = None) -> str:
+    """Resolve a currency code from user input.
+
+    Accepts ISO codes (GBP, USD, EUR) or currency symbols (£, $, €).
+    Falls back to *fallback* (e.g. auto-detected from the budget string) or
+    DEFAULT_CURRENCY if both are absent or unrecognised.
+    """
+    if raw_currency is None:
+        return fallback or DEFAULT_CURRENCY
+
+    token = str(raw_currency).strip().upper()
+    if token in ALLOWED_CURRENCIES:
+        return token
+    # Accept the symbol form too (£ → GBP etc.)
+    for symbol, code in CURRENCY_SYMBOL_TO_CODE.items():
+        if token == symbol:
+            return code
+    # Unknown input → fall back silently
+    return fallback or DEFAULT_CURRENCY
+
+
+def _parse_duration(raw_duration: Any) -> Optional[int]:
+    """Parse campaign duration in days.  Returns None if input is absent or invalid."""
+    if raw_duration is None:
+        return None
+    try:
+        d = int(float(str(raw_duration).strip()))
+    except (TypeError, ValueError):
+        return None
+    return d if d > 0 else None
+
+
+def _parse_goal_values(
+    raw_values: Any,
+    valid_objectives: Sequence[str],
+) -> Dict[str, float]:
+    """Parse a {goal_code: £-value-per-unit} mapping.
+
+    Keys not in *valid_objectives* are dropped.  Values must be positive
+    finite numbers (£ per one unit of the goal's KPI — e.g. £100 per lead,
+    £0.001 per impression).
+    """
+    if raw_values is None:
+        return {}
+    if not isinstance(raw_values, dict):
+        raise Module1ValidationError(
+            "goal_value_per_unit must be a dict like {'lg': 100.0, 'aw': 0.001}."
+        )
+
+    allowed = {str(g).strip().lower() for g in valid_objectives}
+    cleaned: Dict[str, float] = {}
+    for g, v in raw_values.items():
+        gk = str(g).strip().lower()
+        if gk not in allowed:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            raise Module1ValidationError(
+                f"goal_value_per_unit[{gk!r}] must be numeric, got {v!r}."
+            )
+        if math.isnan(fv) or math.isinf(fv):
+            raise Module1ValidationError(
+                f"goal_value_per_unit[{gk!r}] must be finite."
+            )
+        if fv < 0:
+            raise Module1ValidationError(
+                f"goal_value_per_unit[{gk!r}] must be non-negative, got {fv}."
+            )
+        if fv > 0:
+            cleaned[gk] = fv
+    return cleaned
+
+
+def _parse_test_and_learn_pct(raw_value: Any) -> float:
+    """Parse a test-and-learn carve-out fraction.
+
+    Accepts:
+      - None or empty string → 0.0
+      - A fraction in [0, 0.5) as int/float/numeric string (e.g. 0.10)
+      - A percentage string with explicit '%' suffix (e.g. "10%", "12.5 %")
+
+    Bare numbers (whether int, float, or str) are always treated as fractions
+    so the parser is type-consistent.  Values ≥ 0.5 are rejected — both to
+    prevent accidental "10" meaning "10%" interpretation and to keep the LP
+    with something meaningful to allocate.
+    """
+    if raw_value is None:
+        return 0.0
+
+    is_percentage_form = False
+    if isinstance(raw_value, str):
+        token = raw_value.strip()
+        if not token:
+            return 0.0
+        if token.endswith("%"):
+            is_percentage_form = True
+            token = token[:-1].strip()
+        try:
+            num = float(token)
+        except ValueError:
+            raise Module1ValidationError(
+                f"Test-and-learn carve-out must be a fraction like 0.10 or a "
+                f"percentage like '15%', got {raw_value!r}."
+            )
+    else:
+        try:
+            num = float(raw_value)
+        except (TypeError, ValueError):
+            raise Module1ValidationError(
+                f"Test-and-learn carve-out must be numeric, got {raw_value!r}."
+            )
+
+    if math.isnan(num) or math.isinf(num):
+        raise Module1ValidationError("Test-and-learn carve-out must be finite.")
+
+    if is_percentage_form:
+        num = num / 100.0
+
+    if num < 0.0:
+        raise Module1ValidationError(
+            f"Test-and-learn carve-out must be non-negative, got {num}."
+        )
+    if num >= 0.5:
+        raise Module1ValidationError(
+            f"Test-and-learn carve-out must be below 50% (got {num*100:.1f}%). "
+            f"Pass a fraction (0.15) or a string with '%' suffix ('15%'). "
+            f"A 10–15% reserve is standard practice."
+        )
+    return num
+
+
+def _parse_seasonality_index(
+    raw_value: Any,
+    valid_objectives: Sequence[str],
+) -> Dict[str, float]:
+    """Parse a {goal_code: multiplier} mapping for seasonality adjustment.
+
+    Each multiplier represents expected productivity vs. historical: 1.0 = same,
+    >1 = better (cheaper auctions), <1 = worse (more expensive auctions).
+    Keys not in *valid_objectives* are dropped.  Values must be in (0.1, 10.0]
+    — anything beyond that suggests a percentage was entered instead of a
+    multiplier (e.g. "250%" → 250.0 instead of 2.5).
+    """
+    if raw_value is None:
+        return {}
+    if not isinstance(raw_value, dict):
+        raise Module1ValidationError(
+            "seasonality_index must be a dict like {'aw': 0.4, 'lg': 1.1}."
+        )
+
+    allowed = {str(g).strip().lower() for g in valid_objectives}
+    cleaned: Dict[str, float] = {}
+    for g, v in raw_value.items():
+        gk = str(g).strip().lower()
+        if gk not in allowed:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            raise Module1ValidationError(
+                f"seasonality_index[{gk!r}] must be numeric, got {v!r}."
+            )
+        if math.isnan(fv) or math.isinf(fv):
+            raise Module1ValidationError(
+                f"seasonality_index[{gk!r}] must be finite."
+            )
+        if fv <= 0.0:
+            raise Module1ValidationError(
+                f"seasonality_index[{gk!r}] must be positive, got {fv}."
+            )
+        if fv > 10.0 or fv < 0.1:
+            raise Module1ValidationError(
+                f"seasonality_index[{gk!r}]={fv} is implausible (expected ~0.1–10×). "
+                f"Did you enter a percentage instead of a multiplier?"
+            )
+        cleaned[gk] = fv
+    return cleaned
 
 
 def _validate_budget(numeric_budget: float) -> None:
@@ -124,21 +376,43 @@ def _validate_budget(numeric_budget: float) -> None:
         raise Module1ValidationError(
             "Your total budget must be greater than 1 monetary unit."
         )
+    if numeric_budget > MAX_REASONABLE_BUDGET:
+        raise Module1ValidationError(
+            f"Your total budget {numeric_budget:.0f} exceeds the sanity ceiling "
+            f"({MAX_REASONABLE_BUDGET:.0f}). Please check the value — this is "
+            f"likely a typo or a unit/scale error."
+        )
 
 
 def run_module_1(
     raw_objectives: Sequence[str],
     raw_budget: Any,
+    raw_currency: Any = None,
+    raw_duration_days: Any = None,
+    raw_goal_values: Any = None,
+    raw_test_and_learn_pct: Any = None,
+    raw_seasonality_index: Any = None,
 ) -> Module1Result:
     normalised_objectives = _normalise_objectives(raw_objectives)
     _validate_objectives(normalised_objectives)
 
-    numeric_budget = _parse_budget(raw_budget)
+    numeric_budget, detected_currency = _parse_budget(raw_budget)
     _validate_budget(numeric_budget)
+
+    currency = _parse_currency(raw_currency, fallback=detected_currency)
+    campaign_duration_days = _parse_duration(raw_duration_days)
+    goal_values = _parse_goal_values(raw_goal_values, normalised_objectives)
+    test_and_learn_pct = _parse_test_and_learn_pct(raw_test_and_learn_pct)
+    seasonality_index = _parse_seasonality_index(raw_seasonality_index, normalised_objectives)
 
     return Module1Result(
         selected_objectives=normalised_objectives,
         total_budget=numeric_budget,
+        currency=currency,
+        campaign_duration_days=campaign_duration_days,
+        goal_value_per_unit=goal_values,
+        test_and_learn_pct=test_and_learn_pct,
+        seasonality_index=seasonality_index,
     )
 
 
@@ -146,6 +420,11 @@ def complete_module1_and_advance(
     state: WizardState,
     raw_objectives: Sequence[str],
     raw_budget: Any,
+    raw_currency: Any = None,
+    raw_duration_days: Any = None,
+    raw_goal_values: Any = None,
+    raw_test_and_learn_pct: Any = None,
+    raw_seasonality_index: Any = None,
 ) -> WizardState:
     if state.module1_finalised:
         raise FlowStateError(
@@ -158,11 +437,24 @@ def complete_module1_and_advance(
             "Module 1 can only be completed when the wizard is at step 1."
         )
 
-    result = run_module_1(raw_objectives, raw_budget)
+    result = run_module_1(
+        raw_objectives,
+        raw_budget,
+        raw_currency,
+        raw_duration_days,
+        raw_goal_values,
+        raw_test_and_learn_pct,
+        raw_seasonality_index,
+    )
 
     state.complete_module1_and_advance(
         valid_goals=result.selected_objectives,
         total_budget=result.total_budget,
+        currency=result.currency,
+        campaign_duration_days=result.campaign_duration_days,
+        goal_value_per_unit=result.goal_value_per_unit,
+        test_and_learn_pct=result.test_and_learn_pct,
+        seasonality_index=result.seasonality_index,
     )
 
     return state
@@ -198,11 +490,21 @@ def _present_module_1_cli() -> None:
 
     raw_budget = input(
         "Please enter your total budget "
-        "(for example: 1200 or £1,200.50): "
+        "(for example: 1200 or 1,200.50; currency symbols £, $, € accepted): "
     )
 
+    raw_currency = input(
+        "Currency code (GBP/USD/EUR, or leave blank to auto-detect from budget symbol): "
+    ).strip() or None
+
+    raw_duration = input(
+        "Campaign duration in days (positive integer, or leave blank): "
+    ).strip() or None
+
     try:
-        complete_module1_and_advance(state, raw_objectives, raw_budget)
+        complete_module1_and_advance(
+            state, raw_objectives, raw_budget, raw_currency, raw_duration
+        )
     except (Module1ValidationError, FlowStateError) as e:
         print("\nError:", str(e))
         return
@@ -212,6 +514,8 @@ def _present_module_1_cli() -> None:
     print("Module 1 finalised:", state.module1_finalised)
     print("Snapshot valid_goals:", state.valid_goals)
     print("Snapshot total_budget:", state.total_budget)
+    print("Currency:", state.currency)
+    print("Campaign duration:", state.campaign_duration_days)
 
 
 if __name__ == "__main__":
