@@ -124,6 +124,14 @@ class Module5LPResult:
     estimated_kpi_per_platform_goal: Dict[str, Dict[str, float]]
     objective_value_raw: float = 0.0
     effective_budget_cap: float = 0.0
+    # Per-cell bracket caps inside the LP are computed as
+    # ``frac × cell_bracket_cap_basis`` for each (frac, yield) in
+    # YIELD_BRACKETS. Anchored to base_lp_cap (post-carve-out, pre-scenario)
+    # so brackets kick in at the same £ thresholds across all scenarios,
+    # which is what gives "you spend 12% less in conservative" its meaning.
+    # Exposed here so Module 7 can score allocations on the same schedule
+    # the LP used.
+    cell_bracket_cap_basis: float = 0.0
     # M4's cost-per-unit-KPI table, attached for reporting/UI. Not used in the LP
     # itself (the LP needs yields, which are the reciprocals); exposed here so
     # downstream modules and the UI can present both views.
@@ -1021,6 +1029,7 @@ def _solve_single_lp(
         estimated_kpi_per_platform_goal=estimated_kpi_per_platform_goal,
         objective_value_raw=objective_value_raw,
         effective_budget_cap=budget_cap,
+        cell_bracket_cap_basis=total_budget,
         cpu_per_goal=cpu_per_goal or {},
         binding_constraints=binding,
         shadow_prices=shadow_prices,
