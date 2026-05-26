@@ -932,6 +932,7 @@ def module3_ui(state: WizardState) -> None:
                 else:
                     unknown = parsed_all.pop("__unknown_sheets__", None)
                     filled_count = 0
+                    empty_platforms: List[str] = []
                     for p_code, parsed in parsed_all.items():
                         if "error" in parsed:
                             st.warning(
@@ -939,12 +940,39 @@ def module3_ui(state: WizardState) -> None:
                                 f"{parsed['error']}"
                             )
                             continue
+                        kpis_found = parsed.get("kpis") or {}
+                        missing = parsed.get("missing_kpis") or []
+                        if not kpis_found:
+                            # Sheet was present but no KPIs were extracted.
+                            # Without this surface, the form falls back to
+                            # default values and the LP would silently produce
+                            # ratio = 1.0 for every cell.
+                            empty_platforms.append(
+                                PLATFORM_NAMES.get(p_code, p_code)
+                            )
+                            continue
                         st.session_state[f"_csv_defaults_{p_code}"] = parsed
                         filled_count += 1
+                        if missing:
+                            st.warning(
+                                f"{PLATFORM_NAMES.get(p_code, p_code)}: "
+                                f"couldn't find columns for "
+                                f"{', '.join(missing)}. Enter them manually "
+                                f"below if you have them."
+                            )
                     if filled_count > 0:
                         st.success(
                             f"Pre-filled {filled_count} platform"
                             f"{'s' if filled_count != 1 else ''} from the workbook."
+                        )
+                    if empty_platforms:
+                        st.error(
+                            "No KPI values were parsed for: "
+                            + ", ".join(empty_platforms)
+                            + ". Check that you filled in the data rows below "
+                            "the header on each sheet, then re-upload — "
+                            "otherwise the optimiser will see only the default "
+                            "placeholder values."
                         )
                     if unknown:
                         st.info(
@@ -1159,14 +1187,20 @@ def module3_ui(state: WizardState) -> None:
                 else:
                     # Count KPIs: total units over the historical window.
                     # Decimals are accepted (some platforms report fractional values).
-                    default_val = float(csv_val) if csv_val else 1000.0
+                    # Default 0.0 (not a placeholder positive value) so the
+                    # "Run optimisation" button stays disabled until the user
+                    # has entered at least one real KPI per platform — this
+                    # prevents the silent-failure path where every cell would
+                    # otherwise come out with productivity 1.0 per pound.
+                    default_val = float(csv_val) if csv_val else 0.0
                     val = st.number_input(
                         f"{goal_name} · {label} (total over window)",
                         min_value=0.0, value=default_val, step=10.0, format="%.2f",
                         key=f"{platform}_{var}",
                         help=f"Total {label.lower()} recorded during the historical window. "
                              f"Decimals OK (e.g. 1500.5 leads if you're averaging across multiple ad sets)."
-                             + (" Pre-filled from CSV." if csv_val else ""),
+                             + (" Pre-filled from CSV." if csv_val else
+                                " Leave at 0 if this KPI was not tracked in your window."),
                     )
                     kpi_values[var] = float(val)
 

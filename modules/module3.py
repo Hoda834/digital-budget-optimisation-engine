@@ -346,11 +346,22 @@ def finalise_module3_from_inputs(
                         v = v / 100.0
                     else:
                         raise ValueError(f"Rate KPI {var} must be in [0,1] or [0,100], got {raw_value}.")
-                if v <= 0.0:
-                    raise ValueError(f"Rate KPI {var} must be greater than zero.")
+                if v < 0.0:
+                    raise ValueError(f"Rate KPI {var} must be zero or greater, got {raw_value}.")
+                if v == 0.0:
+                    # Zero rate = no signal for this KPI in this window. Drop it
+                    # so downstream layers treat it as absent rather than as a
+                    # data point claiming zero productivity.
+                    continue
             else:
-                if v <= 0:
-                    raise ValueError(f"Count KPI {var} must be greater than zero.")
+                if v < 0:
+                    raise ValueError(f"Count KPI {var} must be zero or greater, got {raw_value}.")
+                if v == 0:
+                    # Zero count = the platform did not track this conversion in
+                    # this window (e.g. a lead-only campaign with no purchase
+                    # pixel). Drop from validated_kpis so the LP sees this cell
+                    # as having no data, not as having zero productivity.
+                    continue
             validated_kpis[var] = v
 
         # Optional multi-period observations for variance-based confidence

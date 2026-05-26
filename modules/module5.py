@@ -1100,14 +1100,17 @@ def run_module5_lp_scenarios(input_data: Module5LPInput) -> Module5ScenarioBundl
                     gm = 1.0
                 adjusted_r_pg[p][g] = max(0.0, val * gm)
 
-        # Apply the carve-out per scenario so the invariant holds in every cell:
-        #   scenario_total = declared_total × scalar
+        # Apply the carve-out per scenario.  The scenario scalar shifts the
+        # plan's *target* spend up or down, but we cap the resulting total at
+        # the user's declared budget so the optimistic plan can never demand
+        # more money than the user said they have:
+        #   scenario_total = min(declared_total × scalar, declared_total)
         #   budget_cap     = scenario_total × (1 - tl_pct)
         #   reserve        = scenario_total × tl_pct
-        # which guarantees lp_used + reserve ≤ scenario_total for every scenario,
-        # including optimistic.  Without this, optimistic was spending the full
-        # scenario uplift PLUS the base reserve, exceeding the user's declared total.
-        scenario_total = input_data.total_budget * scalar_m
+        # Invariant: lp_used + reserve ≤ scenario_total ≤ declared_total in
+        # every scenario.
+        uncapped_scenario_total = input_data.total_budget * scalar_m
+        scenario_total = min(uncapped_scenario_total, input_data.total_budget)
         budget_cap = scenario_total * (1.0 - tl_pct)
         scenario_reserve = scenario_total - budget_cap
 
