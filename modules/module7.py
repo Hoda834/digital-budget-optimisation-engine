@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Tuple
 
 from core.wizard_state import WizardState
 from core.kpi_config import KIND_RATE
-from modules.module5 import Module5LPResult, Module5ScenarioBundle
+from modules.module5 import Module5LPResult, Module5ScenarioBundle, YIELD_BRACKETS
 from modules.module6 import Module6Result
 
 
@@ -419,14 +419,62 @@ def _objective_scale(lp: Module5LPResult) -> float:
 
 
 def _estimate_objective_value(allocation: Dict[str, Dict[str, float]], lp_ref: Module5LPResult) -> float:
+    """Score an allocation using the same yield-bracket schedule the LP uses.
+
+    For each (platform, goal) cell, spend is greedily filled into the
+    bracket schedule from ``module5.YIELD_BRACKETS`` — bracket caps are a
+    fraction of the LP's effective budget cap, yields multiply the cell's
+    productivity score.  Scoring Plan A's own allocation through this
+    function reproduces the LP's objective_value to numerical precision,
+    so Plan A and Plan B (which is built post-LP by redistributing budget)
+    are now compared on the same diminishing-returns curve instead of
+    Plan A reading the bracket-aware LP value and Plan B being scored by
+    a flat linear estimator.
+    """
     scores = _score_pg(lp_ref)
     scale = _objective_scale(lp_ref)
+
+    # Bracket caps in the LP are anchored to base_lp_cap (post-carve-out,
+    # pre-scenario), NOT to the scenario-scaled effective_budget_cap — the
+    # bracket thresholds stay constant across scenarios on purpose. Use that
+    # exact basis here so scoring matches the LP objective.
+    cell_cap_basis = _f(getattr(lp_ref, "cell_bracket_cap_basis", 0.0))
+    if cell_cap_basis <= 0:
+        cell_cap_basis = _f(getattr(lp_ref, "effective_budget_cap", 0.0))
+    if cell_cap_basis <= 0:
+        cell_cap_basis = _f(getattr(lp_ref, "total_budget_used", 0.0))
+    if cell_cap_basis <= 0:
+        # No basis for brackets — fall back to flat linear scoring rather
+        # than divide-by-zero. This branch is only hit on pathological
+        # results where the LP recorded no budget at all.
+        raw = 0.0
+        for p, gmap in allocation.items():
+            pk = _k(p)
+            for g, b in (gmap or {}).items():
+                gk = _k(g)
+                raw += max(0.0, _f(b)) * max(0.0, _f((scores.get(pk, {}) or {}).get(gk, 0.0)))
+        return raw * scale
+
+    bracket_caps = [frac * cell_cap_basis for frac, _y in YIELD_BRACKETS]
+    bracket_yields = [y for _frac, y in YIELD_BRACKETS]
+
     raw = 0.0
     for p, gmap in allocation.items():
         pk = _k(p)
+        cell_scores = scores.get(pk, {}) or {}
         for g, b in (gmap or {}).items():
             gk = _k(g)
-            raw += max(0.0, _f(b)) * max(0.0, _f((scores.get(pk, {}) or {}).get(gk, 0.0)))
+            spend = max(0.0, _f(b))
+            base_score = max(0.0, _f(cell_scores.get(gk, 0.0)))
+            if spend <= 0.0 or base_score <= 0.0:
+                continue
+            remaining = spend
+            for cap, ym in zip(bracket_caps, bracket_yields):
+                fill = remaining if remaining < cap else cap
+                raw += fill * base_score * ym
+                remaining -= fill
+                if remaining <= 0.0:
+                    break
     return raw * scale
 
 
@@ -452,9 +500,14 @@ def _plan_a(lp: Module5LPResult) -> PlanOutput:
         for g, v in (gmap or {}).items():
             alloc[pk][_k(g)] = max(0.0, _f(v))
 
+    # Score Plan A through the same bracket-aware estimator as Plan B so
+    # the trade-off in _plan_b_risk_managed is apples-to-apples. Reading
+    # lp.objective_value directly here would be bracket-aware too, but mixing
+    # the two formulas produced cases where Plan B's redistributed-to-bracket-1
+    # allocation appeared to beat Plan A's bracket-spanning LP optimum.
     return PlanOutput(
         allocation=alloc,
-        objective_value_estimate=_f(getattr(lp, "objective_value", 0.0)),
+        objective_value_estimate=_estimate_objective_value(alloc, lp),
         kpi_focus=focus,
         tradeoff_percent=None,
     )
