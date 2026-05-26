@@ -15,7 +15,7 @@ from modules.module1 import (
     complete_module1_and_advance as finalise_module1,
     Module1ValidationError,
 )
-from core.kpi_config import KPI_CONFIG
+from core.kpi_config import KPI_CONFIG, KIND_RATE
 from core.csv_import import (
     parse_platform_csv,
     SUPPORTED_PLATFORMS as CSV_SUPPORTED,
@@ -878,6 +878,39 @@ def module3_ui(state: WizardState) -> None:
             "ratios as upper bounds, not facts."
         )
 
+    # Push parsed upload values into the form's widget session_state keys.
+    # Streamlit's number_input/slider ignore the `value=` argument once the
+    # widget has rendered with a given key, so without this the form keeps
+    # showing 0 / 1000 even after a successful upload.
+    def _apply_parsed_to_widgets(p_code: str, parsed: Dict[str, Any]) -> None:
+        b = parsed.get("budget")
+        if b is not None:
+            try:
+                st.session_state[f"budget_{p_code}"] = float(b)
+            except (TypeError, ValueError):
+                pass
+        hd = parsed.get("historical_days")
+        if hd is not None:
+            try:
+                st.session_state[f"hist_days_{p_code}"] = int(hd)
+            except (TypeError, ValueError):
+                pass
+        for _row in KPI_CONFIG:
+            if _row["platform"] != p_code:
+                continue
+            _var = _row["var"]
+            _val = (parsed.get("kpis") or {}).get(_var)
+            if _val is None:
+                continue
+            try:
+                _fv = float(_val)
+            except (TypeError, ValueError):
+                continue
+            if _row.get("kind") == KIND_RATE:
+                st.session_state[f"{p_code}_{_var}"] = max(0.0, min(100.0, _fv * 100.0))
+            else:
+                st.session_state[f"{p_code}_{_var}"] = _fv
+
     # ── Top-of-step unified template download + upload ─────────────────────
     # One workbook covers every platform the user selected in Module 2.
     # Each sheet is one platform with the columns its parser recognises +
@@ -923,6 +956,14 @@ def module3_ui(state: WizardState) -> None:
                 ),
             )
             if unified_uploaded is not None:
+                upload_token = (
+                    f"{getattr(unified_uploaded, 'file_id', '')}"
+                    f"|{getattr(unified_uploaded, 'name', '')}"
+                    f"|{getattr(unified_uploaded, 'size', '')}"
+                )
+                already_applied = (
+                    st.session_state.get("_unified_upload_applied_token") == upload_token
+                )
                 parsed_all = parse_unified_template_xlsx(
                     unified_uploaded.getvalue(),
                     platform_display_names=PLATFORM_NAMES,
@@ -933,6 +974,7 @@ def module3_ui(state: WizardState) -> None:
                     unknown = parsed_all.pop("__unknown_sheets__", None)
                     filled_count = 0
                     empty_platforms: List[str] = []
+                    applied_any = False
                     for p_code, parsed in parsed_all.items():
                         if "error" in parsed:
                             st.warning(
@@ -952,6 +994,9 @@ def module3_ui(state: WizardState) -> None:
                             )
                             continue
                         st.session_state[f"_csv_defaults_{p_code}"] = parsed
+                        if not already_applied:
+                            _apply_parsed_to_widgets(p_code, parsed)
+                            applied_any = True
                         filled_count += 1
                         if missing:
                             st.warning(
@@ -960,6 +1005,9 @@ def module3_ui(state: WizardState) -> None:
                                 f"{', '.join(missing)}. Enter them manually "
                                 f"below if you have them."
                             )
+                    if applied_any:
+                        st.session_state["_unified_upload_applied_token"] = upload_token
+                        safe_rerun()
                     if filled_count > 0:
                         st.success(
                             f"Pre-filled {filled_count} platform"
@@ -1010,11 +1058,21 @@ def module3_ui(state: WizardState) -> None:
                          "Excel template at the top of this step.",
                 )
                 if uploaded is not None:
+                    csv_upload_token = (
+                        f"{getattr(uploaded, 'file_id', '')}"
+                        f"|{getattr(uploaded, 'name', '')}"
+                        f"|{getattr(uploaded, 'size', '')}"
+                    )
+                    csv_token_key = f"_csv_upload_applied_token_{platform}"
                     parsed = parse_platform_csv(uploaded.getvalue(), platform)
                     if "error" in parsed:
                         st.error(parsed["error"])
                     else:
                         st.session_state[csv_defaults_key] = parsed
+                        if st.session_state.get(csv_token_key) != csv_upload_token:
+                            _apply_parsed_to_widgets(platform, parsed)
+                            st.session_state[csv_token_key] = csv_upload_token
+                            safe_rerun()
                         matched = parsed.get("matched_columns", {})
                         if matched:
                             st.success(
