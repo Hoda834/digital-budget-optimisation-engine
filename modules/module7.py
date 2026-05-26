@@ -14,6 +14,14 @@ PLATFORM_NAMES: Dict[str, str] = {
     "ig": "Instagram",
     "li": "LinkedIn",
     "yt": "YouTube",
+    "tt": "TikTok",
+    "pt": "Pinterest",
+    "tw": "X (Twitter)",
+    "sn": "Snapchat",
+    "rd": "Reddit",
+    "go_search": "Google Search",
+    "go_display": "Google Display",
+    "go_pmax": "Google Performance Max",
 }
 
 GOAL_NAMES: Dict[str, str] = {

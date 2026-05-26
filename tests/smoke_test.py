@@ -172,11 +172,23 @@ def test_scenarios_produce_distinct_allocations() -> None:
         "Optimistic scenario should produce a different allocation from base."
     )
 
-    # Total spend should also differ because scenarios change the budget cap.
+    # Conservative is the only scenario that strictly reduces total spend.
+    # Optimistic is capped at the declared total budget (it cannot demand
+    # more money than the user said they have), so opti_used == base_used
+    # when the base already spends the full LP cap. The interesting
+    # difference between base and optimistic is in *allocation*, not total
+    # spend — that's already asserted above against _flatten().
     base_used = bundle.results_by_scenario["base"].total_budget_used
     cons_used = bundle.results_by_scenario["conservative"].total_budget_used
     opti_used = bundle.results_by_scenario["optimistic"].total_budget_used
-    assert cons_used < base_used < opti_used
+    declared_total = float(state.total_budget)
+    assert cons_used < base_used, "Conservative should spend less than base."
+    assert opti_used <= declared_total + 1e-6, (
+        "Optimistic must not exceed the declared total budget."
+    )
+    assert opti_used >= base_used - 1e-6, (
+        "Optimistic should spend at least as much as base."
+    )
 
 
 def test_rate_kpi_accepted_and_routed_through_r_pg() -> None:
@@ -555,23 +567,27 @@ def test_test_and_learn_carveout_reduces_lp_budget() -> None:
 
 
 def test_carveout_invariant_lp_used_plus_reserve_within_scenario_total() -> None:
-    """Across every scenario, lp_used + reserve must not exceed
-    declared_total × scenario_scalar. This is the contract that was broken
-    when the carve-out was applied before scenario scaling (optimistic
-    used to over-spend the declared total)."""
+    """Across every scenario, lp_used + reserve must not exceed the
+    scenario_total, which is now capped at the user's declared total budget
+    (the optimistic scenario can no longer demand more money than the user
+    said they have)."""
     state = _run_carveout_pipeline(carve_out_pct=0.12)
     declared_total = float(state.total_budget)
     bundle = state.module5_scenario_bundle
 
     for name, res in bundle.results_by_scenario.items():
         scalar = bundle.scenario_multipliers.get(name, 1.0)
-        scenario_total = declared_total * scalar
+        scenario_total = min(declared_total * scalar, declared_total)
         # reserve = scenario_total × tl_pct
         assert res.test_and_learn_reserve == pytest.approx(scenario_total * 0.12)
         # lp_used + reserve must not exceed scenario_total
         assert res.total_budget_used + res.test_and_learn_reserve <= scenario_total + 1e-6, (
             f"Scenario {name!r}: lp_used={res.total_budget_used:.2f} + "
             f"reserve={res.test_and_learn_reserve:.2f} exceeds scenario_total={scenario_total:.2f}."
+        )
+        # And the total must never exceed the user's declared budget.
+        assert res.total_budget_used + res.test_and_learn_reserve <= declared_total + 1e-6, (
+            f"Scenario {name!r}: total spend exceeds declared total budget."
         )
 
 

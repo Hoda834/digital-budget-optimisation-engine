@@ -271,22 +271,27 @@ class WizardState:
                     cleaned[str(s_name)][g] = fv
             self.scenario_goal_multipliers = cleaned
         else:
-            # Convention: multiplier > 1 means the scenario expects the goal to outperform
-            # its base productivity; < 1 means it underperforms. Optimistic raises
-            # downstream/conversion goals (LG, WT); conservative raises upper-funnel
-            # goals (AW, EN) since reach is more predictable than conversion.
+            # Convention: multiplier > 1 means the scenario expects the goal to
+            # outperform its base productivity; < 1 means it underperforms.
+            # Conservative < 1.0 for every goal, optimistic > 1.0 for every
+            # goal — this matches what users read into the labels.
+            #
+            # The asymmetry between upper-funnel (AW, EN) and downstream
+            # (WT, LG) goals is captured by the *magnitude* of the spread,
+            # not its direction: reach is more predictable than conversion,
+            # so LG/WT carry a wider uncertainty band than AW/EN.
             base_map = {g: 1.0 for g in self.valid_goals}
             conservative_map = {g: 1.0 for g in self.valid_goals}
             optimistic_map = {g: 1.0 for g in self.valid_goals}
 
             if GOAL_AW in self.valid_goals:
-                conservative_map[GOAL_AW] = 1.05
-                optimistic_map[GOAL_AW] = 0.95
+                conservative_map[GOAL_AW] = 0.95
+                optimistic_map[GOAL_AW] = 1.05
             if GOAL_EN in self.valid_goals:
-                conservative_map[GOAL_EN] = 1.05
-                optimistic_map[GOAL_EN] = 0.95
+                conservative_map[GOAL_EN] = 0.95
+                optimistic_map[GOAL_EN] = 1.05
             if GOAL_WT in self.valid_goals:
-                conservative_map[GOAL_WT] = 0.95
+                conservative_map[GOAL_WT] = 0.90
                 optimistic_map[GOAL_WT] = 1.10
             if GOAL_LG in self.valid_goals:
                 conservative_map[GOAL_LG] = 0.85
