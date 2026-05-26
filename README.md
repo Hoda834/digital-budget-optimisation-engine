@@ -178,6 +178,7 @@ streamlit run app.py
 ```
 
 The application opens in your browser at `http://localhost:8501`.
+or https://digital-budget-optimisation-engine.streamlit.app/
 
 A quick way to verify the pipeline without the UI:
 
