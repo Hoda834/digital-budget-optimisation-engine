@@ -1433,13 +1433,14 @@ def results_ui(state: WizardState) -> None:
                 key="_resolve_budget",
             )
         with col_carve:
-            new_tl_pct = st.slider(
+            new_tl_pct_int = st.slider(
                 "Test-and-learn reserve",
-                min_value=0.0, max_value=0.40,
-                value=float(getattr(state, "test_and_learn_pct", 0.0)),
-                step=0.01, format="%.0f%%",
+                min_value=0, max_value=40,
+                value=int(round(float(getattr(state, "test_and_learn_pct", 0.0)) * 100)),
+                step=1, format="%d%%",
                 key="_resolve_tl",
             )
+            new_tl_pct = new_tl_pct_int / 100.0
 
         new_seasonality: Dict[str, float] = {}
         if state.valid_goals:
@@ -1959,19 +1960,20 @@ def module1_ui(state: WizardState) -> None:
     with st.expander("Advanced policy (test-and-learn, seasonality)",
                      expanded=bool(getattr(state, "test_and_learn_pct", 0.0)
                                     or getattr(state, "seasonality_index", {}))):
-        test_and_learn_pct = st.slider(
+        test_and_learn_pct_int = st.slider(
             "Test-and-learn reserve",
-            min_value=0.0,
-            max_value=0.40,
-            value=float(getattr(state, "test_and_learn_pct", 0.0) or 0.10),
-            step=0.01,
-            format="%.0f%%",
+            min_value=0,
+            max_value=40,
+            value=int(round(float(getattr(state, "test_and_learn_pct", 0.0) or 0.10) * 100)),
+            step=1,
+            format="%d%%",
             help=(
                 "Fraction of every scenario's budget held back from the LP for "
                 "new audiences, creative tests, and emerging placements. "
                 "Standard strategist practice is 10–15%."
             ),
         )
+        test_and_learn_pct = test_and_learn_pct_int / 100.0
 
         st.markdown(
             "**Seasonality multipliers** — set to >1 if you expect productivity "
