@@ -553,101 +553,162 @@ def create_pdf_bytes(
     scenario_payload: List[Tuple[str, Module5LPResult, Optional[Module6Result]]],
     module7_bundle: Optional[Module7BundleInsight] = None,
 ) -> bytes:
+    """Build a user-facing PDF report.
+
+    Structure (recommendation first, policy last):
+      Page 1   Headline: the recommended plan for the base scenario
+      Page 2   Scenario comparison table
+      Page 3+  Per-scenario detail (allocation, forecasts, risks, recs)
+      End      Appendix: your inputs and policy
+    """
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
     styles = getSampleStyleSheet()
     story: List[Any] = []
 
-    story.append(Paragraph("Results Summary", styles["Title"]))
-    story.append(Spacer(1, 6))
-    story.append(
-        Paragraph(
-            "Optimisation method: Linear Programming (LP) to allocate budget across platform and objective.",
-            styles["BodyText"],
+    def _table(df: pd.DataFrame, money_cols: Optional[List[str]] = None) -> Table:
+        t = Table(_df_to_table_data(df, money_columns=money_cols))
+        t.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ]
+            )
         )
+        return t
+
+    # Pick the base scenario for the headline, falling back to the first.
+    base_idx = next(
+        (i for i, (s, _, _) in enumerate(scenario_payload) if s == "base"),
+        0,
     )
+    base_scenario = scenario_payload[base_idx] if scenario_payload else None
+
+    # ─────────────────────────────────────────────────────────────────
+    # PAGE 1: HEADLINE
+    # ─────────────────────────────────────────────────────────────────
+    story.append(Paragraph("Your recommended budget plan", styles["Title"]))
     story.append(Spacer(1, 12))
 
-    df_p, df_g, df_s = _policy_tables(state)
+    if base_scenario is not None:
+        scen_name, lp_res, fc_res = base_scenario
 
-    story.append(Paragraph("Policy Summary", styles["Heading2"]))
-    story.append(Spacer(1, 6))
-
-    if not df_p.empty:
-        story.append(Paragraph("Minimum Spend per Platform", styles["Heading3"]))
-        t = Table(_df_to_table_data(df_p, money_columns=["Minimum Spend"]))
-        t.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ]
+        total_budget = getattr(state, "total_budget", 0.0) or 0.0
+        duration = getattr(state, "duration_days", 0) or 0
+        story.append(
+            Paragraph(
+                f"Spend {money(total_budget)} over {duration} days as follows:",
+                styles["BodyText"],
             )
         )
-        story.append(t)
-        story.append(Spacer(1, 10))
-
-    if not df_g.empty:
-        story.append(Paragraph("Minimum Budget per Objective", styles["Heading3"]))
-        t = Table(_df_to_table_data(df_g, money_columns=["Minimum Budget"]))
-        t.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ]
-            )
-        )
-        story.append(t)
-        story.append(Spacer(1, 10))
-
-    if not df_s.empty:
-        story.append(Paragraph("Scenario Multipliers (overall)", styles["Heading3"]))
-        t = Table(_df_to_table_data(df_s))
-        t.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ]
-            )
-        )
-        story.append(t)
-        story.append(Spacer(1, 10))
-
-    df_sgm = _scenario_goal_multiplier_table(state)
-    if not df_sgm.empty:
-        story.append(Paragraph("Scenario Multipliers per Objective", styles["Heading3"]))
-        t = Table(_df_to_table_data(df_sgm))
-        t.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ]
-            )
-        )
-        story.append(t)
-        story.append(Spacer(1, 10))
-
-    if module7_bundle is not None and module7_bundle.scenario_insights:
         story.append(Spacer(1, 8))
-        story.append(Paragraph("Decision Insights (Interpretation Layer)", styles["Heading2"]))
-        story.append(Spacer(1, 6))
-        if module7_bundle.global_stability_explanation:
-            story.append(Paragraph(module7_bundle.global_stability_explanation, styles["BodyText"]))
-            story.append(Spacer(1, 6))
-        if getattr(module7_bundle, "global_data_quality_note", None):
-            story.append(Paragraph(f"Data quality note: {module7_bundle.global_data_quality_note}", styles["BodyText"]))
+
+        # Headline allocation table (platform, objective, £, % of plan).
+        alloc_df = build_budget_allocation_df(lp_res)
+        if not alloc_df.empty:
+            total = alloc_df["Allocated Budget"].sum()
+            if total > 0:
+                alloc_df = alloc_df.copy()
+                alloc_df["Share"] = (alloc_df["Allocated Budget"] / total * 100).round(1).astype(str) + "%"
+            story.append(_table(alloc_df, money_cols=["Allocated Budget"]))
             story.append(Spacer(1, 10))
 
+        # Expected outcome (predicted KPI totals).
+        if fc_res is not None:
+            forecast_df = build_forecast_df(
+                fc_res,
+                goal_values=getattr(state, "goal_value_per_unit", None) or None,
+            )
+            if not forecast_df.empty:
+                story.append(Paragraph("Expected outcome", styles["Heading3"]))
+                # Slim the forecast table down to the four columns that matter.
+                kept_cols = [c for c in ["Platform", "Objective", "KPI", "Predicted KPI"]
+                             if c in forecast_df.columns]
+                slim = forecast_df[kept_cols]
+                story.append(_table(slim))
+                story.append(Spacer(1, 10))
+
+        # Confidence, classification, stability — one line each.
+        ins = None
+        if module7_bundle is not None and module7_bundle.scenario_insights:
+            ins = module7_bundle.scenario_insights.get(scen_name)
+
+        if ins is not None:
+            if getattr(ins, "classification", None) is not None and \
+               getattr(ins, "confidence_score", None) is not None:
+                story.append(
+                    Paragraph(
+                        f"<b>Confidence:</b> {int(ins.confidence_score)}/100 "
+                        f"&nbsp;&nbsp; <b>Decision pattern:</b> {ins.classification}",
+                        styles["BodyText"],
+                    )
+                )
+                story.append(Spacer(1, 4))
+
+        if module7_bundle is not None and module7_bundle.global_stability_explanation:
+            story.append(
+                Paragraph(
+                    f"<b>Stability across scenarios:</b> {module7_bundle.global_stability_explanation}",
+                    styles["BodyText"],
+                )
+            )
+            story.append(Spacer(1, 8))
+
+    # ─────────────────────────────────────────────────────────────────
+    # PAGE 2: SCENARIO COMPARISON
+    # ─────────────────────────────────────────────────────────────────
+    if len(scenario_payload) > 1:
+        story.append(Spacer(1, 16))
+        story.append(Paragraph("How the three scenarios compare", styles["Heading2"]))
+        story.append(Spacer(1, 6))
+
+        comp_rows = []
+        for scen_name, lp_res, fc_res in scenario_payload:
+            total_used = float(getattr(lp_res, "total_budget_used", 0.0) or 0.0)
+            # Find the top platform and its share.
+            pt = getattr(lp_res, "budget_per_platform", {}) or {}
+            if pt and total_used > 0:
+                top_code, top_val = max(pt.items(), key=lambda kv: kv[1])
+                top_name = PLATFORM_NAMES.get(str(top_code).lower(), str(top_code))
+                top_share = f"{top_val / total_used * 100:.0f}%"
+            else:
+                top_name, top_share = "-", "-"
+            # Sum predicted KPIs across all forecast rows.
+            if fc_res is not None and fc_res.rows:
+                pred_total = sum(float(getattr(r, "predicted_kpi", 0.0) or 0.0)
+                                 for r in fc_res.rows)
+                pred_str = number(pred_total, 0)
+            else:
+                pred_str = "-"
+            comp_rows.append({
+                "Scenario": _human_scenario_name(scen_name),
+                "Total spend": total_used,
+                "Top platform": top_name,
+                "Top share": top_share,
+                "Predicted KPI total": pred_str,
+            })
+        comp_df = pd.DataFrame(comp_rows)
+        story.append(_table(comp_df, money_cols=["Total spend"]))
+        story.append(Spacer(1, 6))
+        story.append(
+            Paragraph(
+                "The optimistic scenario does not recommend overspending: it is "
+                "capped at your declared total budget.",
+                styles["BodyText"],
+            )
+        )
+
+    # ─────────────────────────────────────────────────────────────────
+    # PAGES 3+: PER-SCENARIO DETAIL
+    # ─────────────────────────────────────────────────────────────────
     for scenario_name, lp_res, forecast_res in scenario_payload:
-        story.append(Spacer(1, 10))
-        story.append(Paragraph(f"Scenario: {_human_scenario_name(scenario_name)}", styles["Heading2"]))
+        story.append(Spacer(1, 16))
+        story.append(
+            Paragraph(f"Detail: {_human_scenario_name(scenario_name)} scenario",
+                      styles["Heading2"])
+        )
         story.append(Spacer(1, 6))
 
         ins = None
@@ -655,95 +716,43 @@ def create_pdf_bytes(
             ins = module7_bundle.scenario_insights.get(scenario_name)
 
         if ins is not None:
-            story.append(Paragraph("Decision summary", styles["Heading3"]))
+            story.append(Paragraph("Summary", styles["Heading3"]))
             story.append(Paragraph(ins.executive_summary, styles["BodyText"]))
             story.append(Spacer(1, 6))
 
-            if getattr(ins, "classification", None) is not None and getattr(ins, "confidence_score", None) is not None:
+            if getattr(ins, "data_quality_note", None):
                 story.append(
-                    Paragraph(
-                        f"Classification: {ins.classification} | Confidence: {int(ins.confidence_score)}/100",
-                        styles["BodyText"],
-                    )
+                    Paragraph(f"Data quality note: {ins.data_quality_note}",
+                              styles["BodyText"])
                 )
                 story.append(Spacer(1, 6))
 
-            if getattr(ins, "data_quality_note", None):
-                story.append(Paragraph(f"Data quality note: {ins.data_quality_note}", styles["BodyText"]))
-                story.append(Spacer(1, 6))
-
+            # Plan A: only show the allocation table, drop the internal metrics.
             if getattr(ins, "plan_a", None) is not None:
                 pa = ins.plan_a
                 story.append(Paragraph("Plan A (Performance first)", styles["Heading3"]))
-                pa_rows = [
-                    {"Metric": "Objective value (estimate)", "Value": number(getattr(pa, "objective_value_estimate", 0.0), 2)},
-                    {"Metric": "Primary focus", "Value": str(getattr(pa, "kpi_focus", ""))},
-                ]
-                tpa = Table(_df_to_table_data(pd.DataFrame(pa_rows)))
-                tpa.setStyle(
-                    TableStyle(
-                        [
-                            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                        ]
-                    )
-                )
-                story.append(tpa)
-                story.append(Spacer(1, 6))
-
                 pa_alloc_df = _allocation_to_plan_rows(getattr(pa, "allocation", None))
                 if not pa_alloc_df.empty:
-                    tpa2 = Table(_df_to_table_data(pa_alloc_df, money_columns=["Allocated Budget"]))
-                    tpa2.setStyle(
-                        TableStyle(
-                            [
-                                ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                            ]
-                        )
-                    )
-                    story.append(tpa2)
+                    story.append(_table(pa_alloc_df, money_cols=["Allocated Budget"]))
                     story.append(Spacer(1, 6))
 
+            # Plan B: same idea, but show the trade-off because it matters here.
             if getattr(ins, "plan_b", None) is not None:
                 pb = ins.plan_b
                 story.append(Paragraph("Plan B (Risk managed)", styles["Heading3"]))
-                pb_rows = [
-                    {"Metric": "Objective value (estimate)", "Value": number(getattr(pb, "objective_value_estimate", 0.0), 2)},
-                    {"Metric": "Primary focus", "Value": str(getattr(pb, "kpi_focus", ""))},
-                ]
                 trade = getattr(pb, "tradeoff_percent", None)
                 if trade is not None:
-                    pb_rows.append({"Metric": "Trade off", "Value": f"{number(trade, 1)}%"})
-
-                tpb = Table(_df_to_table_data(pd.DataFrame(pb_rows)))
-                tpb.setStyle(
-                    TableStyle(
-                        [
-                            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                        ]
-                    )
-                )
-                story.append(tpb)
-                story.append(Spacer(1, 6))
-
-                pb_alloc_df = _allocation_to_plan_rows(getattr(pb, "allocation", None))
-                if not pb_alloc_df.empty:
-                    tpb2 = Table(_df_to_table_data(pb_alloc_df, money_columns=["Allocated Budget"]))
-                    tpb2.setStyle(
-                        TableStyle(
-                            [
-                                ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                            ]
+                    story.append(
+                        Paragraph(
+                            f"Trade-off vs Plan A: <b>{number(trade, 1)}%</b> "
+                            f"less expected performance, in exchange for diversification.",
+                            styles["BodyText"],
                         )
                     )
-                    story.append(tpb2)
+                    story.append(Spacer(1, 4))
+                pb_alloc_df = _allocation_to_plan_rows(getattr(pb, "allocation", None))
+                if not pb_alloc_df.empty:
+                    story.append(_table(pb_alloc_df, money_cols=["Allocated Budget"]))
                     story.append(Spacer(1, 6))
 
             if ins.binding_constraints:
@@ -764,67 +773,58 @@ def create_pdf_bytes(
                     story.append(Paragraph(f"- {r}", styles["BodyText"]))
                 story.append(Spacer(1, 10))
 
-        summary_rows: List[Dict[str, Any]] = [
-            {"Metric": "Total Budget Used", "Value": money(lp_res.total_budget_used or 0.0)},
-            {"Metric": "Objective Value", "Value": number(lp_res.objective_value or 0.0, 2)},
-        ]
-        if hasattr(lp_res, "objective_value_raw"):
-            summary_rows.append(
-                {"Metric": "Objective Value (raw)", "Value": number(getattr(lp_res, "objective_value_raw") or 0.0, 6)}
-            )
-
-        summary_df = pd.DataFrame(summary_rows)
-        t = Table(_df_to_table_data(summary_df))
-        t.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ]
-            )
-        )
-        story.append(t)
-        story.append(Spacer(1, 10))
-
-        budget_df = build_budget_allocation_df(lp_res)
-        if not budget_df.empty:
-            story.append(Paragraph("Budget Allocation", styles["Heading3"]))
-            t = Table(_df_to_table_data(budget_df, money_columns=["Allocated Budget"]))
-            t.setStyle(
-                TableStyle(
-                    [
-                        ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ]
-                )
-            )
-            story.append(t)
-            story.append(Spacer(1, 10))
-
+        # Forecast detail (full table, not the slim version on page 1).
         if forecast_res is not None:
             forecast_df = build_forecast_df(
                 forecast_res,
                 goal_values=getattr(state, "goal_value_per_unit", None) or None,
             )
             if not forecast_df.empty:
-                story.append(Paragraph("Forecast KPIs (goal-aligned)", styles["Heading3"]))
+                story.append(Paragraph("Forecast KPIs", styles["Heading3"]))
                 money_cols = ["Allocated Budget"]
                 if "Expected Revenue" in forecast_df.columns:
                     money_cols.append("Expected Revenue")
-                t = Table(_df_to_table_data(forecast_df, money_columns=money_cols))
-                t.setStyle(
-                    TableStyle(
-                        [
-                            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                        ]
-                    )
-                )
-                story.append(t)
+                story.append(_table(forecast_df, money_cols=money_cols))
                 story.append(Spacer(1, 10))
+
+    # ─────────────────────────────────────────────────────────────────
+    # APPENDIX: YOUR INPUTS AND POLICY
+    # ─────────────────────────────────────────────────────────────────
+    df_p, df_g, df_s = _policy_tables(state)
+    df_sgm = _scenario_goal_multiplier_table(state)
+
+    if not df_p.empty or not df_g.empty or not df_s.empty or not df_sgm.empty:
+        story.append(Spacer(1, 20))
+        story.append(Paragraph("Appendix: your inputs and policy", styles["Heading2"]))
+        story.append(Spacer(1, 6))
+        story.append(
+            Paragraph(
+                "These are the rules and multipliers that constrained the optimiser. "
+                "Adjust them in the wizard if any value is unexpected.",
+                styles["BodyText"],
+            )
+        )
+        story.append(Spacer(1, 10))
+
+        if not df_p.empty:
+            story.append(Paragraph("Minimum spend per platform", styles["Heading3"]))
+            story.append(_table(df_p, money_cols=["Minimum Spend"]))
+            story.append(Spacer(1, 10))
+
+        if not df_g.empty:
+            story.append(Paragraph("Minimum budget per objective", styles["Heading3"]))
+            story.append(_table(df_g, money_cols=["Minimum Budget"]))
+            story.append(Spacer(1, 10))
+
+        if not df_s.empty:
+            story.append(Paragraph("Scenario multipliers (overall)", styles["Heading3"]))
+            story.append(_table(df_s))
+            story.append(Spacer(1, 10))
+
+        if not df_sgm.empty:
+            story.append(Paragraph("Scenario multipliers per objective", styles["Heading3"]))
+            story.append(_table(df_sgm))
+            story.append(Spacer(1, 10))
 
     doc.build(story)
     buffer.seek(0)
