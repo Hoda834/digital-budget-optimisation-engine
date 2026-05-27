@@ -419,41 +419,40 @@ def _objective_scale(lp: Module5LPResult) -> float:
 
 
 def _estimate_objective_value(allocation: Dict[str, Dict[str, float]], lp_ref: Module5LPResult) -> float:
-    """Score an allocation using the same yield-bracket schedule the LP uses.
+    """Score an allocation using the same yield-bracket schedule as the LP.
 
-    For each (platform, goal) cell, spend is greedily filled into the
-    bracket schedule from ``module5.YIELD_BRACKETS`` — bracket caps are a
-    fraction of the LP's effective budget cap, yields multiply the cell's
-    productivity score.  Scoring Plan A's own allocation through this
-    function reproduces the LP's objective_value to numerical precision,
-    so Plan A and Plan B (which is built post-LP by redistributing budget)
-    are now compared on the same diminishing-returns curve instead of
-    Plan A reading the bracket-aware LP value and Plan B being scored by
-    a flat linear estimator.
+    For each (platform, goal) cell, splits the allocated budget across three
+    diminishing-returns brackets with caps (0.25, 0.35, 0.40) of total budget
+    and yield multipliers (1.00, 0.65, 0.35). Using the same schedule for
+    both Plan A and Plan B makes their reported objectives directly
+    comparable, so the trade-off percentage reflects a real sacrifice
+    rather than an artefact of two different scoring formulas.
     """
+    from modules.module5 import YIELD_BRACKETS
+
     scores = _score_pg(lp_ref)
     scale = _objective_scale(lp_ref)
+    total_budget = max(1.0, _f(getattr(lp_ref, "total_budget_used", 0.0)))
+    bracket_caps = [frac * total_budget for frac, _y in YIELD_BRACKETS]
+    bracket_yields = [y for _frac, y in YIELD_BRACKETS]
 
-    # Bracket caps in the LP are anchored to base_lp_cap (post-carve-out,
-    # pre-scenario), NOT to the scenario-scaled effective_budget_cap — the
-    # bracket thresholds stay constant across scenarios on purpose. Use that
-    # exact basis here so scoring matches the LP objective.
-    cell_cap_basis = _f(getattr(lp_ref, "cell_bracket_cap_basis", 0.0))
-    if cell_cap_basis <= 0:
-        cell_cap_basis = _f(getattr(lp_ref, "effective_budget_cap", 0.0))
-    if cell_cap_basis <= 0:
-        cell_cap_basis = _f(getattr(lp_ref, "total_budget_used", 0.0))
-    if cell_cap_basis <= 0:
-        # No basis for brackets — fall back to flat linear scoring rather
-        # than divide-by-zero. This branch is only hit on pathological
-        # results where the LP recorded no budget at all.
-        raw = 0.0
-        for p, gmap in allocation.items():
-            pk = _k(p)
-            for g, b in (gmap or {}).items():
-                gk = _k(g)
-                raw += max(0.0, _f(b)) * max(0.0, _f((scores.get(pk, {}) or {}).get(gk, 0.0)))
-        return raw * scale
+    raw = 0.0
+    for p, gmap in allocation.items():
+        pk = _k(p)
+        for g, b in (gmap or {}).items():
+            gk = _k(g)
+            spend = max(0.0, _f(b))
+            base_score = max(0.0, _f((scores.get(pk, {}) or {}).get(gk, 0.0)))
+            if spend <= 0.0 or base_score <= 0.0:
+                continue
+            remaining = spend
+            for cap, yld in zip(bracket_caps, bracket_yields):
+                fill = min(remaining, cap)
+                raw += fill * base_score * yld
+                remaining -= fill
+                if remaining <= 0.0:
+                    break
+    return raw * scale
 
     bracket_caps = [frac * cell_cap_basis for frac, _y in YIELD_BRACKETS]
     bracket_yields = [y for _frac, y in YIELD_BRACKETS]
