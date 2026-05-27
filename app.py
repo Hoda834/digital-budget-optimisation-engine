@@ -302,6 +302,7 @@ def build_forecast_df(
     To avoid double-counting when a (Platform, Objective) cell exposes
     multiple count KPIs measuring overlapping value (e.g. Facebook
     Awareness: Reach + Impression), revenue/ROAS are concentrated on
+    Awareness = Reach + Impression), revenue/ROAS are concentrated on
     the cell's top-contribution KPI; sibling rows in the same cell
     carry zeros. The per-row ``Allocated Budget`` is the cell budget
     shared by every KPI in that cell, so it is also blanked on the
@@ -377,6 +378,7 @@ def build_forecast_df(
     # those fields so column-sums (Excel, PDF totals, headline metrics)
     # reflect real spend / real upper-bound revenue.
     rank_col = "Expected Revenue" if revenue_enabled else "Predicted KPI"
+    # Stable ordering: rank descending by contribution within each cell.
     df["__rank"] = df.groupby(["Platform", "Objective"])[rank_col].rank(
         method="first", ascending=False
     )
