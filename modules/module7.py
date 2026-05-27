@@ -223,30 +223,12 @@ def _corner(lp: Module5LPResult) -> bool:
 
 
 def _alloc_signature(lp: Module5LPResult) -> Dict[str, Dict[str, float]]:
-    """Return a relative-share signature of the allocation.
-
-    Scenario multipliers scale the total budget but should not, by
-    themselves, make the decision scenario-sensitive. By normalising
-    each (platform, goal) cell to its share of total spend, two scenarios
-    that route 100% to Facebook are recognised as the same decision even
-    if their absolute pound amounts differ.
-
-    The 3-decimal-place rounding (0.1% tolerance) absorbs small solver
-    noise so identical decisions are not flagged as different.
-    """
     sig: Dict[str, Dict[str, float]] = {}
-    total = 0.0
-    for p, gmap in (lp.budget_per_platform_goal or {}).items():
-        for v in (gmap or {}).values():
-            total += max(0.0, _f(v))
-    if total <= 0:
-        return sig
     for p, gmap in (lp.budget_per_platform_goal or {}).items():
         pk = _k(p)
         sig[pk] = {}
         for g, v in (gmap or {}).items():
-            share = max(0.0, _f(v)) / total
-            sig[pk][_k(g)] = round(share, 3)
+            sig[pk][_k(g)] = round(max(0.0, _f(v)), 6)
     return sig
 
 
@@ -440,18 +422,29 @@ def _estimate_objective_value(allocation: Dict[str, Dict[str, float]], lp_ref: M
     """Score an allocation using the same yield-bracket schedule as the LP.
 
     For each (platform, goal) cell, splits the allocated budget across three
-    diminishing-returns brackets with caps (0.25, 0.35, 0.40) of total budget
-    and yield multipliers (1.00, 0.65, 0.35). Using the same schedule for
+    diminishing-returns brackets with caps (0.25, 0.35, 0.40) of the
+    base LP cap (the post-carve-out, pre-scenario anchor) and yield
+    multipliers (1.00, 0.65, 0.35). Using the same schedule for
     both Plan A and Plan B makes their reported objectives directly
     comparable, so the trade-off percentage reflects a real sacrifice
     rather than an artefact of two different scoring formulas.
+
+    Anchoring the brackets to ``cell_bracket_cap_basis`` (rather than
+    ``total_budget_used``) is what makes the estimator match the LP on
+    non-base scenarios: the LP solves with brackets anchored to the
+    same base across conservative/base/optimistic, so the estimator
+    must too — otherwise a scenario that under-spends would see its
+    bracket schedule scale down with the spend, producing a different
+    yield distribution from the one the LP actually optimised.
     """
     from modules.module5 import YIELD_BRACKETS
 
     scores = _score_pg(lp_ref)
     scale = _objective_scale(lp_ref)
-    total_budget = max(1.0, _f(getattr(lp_ref, "total_budget_used", 0.0)))
-    bracket_caps = [frac * total_budget for frac, _y in YIELD_BRACKETS]
+    cell_cap_basis = _f(getattr(lp_ref, "cell_bracket_cap_basis", 0.0))
+    if cell_cap_basis <= 0.0:
+        cell_cap_basis = max(1.0, _f(getattr(lp_ref, "total_budget_used", 0.0)))
+    bracket_caps = [frac * cell_cap_basis for frac, _y in YIELD_BRACKETS]
     bracket_yields = [y for _frac, y in YIELD_BRACKETS]
 
     raw = 0.0
@@ -467,28 +460,6 @@ def _estimate_objective_value(allocation: Dict[str, Dict[str, float]], lp_ref: M
             for cap, yld in zip(bracket_caps, bracket_yields):
                 fill = min(remaining, cap)
                 raw += fill * base_score * yld
-                remaining -= fill
-                if remaining <= 0.0:
-                    break
-    return raw * scale
-
-    bracket_caps = [frac * cell_cap_basis for frac, _y in YIELD_BRACKETS]
-    bracket_yields = [y for _frac, y in YIELD_BRACKETS]
-
-    raw = 0.0
-    for p, gmap in allocation.items():
-        pk = _k(p)
-        cell_scores = scores.get(pk, {}) or {}
-        for g, b in (gmap or {}).items():
-            gk = _k(g)
-            spend = max(0.0, _f(b))
-            base_score = max(0.0, _f(cell_scores.get(gk, 0.0)))
-            if spend <= 0.0 or base_score <= 0.0:
-                continue
-            remaining = spend
-            for cap, ym in zip(bracket_caps, bracket_yields):
-                fill = remaining if remaining < cap else cap
-                raw += fill * base_score * ym
                 remaining -= fill
                 if remaining <= 0.0:
                     break
