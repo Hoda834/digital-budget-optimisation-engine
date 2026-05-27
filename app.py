@@ -292,13 +292,21 @@ def build_forecast_df(
 ) -> pd.DataFrame:
     """Build the per-KPI forecast table.
 
-    When ``goal_values`` is provided and contains at least one positive value,
-    the table gains ``Expected Revenue`` and ``ROAS`` columns.  Revenue is
-    computed as predicted volume × £/unit for every count KPI (all canonical
-    KPIs are counts after the uniform-units refactor — Engagement is now a
-    sum of likes/comments/shares/etc., not a rate).  Any future rate KPI
-    would leave those cells at zero since rate × £/unit is dimensionally
-    meaningless.
+    Confidence bands surfaced by Module 6 (``predicted_kpi_low``,
+    ``predicted_kpi_high``, ``band_pct``) are carried into the table so
+    the report shows the ±range the engine knows, not just the central
+    point estimate.
+
+    When ``goal_values`` is provided and contains at least one positive
+    value, the table gains ``Expected Revenue`` and ``ROAS`` columns.
+    To avoid double-counting when a (Platform, Objective) cell exposes
+    multiple count KPIs measuring overlapping value (e.g. Facebook
+    Awareness = Reach + Impression), revenue/ROAS are concentrated on
+    the cell's top-contribution KPI; sibling rows in the same cell
+    carry zeros. The per-row ``Allocated Budget`` is the cell budget
+    shared by every KPI in that cell, so it is also blanked on the
+    sibling rows — that keeps column-sums in Excel honest while
+    preserving per-KPI predictions for every row.
     """
     kpi_meta = build_kpi_meta()
     rows: List[Dict[str, Any]] = []
@@ -329,6 +337,9 @@ def build_forecast_df(
 
         budget = float(r.allocated_budget or 0.0)
         predicted = float(r.predicted_kpi or 0.0)
+        predicted_low = float(getattr(r, "predicted_kpi_low", 0.0) or 0.0)
+        predicted_high = float(getattr(r, "predicted_kpi_high", 0.0) or 0.0)
+        band_pct = float(getattr(r, "band_pct", 0.0) or 0.0)
 
         row: Dict[str, Any] = {
             "Platform": platform_name,
@@ -336,6 +347,9 @@ def build_forecast_df(
             "KPI": kpi_label,
             "Allocated Budget": budget,
             "Predicted KPI": predicted,
+            "Predicted KPI (low)": predicted_low,
+            "Predicted KPI (high)": predicted_high,
+            "Band ±%": band_pct * 100.0,
         }
 
         if revenue_enabled:
@@ -352,8 +366,27 @@ def build_forecast_df(
         rows.append(row)
 
     df = pd.DataFrame(rows)
-    if not df.empty:
-        df = df.sort_values(["Platform", "Objective", "KPI"]).reset_index(drop=True)
+    if df.empty:
+        return df
+
+    df = df.sort_values(["Platform", "Objective", "KPI"]).reset_index(drop=True)
+
+    # Collapse per-cell duplicates: only the row with the largest contribution
+    # (max Expected Revenue when revenue is enabled, else max Predicted KPI)
+    # keeps the cell's shared budget and revenue/ROAS. Sibling rows zero out
+    # those fields so column-sums (Excel, PDF totals, headline metrics)
+    # reflect real spend / real upper-bound revenue.
+    rank_col = "Expected Revenue" if revenue_enabled else "Predicted KPI"
+    # Stable ordering: rank descending by contribution within each cell.
+    df["__rank"] = df.groupby(["Platform", "Objective"])[rank_col].rank(
+        method="first", ascending=False
+    )
+    non_primary = df["__rank"] > 1
+    df.loc[non_primary, "Allocated Budget"] = 0.0
+    if revenue_enabled:
+        df.loc[non_primary, "Expected Revenue"] = 0.0
+        df.loc[non_primary, "ROAS"] = 0.0
+    df = df.drop(columns="__rank")
     return df
 
 

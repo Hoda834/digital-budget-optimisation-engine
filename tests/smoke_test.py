@@ -1740,10 +1740,12 @@ def test_build_forecast_df_zero_goal_value_treated_as_unset() -> None:
             assert row["Expected Revenue"] == 0.0
 
 
-def test_build_forecast_df_roas_uses_total_cell_budget() -> None:
+def test_build_forecast_df_collapses_cell_budget_to_primary_row() -> None:
     """For cells with multiple count KPIs (e.g. FB AW: Reach + Impression),
-    each row's ROAS divides by the cell's allocated budget — both rows share
-    the same budget so their ROAS values stack correctly."""
+    Allocated Budget, Expected Revenue and ROAS are concentrated on a
+    single primary row per cell. Sibling rows zero those fields so column
+    sums in Excel reflect real spend and the headline upper-bound revenue
+    isn't inflated by N overlapping measures of the same outcome."""
     from app import build_forecast_df
 
     state = WizardState()
@@ -1782,15 +1784,25 @@ def test_build_forecast_df_roas_uses_total_cell_budget() -> None:
     fb_aw_rows = df[(df["Platform"] == "Facebook") & (df["Objective"] == "Awareness")]
     assert len(fb_aw_rows) == 2, "Expected Reach AND Impression rows for FB Awareness."
 
-    budgets = set(fb_aw_rows["Allocated Budget"].tolist())
-    assert len(budgets) == 1, (
-        "Both KPI rows for the same (platform, objective) cell should share the "
-        f"same allocated budget; got {budgets}."
+    # Exactly one of the two rows is the primary (carries the cell budget /
+    # revenue / ROAS); the other has zeros in those columns.
+    budgets = sorted(fb_aw_rows["Allocated Budget"].tolist())
+    assert budgets[0] == 0.0 and budgets[1] > 0.0, (
+        f"Expected one zero budget and one cell budget; got {budgets}."
     )
+    revenues = sorted(fb_aw_rows["Expected Revenue"].tolist())
+    assert revenues[0] == 0.0 and revenues[1] > 0.0, (
+        f"Expected one zero revenue and one upper-bound revenue; got {revenues}."
+    )
+    # The primary row's ROAS divides revenue by the cell budget exactly.
+    primary = fb_aw_rows[fb_aw_rows["Allocated Budget"] > 0].iloc[0]
+    expected_roas = (primary["Predicted KPI"] * 0.001) / primary["Allocated Budget"]
+    assert primary["ROAS"] == pytest.approx(expected_roas, rel=1e-6)
 
+    # And the new confidence-band columns are present and well-formed.
     for _, row in fb_aw_rows.iterrows():
-        expected_roas = (row["Predicted KPI"] * 0.001) / row["Allocated Budget"]
-        assert row["ROAS"] == pytest.approx(expected_roas, rel=1e-6)
+        assert row["Predicted KPI (low)"] <= row["Predicted KPI"] <= row["Predicted KPI (high)"]
+        assert row["Band ±%"] >= 0.0
 
 
 def test_build_forecast_df_invalid_goal_values_ignored() -> None:
