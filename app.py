@@ -292,13 +292,21 @@ def build_forecast_df(
 ) -> pd.DataFrame:
     """Build the per-KPI forecast table.
 
-    When ``goal_values`` is provided and contains at least one positive value,
-    the table gains ``Expected Revenue`` and ``ROAS`` columns.  Revenue is
-    computed as predicted volume × £/unit for every count KPI (all canonical
-    KPIs are counts after the uniform-units refactor — Engagement is now a
-    sum of likes/comments/shares/etc., not a rate).  Any future rate KPI
-    would leave those cells at zero since rate × £/unit is dimensionally
-    meaningless.
+    Confidence bands surfaced by Module 6 (``predicted_kpi_low``,
+    ``predicted_kpi_high``, ``band_pct``) are carried into the table so
+    the report shows the ±range the engine knows, not just the central
+    point estimate.
+
+    When ``goal_values`` is provided and contains at least one positive
+    value, the table gains ``Expected Revenue`` and ``ROAS`` columns.
+    To avoid double-counting when a (Platform, Objective) cell exposes
+    multiple count KPIs measuring overlapping value (e.g. Facebook
+    Awareness = Reach + Impression), revenue/ROAS are concentrated on
+    the cell's top-contribution KPI; sibling rows in the same cell
+    carry zeros. The per-row ``Allocated Budget`` is the cell budget
+    shared by every KPI in that cell, so it is also blanked on the
+    sibling rows — that keeps column-sums in Excel honest while
+    preserving per-KPI predictions for every row.
     """
     kpi_meta = build_kpi_meta()
     rows: List[Dict[str, Any]] = []
@@ -329,6 +337,9 @@ def build_forecast_df(
 
         budget = float(r.allocated_budget or 0.0)
         predicted = float(r.predicted_kpi or 0.0)
+        predicted_low = float(getattr(r, "predicted_kpi_low", 0.0) or 0.0)
+        predicted_high = float(getattr(r, "predicted_kpi_high", 0.0) or 0.0)
+        band_pct = float(getattr(r, "band_pct", 0.0) or 0.0)
 
         row: Dict[str, Any] = {
             "Platform": platform_name,
@@ -336,6 +347,9 @@ def build_forecast_df(
             "KPI": kpi_label,
             "Allocated Budget": budget,
             "Predicted KPI": predicted,
+            "Predicted KPI (low)": predicted_low,
+            "Predicted KPI (high)": predicted_high,
+            "Band ±%": band_pct * 100.0,
         }
 
         if revenue_enabled:
@@ -352,8 +366,27 @@ def build_forecast_df(
         rows.append(row)
 
     df = pd.DataFrame(rows)
-    if not df.empty:
-        df = df.sort_values(["Platform", "Objective", "KPI"]).reset_index(drop=True)
+    if df.empty:
+        return df
+
+    df = df.sort_values(["Platform", "Objective", "KPI"]).reset_index(drop=True)
+
+    # Collapse per-cell duplicates: only the row with the largest contribution
+    # (max Expected Revenue when revenue is enabled, else max Predicted KPI)
+    # keeps the cell's shared budget and revenue/ROAS. Sibling rows zero out
+    # those fields so column-sums (Excel, PDF totals, headline metrics)
+    # reflect real spend / real upper-bound revenue.
+    rank_col = "Expected Revenue" if revenue_enabled else "Predicted KPI"
+    # Stable ordering: rank descending by contribution within each cell.
+    df["__rank"] = df.groupby(["Platform", "Objective"])[rank_col].rank(
+        method="first", ascending=False
+    )
+    non_primary = df["__rank"] > 1
+    df.loc[non_primary, "Allocated Budget"] = 0.0
+    if revenue_enabled:
+        df.loc[non_primary, "Expected Revenue"] = 0.0
+        df.loc[non_primary, "ROAS"] = 0.0
+    df = df.drop(columns="__rank")
     return df
 
 
@@ -768,6 +801,11 @@ def create_pdf_bytes(
             {"Metric": "Total Budget Used", "Value": money(lp_res.total_budget_used or 0.0)},
             {"Metric": "Objective Value", "Value": number(lp_res.objective_value or 0.0, 2)},
         ]
+        reserve_amt = float(getattr(lp_res, "test_and_learn_reserve", 0.0) or 0.0)
+        if reserve_amt > 0:
+            summary_rows.append(
+                {"Metric": "Test-and-learn Reserve", "Value": money(reserve_amt)}
+            )
         if hasattr(lp_res, "objective_value_raw"):
             summary_rows.append(
                 {"Metric": "Objective Value (raw)", "Value": number(getattr(lp_res, "objective_value_raw") or 0.0, 6)}
@@ -809,7 +847,7 @@ def create_pdf_bytes(
                 goal_values=getattr(state, "goal_value_per_unit", None) or None,
             )
             if not forecast_df.empty:
-                story.append(Paragraph("Forecast KPIs (goal-aligned)", styles["Heading3"]))
+                story.append(Paragraph("Forecast KPIs", styles["Heading3"]))
                 money_cols = ["Allocated Budget"]
                 if "Expected Revenue" in forecast_df.columns:
                     money_cols.append("Expected Revenue")
@@ -1811,6 +1849,8 @@ def results_ui(state: WizardState) -> None:
                     if spend_for_roas > 0:
                         scenario_roas = scenario_total_revenue / spend_for_roas
 
+            reserve = float(getattr(lp_res, "test_and_learn_reserve", 0.0) or 0.0)
+
             if scenario_total_revenue > 0:
                 c1, c2, c3, c4 = st.columns(4)
                 with c1:
@@ -1821,20 +1861,31 @@ def results_ui(state: WizardState) -> None:
                     st.metric("ROAS", f"{number(scenario_roas, 2)}×")
                 with c4:
                     st.metric("Objective value", number(lp_res.objective_value or 0.0, 2))
+                if reserve > 0:
+                    st.metric(
+                        "Test-and-learn reserve (this scenario)",
+                        money(reserve),
+                    )
                 st.caption(
-                    "Expected revenue = predicted volume × goal value.  Every canonical KPI "
-                    "is a count (the uniform-units refactor folded Engagement Rate / CTR into "
-                    "summed count KPIs), so all KPIs contribute.  Cells with multiple KPIs for "
-                    "the same objective (e.g. Facebook Awareness: Reach + Impression) sum each "
-                    "KPI's contribution — treat the total as an upper bound when those KPIs "
-                    "measure overlapping value."
+                    "Expected revenue = predicted volume × goal value, taken once "
+                    "per (Platform, Objective) cell from the highest-contribution KPI "
+                    "in that cell. This avoids double-counting when a cell exposes "
+                    "overlapping count KPIs (e.g. Facebook Awareness: Reach + Impression "
+                    "both index awareness). Treat the total as an upper bound — "
+                    "platform attribution overlap, not modelled here, would lower it."
                 )
             else:
-                c1, c2 = st.columns(2)
-                with c1:
+                cols = st.columns(3 if reserve > 0 else 2)
+                with cols[0]:
                     st.metric("Total budget used", money(lp_res.total_budget_used or 0.0))
-                with c2:
+                with cols[1]:
                     st.metric("Objective value", number(lp_res.objective_value or 0.0, 2))
+                if reserve > 0:
+                    with cols[2]:
+                        st.metric(
+                            "Test-and-learn reserve (this scenario)",
+                            money(reserve),
+                        )
 
             if hasattr(lp_res, "objective_value_raw"):
                 st.caption(f"Objective value (raw): {number(getattr(lp_res, 'objective_value_raw') or 0.0, 6)}")
@@ -1897,8 +1948,24 @@ def results_ui(state: WizardState) -> None:
                     st.warning("No forecast KPIs to display.")
                 else:
                     show_forecast = forecast_df.copy()
-                    show_forecast["Allocated Budget"] = show_forecast["Allocated Budget"].apply(money)
+                    # Allocated Budget is the shared cell budget — blanked
+                    # on sibling KPI rows so the column sums to real spend.
+                    show_forecast["Allocated Budget"] = show_forecast["Allocated Budget"].apply(
+                        lambda x: money(x) if float(x) > 0 else ""
+                    )
                     show_forecast["Predicted KPI"] = show_forecast["Predicted KPI"].apply(lambda x: number(x, 2))
+                    if "Predicted KPI (low)" in show_forecast.columns:
+                        show_forecast["Predicted KPI (low)"] = show_forecast["Predicted KPI (low)"].apply(
+                            lambda x: number(x, 2)
+                        )
+                    if "Predicted KPI (high)" in show_forecast.columns:
+                        show_forecast["Predicted KPI (high)"] = show_forecast["Predicted KPI (high)"].apply(
+                            lambda x: number(x, 2)
+                        )
+                    if "Band ±%" in show_forecast.columns:
+                        show_forecast["Band ±%"] = show_forecast["Band ±%"].apply(
+                            lambda x: f"±{number(x, 1)}%" if float(x) > 0 else ""
+                        )
                     if "Expected Revenue" in show_forecast.columns:
                         show_forecast["Expected Revenue"] = show_forecast["Expected Revenue"].apply(
                             lambda x: money(x) if float(x) > 0 else ""
@@ -1908,6 +1975,16 @@ def results_ui(state: WizardState) -> None:
                             lambda x: f"{number(x, 2)}×" if float(x) > 0 else ""
                         )
                     st.dataframe(show_forecast, use_container_width=True, hide_index=True)
+                    st.caption(
+                        "Predicted KPI is the central forecast; the low / high columns "
+                        "and ±% show the confidence band Module 6 derived from data "
+                        "(observation CV when available, otherwise scaled by the "
+                        "historical window length). Allocated Budget shows the shared "
+                        "(Platform, Objective) cell budget once per cell; sibling KPIs "
+                        "in the same cell carry blank budget and zero Expected Revenue "
+                        "to avoid double-counting overlapping measures (e.g. Reach + "
+                        "Impression both index awareness)."
+                    )
 
     st.subheader("Downloads")
     pdf_bytes = create_pdf_bytes(state, scenario_payload_for_exports, module7_bundle=module7_bundle)
