@@ -9,6 +9,8 @@ Five scenario folders, each with one CSV per selected platform
 3. `03_brand_launch_awareness/` — large upper-funnel-only video push.
 4. `04_community_engagement/` — engagement-led social mix; stresses the composition layer.
 5. `05_omnichannel_all_goals/` — all four objectives, eight platforms, long history.
+6. `06_accuracy_hand_computable/` — minimal 2-platform / 1-objective scenario
+   whose every output is hand-computable; backstop for `tests/test_accuracy.py`.
 
 Regenerate with:
 

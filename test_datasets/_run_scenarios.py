@@ -278,8 +278,26 @@ def run_s5() -> None:
     )
 
 
+def run_s6() -> None:
+    _drive(
+        "Scenario 6 — Accuracy by hand (2 platforms, 1 objective)",
+        os.path.join(HERE, "06_accuracy_hand_computable"),
+        objectives=["lg"],
+        total_budget=10_000.0,
+        duration=30,
+        platforms=["fb", "li"],
+        priorities={
+            "fb": {"priority_1": "lg", "priority_2": None},
+            "li": {"priority_1": "lg", "priority_2": None},
+        },
+        test_and_learn_pct=0.0,
+        scenario_multipliers={"base": 1.0},
+        per_platform_min={"fb": 0.0, "li": 0.0},
+    )
+
+
 if __name__ == "__main__":
-    for fn in (run_s1, run_s2, run_s3, run_s4, run_s5):
+    for fn in (run_s1, run_s2, run_s3, run_s4, run_s5, run_s6):
         try:
             fn()
         except Exception as e:
