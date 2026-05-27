@@ -301,6 +301,7 @@ def build_forecast_df(
     value, the table gains ``Expected Revenue`` and ``ROAS`` columns.
     To avoid double-counting when a (Platform, Objective) cell exposes
     multiple count KPIs measuring overlapping value (e.g. Facebook
+    Awareness: Reach + Impression), revenue/ROAS are concentrated on
     Awareness = Reach + Impression), revenue/ROAS are concentrated on
     the cell's top-contribution KPI; sibling rows in the same cell
     carry zeros. The per-row ``Allocated Budget`` is the cell budget
@@ -511,6 +512,11 @@ def create_excel_bytes(
                 {"Metric": "Total Budget Used", "Value": float(lp_res.total_budget_used or 0.0)},
                 {"Metric": "Objective Value", "Value": float(lp_res.objective_value or 0.0)},
             ]
+            reserve_amt = float(getattr(lp_res, "test_and_learn_reserve", 0.0) or 0.0)
+            if reserve_amt > 0:
+                summary_rows.append(
+                    {"Metric": "Test-and-learn Reserve", "Value": reserve_amt}
+                )
             if hasattr(lp_res, "objective_value_raw"):
                 summary_rows.append(
                     {
@@ -698,8 +704,12 @@ def create_pdf_bytes(
         story.append(Spacer(1, 6))
 
         comp_rows = []
+        any_reserve = False
         for scen_name, lp_res, fc_res in scenario_payload:
             total_used = float(getattr(lp_res, "total_budget_used", 0.0) or 0.0)
+            reserve = float(getattr(lp_res, "test_and_learn_reserve", 0.0) or 0.0)
+            if reserve > 0:
+                any_reserve = True
             # Find the top platform and its share.
             pt = getattr(lp_res, "budget_per_platform", {}) or {}
             if pt and total_used > 0:
@@ -718,12 +728,19 @@ def create_pdf_bytes(
             comp_rows.append({
                 "Scenario": _human_scenario_name(scen_name),
                 "Total spend": total_used,
+                "T&L reserve": reserve,
                 "Top platform": top_name,
                 "Top share": top_share,
                 "Predicted KPI total": pred_str,
             })
         comp_df = pd.DataFrame(comp_rows)
-        story.append(_table(comp_df, money_cols=["Total spend"]))
+        # Drop the reserve column when no scenario carved one out.
+        if not any_reserve:
+            comp_df = comp_df.drop(columns=["T&L reserve"])
+            money_cols = ["Total spend"]
+        else:
+            money_cols = ["Total spend", "T&L reserve"]
+        story.append(_table(comp_df, money_cols=money_cols))
         story.append(Spacer(1, 6))
         story.append(
             Paragraph(
@@ -1605,10 +1622,20 @@ def results_ui(state: WizardState) -> None:
             scenario_payload_for_exports.append((sk, lp_res, forecast_res))
  
             with tab:
-                # Compact metric row: budget only, no objective value
+                # Compact metric row: budget + this-scenario's T&L reserve
+                # (each scenario has its own reserve = tl_pct × scenario cap,
+                # so showing only base's was hiding genuine differences).
                 spend = float(lp_res.total_budget_used or 0.0)
-                st.metric("Total budget used", money(spend))
- 
+                reserve = float(getattr(lp_res, "test_and_learn_reserve", 0.0) or 0.0)
+                if reserve > 0:
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.metric("Total budget used", money(spend))
+                    with c2:
+                        st.metric("Test-and-learn reserve (this scenario)", money(reserve))
+                else:
+                    st.metric("Total budget used", money(spend))
+
                 # Budget allocation
                 st.markdown("**Budget allocation**")
                 budget_df = build_budget_allocation_df(lp_res)
@@ -1618,17 +1645,33 @@ def results_ui(state: WizardState) -> None:
                     show_budget = budget_df.copy()
                     show_budget["Allocated Budget"] = show_budget["Allocated Budget"].apply(money)
                     st.dataframe(show_budget, use_container_width=True, hide_index=True)
- 
+
                 # Forecast KPIs
                 if forecast_res is not None:
                     forecast_df = build_forecast_df(forecast_res, goal_values=goal_values)
                     if not forecast_df.empty:
                         st.markdown("**Forecast KPIs**")
                         show_forecast = forecast_df.copy()
-                        show_forecast["Allocated Budget"] = show_forecast["Allocated Budget"].apply(money)
+                        # Allocated Budget is the shared cell budget — blanked
+                        # on sibling KPI rows so column sums reflect real spend.
+                        show_forecast["Allocated Budget"] = show_forecast["Allocated Budget"].apply(
+                            lambda x: money(x) if float(x) > 0 else ""
+                        )
                         show_forecast["Predicted KPI"] = show_forecast["Predicted KPI"].apply(
                             lambda x: number(x, 2)
                         )
+                        if "Predicted KPI (low)" in show_forecast.columns:
+                            show_forecast["Predicted KPI (low)"] = show_forecast["Predicted KPI (low)"].apply(
+                                lambda x: number(x, 2)
+                            )
+                        if "Predicted KPI (high)" in show_forecast.columns:
+                            show_forecast["Predicted KPI (high)"] = show_forecast["Predicted KPI (high)"].apply(
+                                lambda x: number(x, 2)
+                            )
+                        if "Band ±%" in show_forecast.columns:
+                            show_forecast["Band ±%"] = show_forecast["Band ±%"].apply(
+                                lambda x: f"±{number(x, 1)}%" if float(x) > 0 else ""
+                            )
                         if "Expected Revenue" in show_forecast.columns and has_explicit_goal_values:
                             show_forecast["Expected Revenue"] = show_forecast["Expected Revenue"].apply(
                                 lambda x: money(x) if float(x) > 0 else ""
@@ -1644,6 +1687,15 @@ def results_ui(state: WizardState) -> None:
                                 lambda x: f"{number(x, 2)}×" if float(x) > 0 else ""
                             )
                         st.dataframe(show_forecast, use_container_width=True, hide_index=True)
+                        st.caption(
+                            "Predicted KPI is the central forecast; low / high and ±% "
+                            "show the confidence band Module 6 derived from data "
+                            "(observation CV when available, otherwise scaled by the "
+                            "historical window length). Allocated Budget shows the shared "
+                            "(Platform, Objective) cell budget once per cell; sibling KPIs "
+                            "in the same cell are blank to avoid double-counting "
+                            "overlapping measures (e.g. Reach + Impression both index awareness)."
+                        )
  
                 # Plan A vs Plan B (if Module 7 produced them)
                 if module7_bundle is not None and module7_bundle.scenario_insights:
@@ -1785,30 +1837,29 @@ def results_ui(state: WizardState) -> None:
                         target_label = _platform_display_name(state, bc.target)
                     elif bc.kind == "min_goal":
                         target_label = _GOAL_LABEL.get(bc.target, bc.target)
-                    elif bc.kind == "budget":
+                    elif bc.kind == "budget_cap":
                         target_label = "Total budget"
                     binding_rows.append({
-                        "Constraint": bc.kind, "Target": target_label,
-                        "RHS": money(bc.rhs), "Achieved": money(bc.lhs_value),
+                        "Constraint": bc.name,
+                        "Kind": bc.kind,
+                        "Target": target_label,
+                        "Limit": money(bc.rhs),
+                        "Shadow price": number(bc.shadow_price, 4),
                     })
                 if binding_rows:
                     st.dataframe(pd.DataFrame(binding_rows),
                                  use_container_width=True, hide_index=True)
- 
+
             if base_lp.shadow_prices:
                 st.markdown("**Shadow prices** — value of relaxing each constraint by £1:")
+                already_shown = {bc.name for bc in (base_lp.binding_constraints or [])}
                 sp_rows = []
-                for sp in base_lp.shadow_prices:
-                    target_label = ""
-                    if sp.kind == "min_platform":
-                        target_label = _platform_display_name(state, sp.target)
-                    elif sp.kind == "min_goal":
-                        target_label = _GOAL_LABEL.get(sp.target, sp.target)
-                    elif sp.kind == "budget":
-                        target_label = "Total budget"
+                for name, price in base_lp.shadow_prices.items():
+                    if name in already_shown:
+                        continue
                     sp_rows.append({
-                        "Constraint": sp.kind, "Target": target_label,
-                        "Shadow price": number(sp.shadow_price, 4),
+                        "Constraint": name,
+                        "Shadow price": number(price, 4),
                     })
                 if sp_rows:
                     st.dataframe(pd.DataFrame(sp_rows),

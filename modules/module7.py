@@ -223,30 +223,12 @@ def _corner(lp: Module5LPResult) -> bool:
 
 
 def _alloc_signature(lp: Module5LPResult) -> Dict[str, Dict[str, float]]:
-    """Return a relative-share signature of the allocation.
-
-    Scenario multipliers scale the total budget but should not, by
-    themselves, make the decision scenario-sensitive. By normalising
-    each (platform, goal) cell to its share of total spend, two scenarios
-    that route 100% to Facebook are recognised as the same decision even
-    if their absolute pound amounts differ.
-
-    The 3-decimal-place rounding (0.1% tolerance) absorbs small solver
-    noise so identical decisions are not flagged as different.
-    """
     sig: Dict[str, Dict[str, float]] = {}
-    total = 0.0
-    for p, gmap in (lp.budget_per_platform_goal or {}).items():
-        for v in (gmap or {}).values():
-            total += max(0.0, _f(v))
-    if total <= 0:
-        return sig
     for p, gmap in (lp.budget_per_platform_goal or {}).items():
         pk = _k(p)
         sig[pk] = {}
         for g, v in (gmap or {}).items():
-            share = max(0.0, _f(v)) / total
-            sig[pk][_k(g)] = round(share, 3)
+            sig[pk][_k(g)] = round(max(0.0, _f(v)), 6)
     return sig
 
 
