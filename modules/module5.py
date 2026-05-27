@@ -1284,16 +1284,16 @@ class Module5MonteCarloResult:
     cell_sigma: Dict[str, Dict[str, float]] = field(default_factory=dict)
 
     @property
-        def stability_score(self) -> float:
-            """Plan-level stability in [0, 1]: 1 − mean platform CV across
-            materially-funded platforms (those with mean allocation > £1).
-            Higher means platform ranks are less sensitive to productivity noise.
-            """
-            cvs = [s.cv for s in self.per_platform if s.mean > 1.0]
-            if not cvs:
-                return 1.0
-            mean_cv = sum(cvs) / len(cvs)
-            return max(0.0, min(1.0, 1.0 - mean_cv))
+    def stability_score(self) -> float:
+        """Plan-level stability in [0, 1]: 1 − mean platform CV across
+        materially-funded platforms (those with mean allocation > £1).
+        Higher means platform ranks are less sensitive to productivity noise.
+        """
+        cvs = [s.cv for s in self.per_platform if s.mean > 1.0]
+        if not cvs:
+            return 1.0
+        mean_cv = sum(cvs) / len(cvs)
+        return max(0.0, min(1.0, 1.0 - mean_cv))
 
 
 def _per_cell_sigma(state: WizardState) -> Dict[str, Dict[str, float]]:
