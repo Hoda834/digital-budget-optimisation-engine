@@ -1315,206 +1315,348 @@ def _get_module6_scenarios(state: WizardState) -> Dict[str, Module6Result]:
 
 
 def results_ui(state: WizardState) -> None:
-    st.header("Results")
-
-    goal_values_for_results: Optional[Dict[str, float]] = (
-        getattr(state, "goal_value_per_unit", None) or None
-    )
-
+    st.header("Your budget plan")
+ 
     if st.button("Reset", type="secondary"):
         reset_state()
         return
-
+ 
+    # Auto-run any modules that haven't been run yet
     if state.module3_finalised and not state.module4_finalised:
         run_module4(state, KPI_CONFIG)
     if state.module4_finalised and not state.module5_finalised:
         run_module5(state)
     if state.module5_finalised and not state.module6_finalised:
         run_module6(state)
-
+ 
     if not state.module6_finalised:
         st.info("Results will appear after optimisation runs.")
         return
-
-    st.markdown("Optimisation method: Linear Programming (LP) to allocate budget across platform and objective.")
-    st.caption(
-        "⚠️ Recommendations inherit the attribution your KPIs came from.  If the "
-        "platform-reported numbers over-credit one channel (a known last-click "
-        "bias), the LP will over-allocate to that channel.  Cross-check against "
-        "incrementality tests (geo lifts, holdout splits) before committing to "
-        "material reallocations."
+ 
+    # ─── Set-up: load all the data we will display ────────────────────────
+    lp_by_scenario = _get_module5_scenarios(state)
+    fc_by_scenario = _get_module6_scenarios(state)
+    scenario_keys = _get_scenario_key_order(list(lp_by_scenario.keys()))
+ 
+    if not scenario_keys:
+        st.error("No results available.")
+        return
+ 
+    # Decision mode lives small at the top of the supporting detail.
+    # The base scenario drives the headline.
+    base_key = "base" if "base" in scenario_keys else scenario_keys[0]
+    base_lp = lp_by_scenario.get(base_key)
+    base_fc = fc_by_scenario.get(base_key)
+ 
+    goal_values: Optional[Dict[str, float]] = getattr(state, "goal_value_per_unit", None) or None
+    has_explicit_goal_values = bool(
+        goal_values and any(float(v) > 0 for v in goal_values.values())
     )
-
-    # ── Missing-data warning (silent zeros made loud) ──────────────────────
-    # A platform/goal cell that got £0 because the user provided no input
-    # data looks identical in the allocation table to one the optimiser
-    # actively chose to skip.  Surface the distinction so users can't
-    # mistake "we had no information" for "the LP ranked this low."
+ 
+    module7_bundle: Optional[Module7BundleInsight] = None
+    bundle = getattr(state, "module5_scenario_bundle", None)
+    decision_mode = st.session_state.get("_decision_mode", "Performance first")
+    if isinstance(bundle, Module5ScenarioBundle):
+        try:
+            module7_bundle = run_module7(state, bundle, fc_by_scenario, decision_mode=decision_mode)
+        except Exception:
+            module7_bundle = None
+ 
+    base_insight = None
+    if module7_bundle is not None and module7_bundle.scenario_insights:
+        base_insight = module7_bundle.scenario_insights.get(base_key)
+ 
+    # ═══════════════════════════════════════════════════════════════════════
+    # SECTION 1 — HEADLINE: the recommended plan
+    # ═══════════════════════════════════════════════════════════════════════
+    total_budget = float(getattr(state, "total_budget", 0.0) or 0.0)
+    duration = int(getattr(state, "duration_days", 0) or 0)
+    st.markdown(
+        f"### Spend {money(total_budget)} over {duration} days as follows"
+    )
+ 
+    if base_lp is not None:
+        alloc_df = build_budget_allocation_df(base_lp)
+        if not alloc_df.empty:
+            total_alloc = float(alloc_df["Allocated Budget"].sum())
+            show_df = alloc_df.copy()
+            if total_alloc > 0:
+                show_df["Share"] = (show_df["Allocated Budget"] / total_alloc * 100).round(1).astype(str) + "%"
+            show_df["Allocated Budget"] = show_df["Allocated Budget"].apply(money)
+            st.dataframe(show_df, use_container_width=True, hide_index=True)
+ 
+    # Expected outcome (forecast KPIs at the headline level)
+    if base_fc is not None:
+        forecast_df = build_forecast_df(base_fc, goal_values=goal_values)
+        if not forecast_df.empty:
+            st.markdown("**Expected outcome**")
+            slim_cols = [c for c in ["Platform", "Objective", "KPI", "Predicted KPI"]
+                         if c in forecast_df.columns]
+            slim = forecast_df[slim_cols].copy()
+            if "Predicted KPI" in slim.columns:
+                slim["Predicted KPI"] = slim["Predicted KPI"].apply(lambda x: number(x, 2))
+            st.dataframe(slim, use_container_width=True, hide_index=True)
+ 
+    # Confidence + classification + stability — one row each, big
+    if base_insight is not None:
+        cls = getattr(base_insight, "classification", None)
+        conf = getattr(base_insight, "confidence_score", None)
+        if cls is not None and conf is not None:
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.metric("Confidence", f"{int(conf)} / 100")
+            with col_b:
+                st.metric("Decision pattern", str(cls))
+ 
+    if module7_bundle is not None and module7_bundle.global_stability_explanation:
+        st.caption(f"**Stability:** {module7_bundle.global_stability_explanation}")
+ 
+    # Revenue and ROAS ONLY when the user actually entered goal values.
+    if has_explicit_goal_values and base_lp is not None and base_fc is not None:
+        forecast_preview = build_forecast_df(base_fc, goal_values=goal_values)
+        if "Expected Revenue" in forecast_preview.columns:
+            total_revenue = float(forecast_preview["Expected Revenue"].sum())
+            spend = float(base_lp.total_budget_used or 0.0)
+            if total_revenue > 0 and spend > 0:
+                col_r, col_s = st.columns(2)
+                with col_r:
+                    st.metric("Expected revenue", money(total_revenue))
+                with col_s:
+                    st.metric("ROAS", f"{number(total_revenue / spend, 2)}×")
+                st.caption(
+                    "Based on the per-unit goal values you set in Module 1. "
+                    "Update those values if the numbers look off."
+                )
+ 
+    # Missing-data warning is important enough to surface here, not buried.
     missing_cells = detect_missing_data_cells(state)
     if missing_cells:
         lines = []
         for cell in missing_cells:
             pname = _platform_display_name(state, cell.platform)
             if cell.reason == "no_platform_data":
-                lines.append(
-                    f"- **{pname}** — no KPI data provided for any objective"
-                )
+                lines.append(f"- **{pname}** — no KPI data provided for any objective")
             else:
                 gname = _GOAL_LABEL.get(cell.goal or "", cell.goal or "")
-                lines.append(
-                    f"- **{pname} · {gname}** — no KPI value provided for this cell"
-                )
+                lines.append(f"- **{pname} · {gname}** — no KPI value provided")
         sym = _current_currency_symbol()
         st.warning(
-            "**Some cells couldn't be optimised because input data was missing.**\n\n"
+            "**Some cells could not be optimised because input data was missing.**\n\n"
             + "\n".join(lines)
-            + f"\n\n_These platforms/goals got {sym}0 not because the optimiser "
-              "ranked them low, but because there was nothing to rank.  "
-              "Go back to Module 3 and supply the missing values if you "
-              "want them considered._",
+            + f"\n\n_These platforms got {sym}0 because there was no data to rank them, "
+              "not because the optimiser ranked them low._",
             icon="⚠️",
         )
-
-    df_p, df_g, df_s = _policy_tables(state)
-    df_sgm = _scenario_goal_multiplier_table(state)
-
-    if not df_p.empty or not df_g.empty or not df_s.empty or not df_sgm.empty:
-        st.subheader("Policy summary")
-        cols = st.columns(4)
-        with cols[0]:
-            if not df_p.empty:
-                show = df_p.copy()
-                show["Minimum Spend"] = show["Minimum Spend"].apply(money)
-                st.markdown("Minimum spend per platform")
-                st.dataframe(show, use_container_width=True, hide_index=True)
-        with cols[1]:
-            if not df_g.empty:
-                show = df_g.copy()
-                show["Minimum Budget"] = show["Minimum Budget"].apply(money)
-                st.markdown("Minimum budget per objective")
-                st.dataframe(show, use_container_width=True, hide_index=True)
-        with cols[2]:
-            if not df_s.empty:
-                show = df_s.copy()
-                show["Multiplier"] = show["Multiplier"].apply(lambda x: number(x, 2))
-                st.markdown("Scenario multipliers (overall)")
-                st.dataframe(show, use_container_width=True, hide_index=True)
-        with cols[3]:
-            if not df_sgm.empty:
-                show = df_sgm.copy()
-                for c in show.columns:
-                    if c != "Scenario":
-                        show[c] = show[c].apply(lambda x: number(x, 2))
-                st.markdown("Scenario multipliers per objective")
-                st.dataframe(show, use_container_width=True, hide_index=True)
-
-    lp_by_scenario = _get_module5_scenarios(state)
-    fc_by_scenario = _get_module6_scenarios(state)
-    scenario_keys = _get_scenario_key_order(list(lp_by_scenario.keys()))
-
-    if not scenario_keys:
-        st.error("No results available.")
-        return
-
-    decision_mode = st.selectbox(
-        "Decision mode",
-        options=["Performance first", "Risk managed", "Exploration"],
-        index=0,
-    )
-
-    module7_bundle: Optional[Module7BundleInsight] = None
-    bundle = getattr(state, "module5_scenario_bundle", None)
-    if isinstance(bundle, Module5ScenarioBundle):
-        try:
-            module7_bundle = run_module7(state, bundle, fc_by_scenario, decision_mode=decision_mode)
-        except Exception:
-            module7_bundle = None
-
-    comparison_rows: List[Dict[str, Any]] = []
-    for sk in scenario_keys:
-        lp_res = lp_by_scenario.get(sk)
-        if lp_res is None:
-            continue
-        row: Dict[str, Any] = {
-            "Scenario": _human_scenario_name(sk),
-            "Total Budget Used": float(lp_res.total_budget_used or 0.0),
-            "Objective Value": float(lp_res.objective_value or 0.0),
-        }
-        if hasattr(lp_res, "objective_value_raw"):
-            row["Objective Value (raw)"] = float(getattr(lp_res, "objective_value_raw") or 0.0)
-        comparison_rows.append(row)
-
-    df_compare = pd.DataFrame(comparison_rows)
-    if not df_compare.empty:
-        st.subheader("Scenario comparison")
-        show_df = df_compare.copy()
-        show_df["Total Budget Used"] = show_df["Total Budget Used"].apply(money)
-        show_df["Objective Value"] = show_df["Objective Value"].apply(lambda x: number(x, 2))
-        if "Objective Value (raw)" in show_df.columns:
-            show_df["Objective Value (raw)"] = show_df["Objective Value (raw)"].apply(lambda x: number(x, 6))
-        st.dataframe(show_df, use_container_width=True, hide_index=True)
-
-        chart_df = df_compare.copy()
-        chart_df["Scenario"] = chart_df["Scenario"].apply(_human_scenario_name)
-
-        st.subheader("Chart: objective value by scenario")
-        st.bar_chart(chart_df.set_index("Scenario")[["Objective Value"]])
-
-        st.subheader("Chart: total budget used by scenario")
-        st.bar_chart(chart_df.set_index("Scenario")[["Total Budget Used"]])
-
-    if module7_bundle is not None and module7_bundle.scenario_insights:
-        st.subheader("Decision insights")
-        if module7_bundle.global_stability_explanation:
-            st.caption(module7_bundle.global_stability_explanation)
-        if getattr(module7_bundle, "global_data_quality_note", None):
-            st.warning(module7_bundle.global_data_quality_note)
-
+ 
+    st.divider()
+ 
+    # ═══════════════════════════════════════════════════════════════════════
+    # SECTION 2 — SCENARIO COMPARISON: a single table
+    # ═══════════════════════════════════════════════════════════════════════
+    if len(scenario_keys) > 1:
+        st.subheader("How the scenarios compare")
+        comp_rows = []
         for sk in scenario_keys:
-            ins = module7_bundle.scenario_insights.get(sk)
-            if ins is None:
+            lp_res = lp_by_scenario.get(sk)
+            fc_res = fc_by_scenario.get(sk)
+            if lp_res is None:
                 continue
-
-            st.markdown(f"**{_human_scenario_name(sk)}**")
-
-            if getattr(ins, "classification", None) is not None and getattr(ins, "confidence_score", None) is not None:
-                st.caption(f"Classification: {ins.classification} | Confidence: {int(ins.confidence_score)}/100")
-
-            if getattr(ins, "data_quality_note", None):
-                st.warning(ins.data_quality_note)
-
-            st.write(ins.executive_summary)
-
-            if getattr(ins, "plan_b", None) is not None:
-                pb = ins.plan_b
-                trade = getattr(pb, "tradeoff_percent", None)
-                if trade is not None:
-                    st.caption(f"Plan B trade off: {number(trade, 1)}%")
-
-            if ins.risks:
-                st.markdown("Risks")
-                for r in ins.risks:
-                    st.write(f"- {r}")
-
-            if ins.recommendations:
-                st.markdown("Recommendations")
-                for r in ins.recommendations:
-                    st.write(f"- {r}")
-
-            st.markdown("---")
-
-    # ── Refine policy and re-solve ────────────────────────────────────────
-    # A marketer iterates: "what if I bump the LI floor by £2k?", "what if
-    # I cut the carve-out to 5%?".  Walking the wizard from Module 1 to
-    # explore those is painful.  This expander mutates the policy fields
-    # on state and re-runs Modules 4-7 in place — sub-second on typical
-    # problems.
-    with st.expander("Refine policy and re-solve", expanded=False):
+            total_used = float(lp_res.total_budget_used or 0.0)
+            pt = getattr(lp_res, "budget_per_platform", {}) or {}
+            if pt and total_used > 0:
+                top_code, top_val = max(pt.items(), key=lambda kv: kv[1])
+                top_name = PLATFORM_NAMES.get(str(top_code).lower(), str(top_code))
+                top_share = f"{top_val / total_used * 100:.0f}%"
+            else:
+                top_name, top_share = "—", "—"
+            if fc_res is not None and fc_res.rows:
+                pred_total = sum(float(getattr(r, "predicted_kpi", 0.0) or 0.0)
+                                 for r in fc_res.rows)
+                pred_str = number(pred_total, 2)
+            else:
+                pred_str = "—"
+            comp_rows.append({
+                "Scenario": _human_scenario_name(sk),
+                "Spend": money(total_used),
+                "Top platform": top_name,
+                "Top share": top_share,
+                "Predicted KPI total": pred_str,
+            })
+        comp_df = pd.DataFrame(comp_rows)
+        st.dataframe(comp_df, use_container_width=True, hide_index=True)
         st.caption(
-            "Adjust the policy levers below and click Re-solve.  Historical "
-            "data and platform selection from Modules 1-3 are preserved."
+            "The optimistic scenario does not recommend overspending. "
+            "It is capped at your declared total budget."
         )
-
+ 
+        st.divider()
+ 
+    # ═══════════════════════════════════════════════════════════════════════
+    # SECTION 3 — WHY THIS PLAN: a single consolidated insight block
+    # If every scenario produced the same classification, recommendations,
+    # and risks, we show them once. Otherwise we list the differences.
+    # ═══════════════════════════════════════════════════════════════════════
+    if module7_bundle is not None and module7_bundle.scenario_insights:
+        st.subheader("Why this plan, and what to watch")
+ 
+        all_insights = [module7_bundle.scenario_insights.get(sk) for sk in scenario_keys
+                        if module7_bundle.scenario_insights.get(sk) is not None]
+ 
+        if all_insights:
+            # Check whether risks and recommendations are identical across scenarios.
+            risks_sets = [tuple(sorted(getattr(i, "risks", []) or [])) for i in all_insights]
+            recs_sets = [tuple(sorted(getattr(i, "recommendations", []) or [])) for i in all_insights]
+            same_risks = len(set(risks_sets)) <= 1
+            same_recs = len(set(recs_sets)) <= 1
+ 
+            ref_insight = base_insight if base_insight is not None else all_insights[0]
+ 
+            if same_risks and same_recs:
+                # One block covers all three scenarios.
+                if ref_insight.risks:
+                    st.markdown("**Risks**")
+                    for r in ref_insight.risks:
+                        st.write(f"- {r}")
+                if ref_insight.recommendations:
+                    st.markdown("**Recommendations**")
+                    for r in ref_insight.recommendations:
+                        st.write(f"- {r}")
+            else:
+                # Genuine differences across scenarios.
+                for sk in scenario_keys:
+                    ins = module7_bundle.scenario_insights.get(sk)
+                    if ins is None:
+                        continue
+                    if ins.risks or ins.recommendations:
+                        st.markdown(f"**{_human_scenario_name(sk)} scenario**")
+                        if ins.risks:
+                            st.markdown("Risks")
+                            for r in ins.risks:
+                                st.write(f"- {r}")
+                        if ins.recommendations:
+                            st.markdown("Recommendations")
+                            for r in ins.recommendations:
+                                st.write(f"- {r}")
+ 
+            # Binding constraints from the base scenario (if any).
+            if base_insight is not None and base_insight.binding_constraints:
+                st.markdown("**Binding constraints (base scenario)**")
+                for c in base_insight.binding_constraints:
+                    st.write(f"- {c}")
+ 
+        st.caption(
+            "ℹ Recommendations inherit the attribution your KPIs came from. "
+            "If platform-reported numbers over-credit a channel (last-click bias), "
+            "the optimiser will over-allocate to that channel. Cross-check against "
+            "incrementality tests before committing to material reallocations."
+        )
+ 
+        st.divider()
+ 
+    # ═══════════════════════════════════════════════════════════════════════
+    # SECTION 4 — PER-SCENARIO DETAIL (collapsed by default)
+    # ═══════════════════════════════════════════════════════════════════════
+    with st.expander("Per-scenario detail (allocation, forecast, alternative plans)",
+                     expanded=False):
+        # Reorder so Base is the default visible tab
+        order = ["base"] + [k for k in scenario_keys if k != "base"]
+        order = [k for k in order if k in scenario_keys]
+        tabs = st.tabs([_human_scenario_name(k) for k in order])
+ 
+        scenario_payload_for_exports: List[Tuple[str, Module5LPResult, Optional[Module6Result]]] = []
+        for tab, sk in zip(tabs, order):
+            lp_res = lp_by_scenario.get(sk)
+            if lp_res is None:
+                continue
+            forecast_res = fc_by_scenario.get(sk)
+            scenario_payload_for_exports.append((sk, lp_res, forecast_res))
+ 
+            with tab:
+                # Compact metric row: budget only, no objective value
+                spend = float(lp_res.total_budget_used or 0.0)
+                st.metric("Total budget used", money(spend))
+ 
+                # Budget allocation
+                st.markdown("**Budget allocation**")
+                budget_df = build_budget_allocation_df(lp_res)
+                if budget_df.empty:
+                    st.info("No allocation to display.")
+                else:
+                    show_budget = budget_df.copy()
+                    show_budget["Allocated Budget"] = show_budget["Allocated Budget"].apply(money)
+                    st.dataframe(show_budget, use_container_width=True, hide_index=True)
+ 
+                # Forecast KPIs
+                if forecast_res is not None:
+                    forecast_df = build_forecast_df(forecast_res, goal_values=goal_values)
+                    if not forecast_df.empty:
+                        st.markdown("**Forecast KPIs**")
+                        show_forecast = forecast_df.copy()
+                        show_forecast["Allocated Budget"] = show_forecast["Allocated Budget"].apply(money)
+                        show_forecast["Predicted KPI"] = show_forecast["Predicted KPI"].apply(
+                            lambda x: number(x, 2)
+                        )
+                        if "Expected Revenue" in show_forecast.columns and has_explicit_goal_values:
+                            show_forecast["Expected Revenue"] = show_forecast["Expected Revenue"].apply(
+                                lambda x: money(x) if float(x) > 0 else ""
+                            )
+                        else:
+                            show_forecast = show_forecast.drop(
+                                columns=[c for c in ["Expected Revenue", "ROAS"]
+                                         if c in show_forecast.columns],
+                                errors="ignore",
+                            )
+                        if "ROAS" in show_forecast.columns and has_explicit_goal_values:
+                            show_forecast["ROAS"] = show_forecast["ROAS"].apply(
+                                lambda x: f"{number(x, 2)}×" if float(x) > 0 else ""
+                            )
+                        st.dataframe(show_forecast, use_container_width=True, hide_index=True)
+ 
+                # Plan A vs Plan B (if Module 7 produced them)
+                if module7_bundle is not None and module7_bundle.scenario_insights:
+                    ins = module7_bundle.scenario_insights.get(sk)
+                    if ins is not None:
+                        if getattr(ins, "plan_a", None) is not None:
+                            pa = ins.plan_a
+                            st.markdown("**Plan A (Performance first)**")
+                            pa_alloc = _allocation_to_plan_rows(getattr(pa, "allocation", None))
+                            if not pa_alloc.empty:
+                                show = pa_alloc.copy()
+                                show["Allocated Budget"] = show["Allocated Budget"].apply(money)
+                                st.dataframe(show, use_container_width=True, hide_index=True)
+                        if getattr(ins, "plan_b", None) is not None:
+                            pb = ins.plan_b
+                            st.markdown("**Plan B (Risk managed)**")
+                            trade = getattr(pb, "tradeoff_percent", None)
+                            if trade is not None:
+                                st.caption(
+                                    f"Trade-off vs Plan A: **{number(trade, 1)}%** "
+                                    f"less expected performance, in exchange for diversification."
+                                )
+                            pb_alloc = _allocation_to_plan_rows(getattr(pb, "allocation", None))
+                            if not pb_alloc.empty:
+                                show = pb_alloc.copy()
+                                show["Allocated Budget"] = show["Allocated Budget"].apply(money)
+                                st.dataframe(show, use_container_width=True, hide_index=True)
+ 
+    # ═══════════════════════════════════════════════════════════════════════
+    # SECTION 5 — ADVANCED CONTROLS (refine, diagnostics, robustness)
+    # ═══════════════════════════════════════════════════════════════════════
+    with st.expander("Decision mode and refine policy", expanded=False):
+        st.selectbox(
+            "Decision mode",
+            options=["Performance first", "Risk managed", "Exploration"],
+            index=["Performance first", "Risk managed", "Exploration"].index(decision_mode),
+            key="_decision_mode",
+            help="Performance first chooses the LP optimum. Risk managed always offers Plan B. "
+                 "Exploration loosens scenario coupling.",
+        )
+ 
+        st.caption(
+            "Adjust the policy levers below and click Re-solve. Historical data "
+            "and platform selection from Modules 1-3 are preserved."
+        )
+ 
         col_budget, col_carve = st.columns(2)
         with col_budget:
             new_budget = st.number_input(
@@ -1533,7 +1675,7 @@ def results_ui(state: WizardState) -> None:
                 key="_resolve_tl",
             )
             new_tl_pct = new_tl_pct_int / 100.0
-
+ 
         new_seasonality: Dict[str, float] = {}
         if state.valid_goals:
             st.markdown("**Seasonality multipliers** (1.0 = no adjustment):")
@@ -1549,7 +1691,7 @@ def results_ui(state: WizardState) -> None:
                     )
                     if abs(m - 1.0) > 1e-6:
                         new_seasonality[g] = m
-
+ 
         new_min_spend: Dict[str, float] = {}
         if state.active_platforms:
             st.markdown("**Per-platform minimum spend** (LP must allocate at least this much):")
@@ -1564,11 +1706,9 @@ def results_ui(state: WizardState) -> None:
                         key=f"_resolve_floor_{p}",
                     )
                     new_min_spend[p] = float(floor)
-
+ 
         if st.button("Re-solve with these changes", type="primary", key="_resolve_button"):
             try:
-                # Mutate the policy fields, then unset the M4-M7 finalised
-                # flags so results_ui's auto-run picks them up on rerun.
                 state.total_budget = float(new_budget)
                 state.test_and_learn_pct = float(new_tl_pct)
                 state.seasonality_index = dict(new_seasonality)
@@ -1577,22 +1717,13 @@ def results_ui(state: WizardState) -> None:
                 state.module5_finalised = False
                 state.module6_finalised = False
                 state.module7_finalised = False
-                # current_step is at 7+ after a full run; the per-module
-                # entry guards check it before running.  Roll back to 4.
                 state.current_step = 4
-                # Drop the cached Monte Carlo too; the new policy invalidates it.
                 st.session_state.pop("_mc_result", None)
                 safe_rerun()
             except Exception as e:
                 st.error(f"Could not re-solve: {e}")
-
-    # ── Solver diagnostics (auditable "why this allocation?") ──────────────
-    # Surfaces the LP signals that already exist on every Module5LPResult
-    # but were previously hidden from the UI.  Focused on the base scenario;
-    # the per-scenario tabs below still let the user dig deeper.
-    base_lp = lp_by_scenario.get("base") or (
-        lp_by_scenario.get(scenario_keys[0]) if scenario_keys else None
-    )
+ 
+    # Solver diagnostics
     if base_lp is not None and (
         base_lp.binding_constraints
         or base_lp.shadow_prices
@@ -1600,140 +1731,110 @@ def results_ui(state: WizardState) -> None:
         or base_lp.near_degenerate_groups
         or base_lp.test_and_learn_reserve > 0.0
     ):
-        with st.expander("Solver diagnostics", expanded=False):
+        with st.expander("Solver diagnostics (advanced)", expanded=False):
             st.caption(
                 "What constraints actually shaped the optimiser's choice, "
                 "and how sensitive the allocation is to each one."
             )
-
+ 
             if base_lp.test_and_learn_reserve > 0.0:
                 st.markdown(
                     f"**Test-and-learn reserve (base scenario):** "
                     f"{money(base_lp.test_and_learn_reserve)} held back from the LP."
                 )
-
+ 
             if base_lp.binding_constraints:
                 st.markdown("**Binding constraints** — these stopped the LP from doing better:")
                 binding_rows = []
                 for bc in base_lp.binding_constraints:
                     target_label = ""
                     if bc.kind == "min_platform":
-                        target_label = PLATFORM_NAMES.get(str(bc.target).lower(), str(bc.target))
+                        target_label = _platform_display_name(state, bc.target)
                     elif bc.kind == "min_goal":
-                        target_label = _GOAL_LABEL.get(str(bc.target).lower(), str(bc.target))
-                    elif bc.kind == "budget_cap":
-                        target_label = "(total)"
+                        target_label = _GOAL_LABEL.get(bc.target, bc.target)
+                    elif bc.kind == "budget":
+                        target_label = "Total budget"
                     binding_rows.append({
-                        "Constraint": bc.name,
-                        "Kind": bc.kind,
-                        "Target": target_label,
-                        "Limit": money(bc.rhs),
-                        "Shadow price": number(bc.shadow_price, 4),
+                        "Constraint": bc.kind, "Target": target_label,
+                        "RHS": money(bc.rhs), "Achieved": money(bc.lhs_value),
                     })
-                st.dataframe(pd.DataFrame(binding_rows),
-                             use_container_width=True, hide_index=True)
-                st.caption(
-                    "Shadow price ≈ how much the objective would change if you "
-                    "relaxed the constraint by one unit.  Positive on min floors "
-                    "(forcing spend hurts the objective), negative on the budget cap "
-                    "(more budget would help)."
-                )
-
-            # Top-3 shadow prices (by absolute value), excluding the already-shown bindings
+                if binding_rows:
+                    st.dataframe(pd.DataFrame(binding_rows),
+                                 use_container_width=True, hide_index=True)
+ 
             if base_lp.shadow_prices:
-                already_shown = {bc.name for bc in base_lp.binding_constraints}
-                other = [
-                    (name, pi) for name, pi in base_lp.shadow_prices.items()
-                    if name not in already_shown and abs(pi) > 1e-9
-                ]
-                if other:
-                    other.sort(key=lambda kv: abs(kv[1]), reverse=True)
-                    top = other[:3]
-                    st.markdown("**Largest non-binding sensitivities:**")
-                    st.dataframe(
-                        pd.DataFrame([
-                            {"Constraint": name, "Shadow price": number(pi, 4)}
-                            for name, pi in top
-                        ]),
-                        use_container_width=True, hide_index=True,
-                    )
-
+                st.markdown("**Shadow prices** — value of relaxing each constraint by £1:")
+                sp_rows = []
+                for sp in base_lp.shadow_prices:
+                    target_label = ""
+                    if sp.kind == "min_platform":
+                        target_label = _platform_display_name(state, sp.target)
+                    elif sp.kind == "min_goal":
+                        target_label = _GOAL_LABEL.get(sp.target, sp.target)
+                    elif sp.kind == "budget":
+                        target_label = "Total budget"
+                    sp_rows.append({
+                        "Constraint": sp.kind, "Target": target_label,
+                        "Shadow price": number(sp.shadow_price, 4),
+                    })
+                if sp_rows:
+                    st.dataframe(pd.DataFrame(sp_rows),
+                                 use_container_width=True, hide_index=True)
+ 
             if base_lp.effective_minimum_warnings:
-                st.markdown("**Below industry-effective spend** — these platforms may not exit the learning phase:")
+                st.markdown("**Effective-minimum warnings:**")
                 for w in base_lp.effective_minimum_warnings:
-                    st.warning(w)
-
+                    st.write(f"- {w}")
+ 
             if base_lp.near_degenerate_groups:
-                st.markdown("**Near-degenerate cells** — productivity was effectively tied:")
+                st.markdown("**Near-degenerate platform groups:**")
                 for grp in base_lp.near_degenerate_groups:
-                    g_label = _GOAL_LABEL.get(str(grp.get("goal", "")).lower(), str(grp.get("goal", "")))
-                    plats = ", ".join(
-                        PLATFORM_NAMES.get(str(p).lower(), str(p)) for p in grp.get("platforms", [])
+                    names = ", ".join(
+                        _platform_display_name(state, p) for p in grp
                     )
-                    st.caption(
-                        f"{g_label}: {plats} — split was set by proportional "
-                        f"redistribution, not by a meaningful productivity gap."
-                    )
-
-    # ── Monte Carlo robustness ─────────────────────────────────────────────
-    # On-demand because n_trials LP solves is the expensive bit (~1-5 s).
-    # Caches the result in session state so toggling other UI elements
-    # doesn't re-run the whole batch.
-    with st.expander("Robustness check (Monte Carlo)", expanded=False):
+                    st.write(f"- {names}")
+ 
+    # Robustness check (Monte Carlo)
+    with st.expander("Robustness check (Monte Carlo, advanced)", expanded=False):
         st.caption(
-            "Re-solves the base scenario hundreds of times with productivities "
-            "perturbed by their observed noise.  Surfaces platforms whose share "
-            "is sensitive to the underlying assumptions."
+            "Resamples the productivity matrix many times and reports how stable "
+            "each platform's allocation is. Use this to spot platforms whose rank "
+            "is sensitive to small data noise."
         )
-        col_n, col_seed, col_run = st.columns([1, 1, 1])
-        with col_n:
-            n_trials = st.number_input(
-                "Trials", min_value=20, max_value=500,
-                value=int(DEFAULT_MC_TRIALS), step=20,
-                help="More trials = tighter percentiles, more runtime.",
-            )
-        with col_seed:
-            seed = st.number_input(
-                "Seed", min_value=0, max_value=2_147_483_647,
-                value=42, step=1,
-                help="Reproducibility — same seed gives the same distribution.",
-            )
-        with col_run:
-            st.write("")  # vertical spacer to line up with inputs
-            run_mc = st.button("Run robustness check", type="primary")
-
-        if run_mc:
+ 
+        mc_trials = st.slider(
+            "Number of trials", min_value=50, max_value=1000,
+            value=int(DEFAULT_MC_TRIALS), step=50,
+        )
+        if st.button("Run robustness check", key="_mc_button"):
             try:
-                with st.spinner(f"Running {int(n_trials)} LP solves..."):
-                    mc_result = run_module5_montecarlo(
-                        state, n_trials=int(n_trials), seed=int(seed),
-                    )
+                mc_result = run_module5_montecarlo(state, n_trials=mc_trials)
                 st.session_state["_mc_result"] = mc_result
             except Exception as e:
                 st.error(f"Monte Carlo failed: {e}")
-
+ 
         mc_result = st.session_state.get("_mc_result")
         if mc_result is not None:
-            st.caption(
-                f"{mc_result.n_trials} trials completed (seed={mc_result.seed}). "
-                f"Instability threshold: CV > {mc_result.instability_threshold:.0%}."
+            st.markdown(
+                f"**{mc_result.n_trials} trials.** "
+                f"Stability score: **{number(mc_result.stability_score * 100, 1)}%** "
+                f"(higher is better)."
             )
-
+ 
             if mc_result.unstable_platforms:
                 names = ", ".join(
                     PLATFORM_NAMES.get(p, p) for p in mc_result.unstable_platforms
                 )
                 st.warning(
                     f"Unstable platforms: {names}. "
-                    f"Allocation rank for these platforms is sensitive to "
-                    f"plausible productivity noise — don't bet the campaign on them."
+                    f"Their allocation rank is sensitive to plausible productivity noise."
                 )
             else:
                 st.success(
-                    "No platform's allocation moved meaningfully under perturbation — "
-                    "the plan is robust to the noise in the input data."
+                    "No platform's allocation moved meaningfully under perturbation. "
+                    "The plan is robust to the noise in the input data."
                 )
-
+ 
             platform_rows = []
             for s in mc_result.per_platform:
                 platform_rows.append({
@@ -1748,198 +1849,84 @@ def results_ui(state: WizardState) -> None:
                 st.markdown("**Per-platform allocation distribution:**")
                 st.dataframe(pd.DataFrame(platform_rows),
                              use_container_width=True, hide_index=True)
-
-    tabs = st.tabs([_human_scenario_name(k) for k in scenario_keys])
-    scenario_payload_for_exports: List[Tuple[str, Module5LPResult, Optional[Module6Result]]] = []
-
-    def rule_based_summary(lp_res: Module5LPResult, fc_res: Optional[Module6Result]) -> List[str]:
-        bullets: List[str] = []
-
-        platform_totals = build_platform_totals_df(lp_res)
-        if not platform_totals.empty:
-            top_p = platform_totals.sort_values("Total Allocated Budget", ascending=False).iloc[0]
-            bullets.append(f"Highest allocated platform: {top_p['Platform']} with {money(top_p['Total Allocated Budget'])}.")
-
-        alloc = build_budget_allocation_df(lp_res)
-        if not alloc.empty:
-            goal_totals = alloc.groupby("Objective", as_index=False)["Allocated Budget"].sum()
-            if not goal_totals.empty:
-                top_g = goal_totals.sort_values("Allocated Budget", ascending=False).iloc[0]
-                bullets.append(f"Highest allocated objective: {top_g['Objective']} with {money(top_g['Allocated Budget'])}.")
-
-        if fc_res is not None:
-            fdf = build_forecast_df(fc_res, goal_values=goal_values_for_results)
-            if not fdf.empty:
-                top_kpi = fdf.sort_values("Predicted KPI", ascending=False).iloc[0]
-                bullets.append(f"Top predicted KPI: {top_kpi['KPI']} on {top_kpi['Platform']} at {number(top_kpi['Predicted KPI'], 2)}.")
-                if "Expected Revenue" in fdf.columns:
-                    total_rev = float(fdf["Expected Revenue"].sum())
-                    spend = float(lp_res.total_budget_used or 0.0)
-                    if total_rev > 0 and spend > 0:
-                        bullets.append(
-                            f"Expected revenue: {money(total_rev)} on {money(spend)} spend "
-                            f"(ROAS {number(total_rev / spend, 2)}×)."
-                        )
-
-        if hasattr(lp_res, "objective_value_raw"):
-            bullets.append(f"Objective (raw): {number(getattr(lp_res, 'objective_value_raw') or 0.0, 6)}.")
-
-        return bullets
-
-    for tab, sk in zip(tabs, scenario_keys):
-        lp_res = lp_by_scenario.get(sk)
-        if lp_res is None:
-            continue
-        forecast_res = fc_by_scenario.get(sk)
-        scenario_payload_for_exports.append((sk, lp_res, forecast_res))
-
-        with tab:
-            st.subheader("Summary")
-
-            # Pre-compute revenue totals for both the metric row and the
-            # downstream forecast table so we render the same numbers in
-            # both places.
-            scenario_total_revenue = 0.0
-            scenario_roas = 0.0
-            if forecast_res is not None and goal_values_for_results:
-                fdf_preview = build_forecast_df(
-                    forecast_res, goal_values=goal_values_for_results
-                )
-                if "Expected Revenue" in fdf_preview.columns:
-                    scenario_total_revenue = float(fdf_preview["Expected Revenue"].sum())
-                    spend_for_roas = float(lp_res.total_budget_used or 0.0)
-                    if spend_for_roas > 0:
-                        scenario_roas = scenario_total_revenue / spend_for_roas
-
-            if scenario_total_revenue > 0:
-                c1, c2, c3, c4 = st.columns(4)
-                with c1:
-                    st.metric("Total budget used", money(lp_res.total_budget_used or 0.0))
-                with c2:
-                    st.metric("Expected revenue", money(scenario_total_revenue))
-                with c3:
-                    st.metric("ROAS", f"{number(scenario_roas, 2)}×")
-                with c4:
-                    st.metric("Objective value", number(lp_res.objective_value or 0.0, 2))
-                st.caption(
-                    "Expected revenue = predicted volume × goal value.  Every canonical KPI "
-                    "is a count (the uniform-units refactor folded Engagement Rate / CTR into "
-                    "summed count KPIs), so all KPIs contribute.  Cells with multiple KPIs for "
-                    "the same objective (e.g. Facebook Awareness: Reach + Impression) sum each "
-                    "KPI's contribution — treat the total as an upper bound when those KPIs "
-                    "measure overlapping value."
-                )
-            else:
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.metric("Total budget used", money(lp_res.total_budget_used or 0.0))
-                with c2:
-                    st.metric("Objective value", number(lp_res.objective_value or 0.0, 2))
-
-            if hasattr(lp_res, "objective_value_raw"):
-                st.caption(f"Objective value (raw): {number(getattr(lp_res, 'objective_value_raw') or 0.0, 6)}")
-
-            bullets = rule_based_summary(lp_res, forecast_res)
-            if bullets:
-                st.markdown("Key points")
-                for b in bullets:
-                    st.write(b)
-
-            st.subheader("Matrix: budget allocation (platform x objective)")
-            budget_matrix = build_budget_matrix_df(lp_res)
-            if budget_matrix.empty:
-                st.info("No allocation matrix available.")
-            else:
-                show = budget_matrix.copy()
-                for c in show.columns:
-                    if c != "Platform":
-                        show[c] = show[c].apply(money)
-                st.dataframe(show, use_container_width=True, hide_index=True)
-
-            st.subheader("Budget allocation table")
-            budget_df = build_budget_allocation_df(lp_res)
-            if budget_df.empty:
-                st.warning("No budget allocation to display.")
-            else:
-                show_budget = budget_df.copy()
-                show_budget["Allocated Budget"] = show_budget["Allocated Budget"].apply(money)
-                st.dataframe(show_budget, use_container_width=True, hide_index=True)
-
-            st.subheader("Platform totals")
-            platform_df = build_platform_totals_df(lp_res)
-            if not platform_df.empty:
-                show_platform = platform_df.copy()
-                show_platform["Total Allocated Budget"] = show_platform["Total Allocated Budget"].apply(money)
-                st.dataframe(show_platform, use_container_width=True, hide_index=True)
-
-            st.subheader("Matrix: forecast KPIs (platform x KPI)")
-            if forecast_res is None:
-                st.info("Forecast is not available for this scenario.")
-            else:
-                forecast_matrix = build_forecast_matrix_df(forecast_res)
-                if forecast_matrix.empty:
-                    st.info("No forecast matrix available.")
-                else:
-                    show = forecast_matrix.copy()
-                    for c in show.columns:
-                        if c != "Platform":
-                            show[c] = show[c].apply(lambda x: number(x, 2))
+ 
+    # ═══════════════════════════════════════════════════════════════════════
+    # APPENDIX — POLICY (collapsed at the bottom)
+    # ═══════════════════════════════════════════════════════════════════════
+    df_p, df_g, df_s = _policy_tables(state)
+    df_sgm = _scenario_goal_multiplier_table(state)
+    if not df_p.empty or not df_g.empty or not df_s.empty or not df_sgm.empty:
+        with st.expander("Your inputs and policy", expanded=False):
+            st.caption(
+                "These are the rules and multipliers that constrained the optimiser. "
+                "Go back to the wizard if any value is unexpected."
+            )
+            cols = st.columns(2)
+            with cols[0]:
+                if not df_p.empty:
+                    show = df_p.copy()
+                    show["Minimum Spend"] = show["Minimum Spend"].apply(money)
+                    st.markdown("**Minimum spend per platform**")
                     st.dataframe(show, use_container_width=True, hide_index=True)
-
-            st.subheader("Forecast KPIs table")
-            if forecast_res is None:
-                st.info("Forecast is not available for this scenario.")
-            else:
-                forecast_df = build_forecast_df(
-                    forecast_res, goal_values=goal_values_for_results
-                )
-                if forecast_df.empty:
-                    st.warning("No forecast KPIs to display.")
-                else:
-                    show_forecast = forecast_df.copy()
-                    show_forecast["Allocated Budget"] = show_forecast["Allocated Budget"].apply(money)
-                    show_forecast["Predicted KPI"] = show_forecast["Predicted KPI"].apply(lambda x: number(x, 2))
-                    if "Expected Revenue" in show_forecast.columns:
-                        show_forecast["Expected Revenue"] = show_forecast["Expected Revenue"].apply(
-                            lambda x: money(x) if float(x) > 0 else ""
-                        )
-                    if "ROAS" in show_forecast.columns:
-                        show_forecast["ROAS"] = show_forecast["ROAS"].apply(
-                            lambda x: f"{number(x, 2)}×" if float(x) > 0 else ""
-                        )
-                    st.dataframe(show_forecast, use_container_width=True, hide_index=True)
-
+                if not df_s.empty:
+                    show = df_s.copy()
+                    show["Multiplier"] = show["Multiplier"].apply(lambda x: number(x, 2))
+                    st.markdown("**Scenario multipliers (overall)**")
+                    st.dataframe(show, use_container_width=True, hide_index=True)
+            with cols[1]:
+                if not df_g.empty:
+                    show = df_g.copy()
+                    show["Minimum Budget"] = show["Minimum Budget"].apply(money)
+                    st.markdown("**Minimum budget per objective**")
+                    st.dataframe(show, use_container_width=True, hide_index=True)
+                if not df_sgm.empty:
+                    show = df_sgm.copy()
+                    for c in show.columns:
+                        if c != "Scenario":
+                            show[c] = show[c].apply(lambda x: number(x, 2))
+                    st.markdown("**Scenario multipliers per objective**")
+                    st.dataframe(show, use_container_width=True, hide_index=True)
+ 
+    # ═══════════════════════════════════════════════════════════════════════
+    # DOWNLOADS — at the very end
+    # ═══════════════════════════════════════════════════════════════════════
+    st.divider()
     st.subheader("Downloads")
-    pdf_bytes = create_pdf_bytes(state, scenario_payload_for_exports, module7_bundle=module7_bundle)
-
-    st.download_button(
-        label="Download PDF",
-        data=pdf_bytes,
-        file_name="results_summary.pdf",
-        mime="application/pdf",
-    )
-
+    pdf_bytes = create_pdf_bytes(state, scenario_payload_for_exports,
+                                  module7_bundle=module7_bundle)
+ 
+    col_d1, col_d2, col_d3 = st.columns(3)
+    with col_d1:
+        st.download_button(
+            label="Download PDF",
+            data=pdf_bytes,
+            file_name="results_summary.pdf",
+            mime="application/pdf",
+        )
+ 
     excel_available = True
     try:
         import openpyxl  # type: ignore  # noqa: F401
     except Exception:
         excel_available = False
-
-    if excel_available:
-        xlsx_bytes = create_excel_bytes(
-            scenario_payload_for_exports, goal_values=goal_values_for_results
-        )
-        st.download_button(
-            label="Download Excel",
-            data=xlsx_bytes,
-            file_name="results_summary.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-    else:
-        st.info("Excel export is unavailable because the required dependency is not installed.")
-
-    if st.button("Start over"):
-        reset_state()
+ 
+    with col_d2:
+        if excel_available:
+            xlsx_bytes = create_excel_bytes(
+                scenario_payload_for_exports, goal_values=goal_values
+            )
+            st.download_button(
+                label="Download Excel",
+                data=xlsx_bytes,
+                file_name="results_summary.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        else:
+            st.info("Excel export needs `openpyxl` installed.")
+ 
+    with col_d3:
+        if st.button("Start over"):
+            reset_state()
 
 
 # Default value-per-unit illustrations for the Module 1 form.  The numeric
