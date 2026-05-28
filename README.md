@@ -7,7 +7,7 @@ This project provides a complete decision support system that helps decision-mak
 Instead of looking at channels separately, the system treats marketing as a constrained optimisation problem. It integrates past performance data, business goals, and uncertainty to generate clear, structured recommendations.
 
 The framework is designed to help managers make better decisions, not just to automate processes.
-
+https://github.com/Hoda834/digital-budget-optimisation-engine.wiki.git
 ---
 
 ## What Problem Does This Solve?
