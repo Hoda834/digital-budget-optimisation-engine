@@ -1,0 +1,3308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MBOE Wiki — Marketing Budget Optimisation Engine</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+/* ---------- Tokens ---------- */
+:root {
+  --ink: #0a0a0a;
+  --bg: #f3f2ee;
+  --surface: #fbfaf6;
+  --mute: #5a594f;
+  --faint: #8c8a7e;
+  --line: #cfcabc;
+  --line-strong: #1a1a1a;
+  --accent: #c8281e;
+  --code-bg: #ebe9e1;
+  --selection: #1a1a1a;
+  --selection-fg: #f3f2ee;
+
+  --title-scale: 1;
+
+  --font-sans: "IBM Plex Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --font-display: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+
+  --pad-x: clamp(28px, 4vw, 72px);
+  --sidebar-w: 296px;
+}
+
+[data-theme="dark"] {
+  --ink: #ece9df;
+  --bg: #0d0d0c;
+  --surface: #15140f;
+  --mute: #a09e91;
+  --faint: #6b695d;
+  --line: #34322a;
+  --line-strong: #ece9df;
+  --code-bg: #1d1c16;
+  --selection: #ece9df;
+  --selection-fg: #0d0d0c;
+}
+
+/* ---------- Reset / base ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); }
+body {
+  font-family: var(--font-sans);
+  font-size: 17px;
+  line-height: 1.55;
+  font-feature-settings: "ss01", "tnum";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+::selection { background: var(--selection); color: var(--selection-fg); }
+
+a { color: inherit; text-decoration: none; border-bottom: 1px solid currentColor; }
+a:hover { color: var(--accent); }
+
+hr { border: 0; border-top: 1px solid var(--line); margin: 32px 0; }
+
+/* ---------- Top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr auto;
+  align-items: stretch;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line-strong);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.topbar > * { padding: 14px 20px; display: flex; align-items: center; gap: 14px; }
+.topbar .brand { border-right: 1px solid var(--line-strong); }
+.topbar .brand b { font-weight: 700; letter-spacing: 0.02em; }
+.topbar .crumbs { color: var(--mute); gap: 8px; }
+.topbar .crumbs span.sep { color: var(--faint); }
+.topbar .meta { gap: 18px; color: var(--mute); border-left: 1px solid var(--line); }
+.topbar .meta .dot { width: 8px; height: 8px; background: var(--accent); display: inline-block; }
+
+/* ---------- Layout ---------- */
+.shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  min-height: calc(100vh - 49px);
+  background: var(--bg);
+}
+
+/* ---------- Sidebar ---------- */
+.sidebar {
+  border-right: 1px solid var(--line-strong);
+  padding: 28px 0;
+  position: sticky; top: 49px;
+  height: calc(100vh - 49px);
+  overflow-y: auto;
+  background: var(--bg);
+}
+.sidebar .group { margin-bottom: 28px; padding: 0 20px; }
+.sidebar .group h4 {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin: 0 0 10px 0;
+  display: flex; align-items: center; gap: 10px;
+}
+.sidebar .group h4::after {
+  content: ""; flex: 1; height: 1px; background: var(--line);
+}
+.sidebar a {
+  display: block;
+  padding: 5px 0;
+  font-size: 14px;
+  border-bottom: none;
+  color: var(--ink);
+}
+.sidebar a .num {
+  display: inline-block; width: 28px;
+  font-family: var(--font-mono); font-size: 11px;
+  color: var(--faint);
+}
+.sidebar a:hover { color: var(--accent); }
+.sidebar a:hover .num { color: var(--accent); }
+.sidebar a.active {
+  color: var(--ink); font-weight: 600;
+}
+.sidebar a.active .num { color: var(--accent); font-weight: 600; }
+.sidebar a.active::before {
+  content: "▸"; position: absolute; margin-left: -16px; color: var(--accent);
+}
+
+/* ---------- Content ---------- */
+main.content {
+  padding: 56px var(--pad-x) 120px;
+  max-width: 980px;
+  background: var(--bg);
+}
+main.content.wide { max-width: 1240px; }
+
+/* Page header */
+.page-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 32px;
+  padding-bottom: 28px;
+  margin-bottom: 48px;
+  border-bottom: 2px solid var(--line-strong);
+}
+.page-head .eyebrow {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--mute);
+  margin-bottom: 18px;
+}
+.page-head h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: calc(54px * var(--title-scale));
+  line-height: 1.02;
+  letter-spacing: -0.02em;
+}
+.page-head .deck {
+  margin-top: 18px;
+  font-size: 19px;
+  color: var(--mute);
+  max-width: 60ch;
+}
+.page-head .head-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--mute);
+  text-align: right;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.page-head .head-meta b { color: var(--ink); font-weight: 600; }
+
+/* Body typography */
+main.content h2 {
+  margin: 56px 0 14px;
+  padding-bottom: 8px;
+  font-family: var(--font-display);
+  font-size: calc(28px * var(--title-scale));
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  border-bottom: 1px solid var(--line);
+}
+main.content h2 .num {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--faint);
+  margin-right: 14px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+main.content h3 {
+  margin: 36px 0 10px;
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+main.content h4 {
+  margin: 24px 0 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+  font-weight: 600;
+}
+main.content p {
+  margin: 0 0 18px;
+  max-width: 70ch;
+  text-wrap: pretty;
+}
+main.content strong { font-weight: 600; }
+main.content em { font-style: italic; }
+
+/* Lists */
+main.content ul, main.content ol { padding-left: 24px; margin: 0 0 22px; max-width: 70ch; }
+main.content li { margin: 6px 0; }
+main.content ul li::marker { color: var(--accent); }
+main.content ol li::marker { color: var(--faint); font-family: var(--font-mono); font-size: 13px; }
+
+/* Code */
+code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--code-bg);
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+}
+pre {
+  font-family: var(--font-mono);
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--ink);
+  padding: 18px 20px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 22px 0;
+}
+pre code { background: transparent; border: 0; padding: 0; font-size: inherit; }
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 24px 0;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+th, td {
+  text-align: left;
+  padding: 11px 16px 10px;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+th {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+  font-weight: 500;
+  border-bottom: 1px solid var(--line-strong);
+  background: transparent;
+}
+tr:hover td { background: var(--code-bg); }
+td code { font-size: 13px; }
+
+/* Blockquote-ish callout */
+.callout {
+  border: 1px solid var(--line-strong);
+  padding: 20px 24px;
+  margin: 24px 0;
+  position: relative;
+  background: var(--surface);
+}
+.callout::before {
+  content: attr(data-label);
+  position: absolute;
+  top: -10px; left: 16px;
+  background: var(--bg); padding: 0 10px;
+  font-family: var(--font-mono);
+  font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--accent);
+}
+.callout p:last-child { margin-bottom: 0; }
+
+/* Key-value strip */
+.kv-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  border: 1px solid var(--line-strong);
+  margin: 32px 0;
+}
+.kv-grid > div {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.kv-grid > div:nth-child(odd) { border-right: 1px solid var(--line); background: var(--surface); }
+.kv-grid > div:nth-last-child(-n+2) { border-bottom: 0; }
+.kv-grid .k {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--mute);
+  margin-bottom: 4px;
+}
+.kv-grid .v { font-size: 15px; line-height: 1.4; }
+
+/* Image slot wrapper / figure */
+figure.shot {
+  margin: 36px 0;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+}
+figure.shot image-slot {
+  display: block;
+  width: 100%;
+  background: var(--code-bg);
+  border-bottom: 1px solid var(--line);
+}
+figure.shot figcaption {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+figure.shot figcaption .tag {
+  background: var(--ink); color: var(--bg);
+  padding: 3px 8px; letter-spacing: 0.1em;
+}
+figure.shot figcaption .num {
+  color: var(--faint); font-variant-numeric: tabular-nums;
+}
+
+/* In-text mark / pill */
+.pill {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border: 1px solid currentColor;
+  margin-right: 6px;
+}
+.pill.accent { color: var(--accent); }
+
+/* Diagram block */
+.diagram {
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  padding: 24px;
+  margin: 28px 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--ink);
+}
+
+/* Math block */
+.math-block {
+  margin: 28px 0;
+  padding: 24px 28px;
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+  text-align: center;
+  font-size: 18px;
+  overflow-x: auto;
+}
+.math-block .label {
+  display: block;
+  margin-top: 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+/* Page footer (prev / next) */
+.page-foot {
+  margin-top: 96px;
+  padding-top: 24px;
+  border-top: 2px solid var(--line-strong);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+.page-foot a {
+  border-bottom: 0;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  display: block;
+  transition: border-color 0.15s;
+}
+.page-foot a:hover { border-color: var(--ink); color: var(--ink); }
+.page-foot a:hover .lbl { color: var(--accent); }
+.page-foot .next { text-align: right; }
+.page-foot .lbl {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 4px;
+}
+.page-foot .ttl { font-weight: 600; font-size: 17px; }
+
+/* Hero block on home */
+.hero {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 48px;
+  align-items: start;
+  margin-bottom: 48px;
+}
+.hero figure.shot { margin: 0; }
+.hero .lede p { font-size: 19px; line-height: 1.5; color: var(--ink); max-width: 48ch; }
+
+/* Stat row */
+.statrow {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0;
+  border: 1px solid var(--line-strong);
+  margin: 36px 0;
+}
+.statrow > div {
+  padding: 20px 22px;
+  border-right: 1px solid var(--line);
+}
+.statrow > div:last-child { border-right: 0; }
+.statrow .label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+  margin-bottom: 6px;
+}
+.statrow .value {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.statrow .value .unit { font-size: 14px; color: var(--mute); font-weight: 400; margin-left: 3px; }
+
+/* TOC mini */
+.toc {
+  margin: 28px 0 40px;
+  padding: 18px 22px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 18px 24px;
+}
+.toc .lbl {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+.toc ol { margin: 0; padding-left: 18px; column-count: 2; column-gap: 32px; max-width: none; }
+.toc li { margin: 3px 0; break-inside: avoid; font-size: 14px; }
+.toc li a { border-bottom: 0; }
+.toc li a:hover { color: var(--accent); }
+
+/* Small chart for shrinkage */
+.shrink-chart {
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  padding: 24px 28px 18px;
+  margin: 28px 0;
+}
+.shrink-chart svg { display: block; width: 100%; height: 220px; }
+.shrink-chart .legend {
+  display: flex; gap: 24px; margin-top: 8px;
+  font-family: var(--font-mono); font-size: 11px;
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute);
+}
+.shrink-chart .legend .sw {
+  display: inline-block; width: 16px; height: 2px; margin-right: 8px; vertical-align: middle;
+}
+
+/* Allocation mock chart */
+.alloc-mock {
+  display: grid;
+  grid-template-columns: 140px 1fr 60px;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  margin: 4px 0;
+}
+.alloc-mock .name { color: var(--ink); }
+.alloc-mock .bar { height: 14px; background: var(--code-bg); position: relative; }
+.alloc-mock .bar > span {
+  position: absolute; top: 0; left: 0; bottom: 0; background: var(--ink);
+}
+.alloc-mock .bar > span.accent { background: var(--accent); }
+.alloc-mock .pct { text-align: right; color: var(--mute); font-variant-numeric: tabular-nums; }
+.alloc-frame {
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  padding: 22px 26px;
+  margin: 28px 0;
+}
+.alloc-frame .lbl {
+  font-family: var(--font-mono); font-size: 11px;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute);
+  display: flex; justify-content: space-between; margin-bottom: 14px;
+}
+
+/* Confidence dial */
+.dial-row {
+  display: grid; grid-template-columns: 200px 1fr; gap: 28px; align-items: center;
+  border: 1px solid var(--line-strong); padding: 22px 26px; margin: 28px 0;
+  background: var(--surface);
+}
+.dial { position: relative; }
+.dial .score {
+  font-size: 56px; font-weight: 600; letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums; line-height: 1;
+}
+.dial .score .denom { font-size: 22px; color: var(--mute); font-weight: 400; }
+.dial .cls {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--accent); margin-top: 10px;
+}
+.dial-row .pen { font-size: 14px; }
+.dial-row .pen ul { padding-left: 18px; margin: 0; max-width: none; }
+.dial-row .pen li { margin: 2px 0; }
+.dial-row .pen li .v {
+  display: inline-block; min-width: 36px; text-align: right;
+  font-family: var(--font-mono); color: var(--accent); margin-right: 10px;
+}
+
+/* Tag list */
+.tags { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 24px; }
+.tags .tag {
+  font-family: var(--font-mono); font-size: 11px;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 3px 9px; border: 1px solid var(--line-strong);
+  color: var(--ink);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line); }
+::-webkit-scrollbar-thumb:hover { background: var(--mute); }
+
+/* Mobile fallback */
+@media (max-width: 880px) {
+  .shell { grid-template-columns: 1fr; }
+  .sidebar { position: relative; height: auto; border-right: 0; border-bottom: 1px solid var(--line-strong); }
+  .topbar { grid-template-columns: 1fr auto; }
+  .topbar .crumbs { display: none; }
+  .hero { grid-template-columns: 1fr; }
+  .statrow { grid-template-columns: 1fr 1fr; }
+  .statrow > div:nth-child(2) { border-right: 0; }
+  .page-head { grid-template-columns: 1fr; }
+  .page-head .head-meta { text-align: left; }
+}
+
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><b>MBOE</b><span style="color:var(--faint)">/wiki</span></div>
+  <div class="crumbs" id="crumbs"><span>Wiki</span><span class="sep">/</span><span id="crumb-page">Home</span></div>
+  <div class="meta">
+    <span><span class="dot"></span>main</span>
+    <span>v1.0</span>
+    <span>17 pages</span>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="sidebar" id="sidebar">
+    <div class="group">
+      <h4>Orientation</h4>
+      <a href="#home" data-page="home"><span class="num">01</span>Home</a>
+      <a href="#getting-started" data-page="getting-started"><span class="num">02</span>Getting Started</a>
+      <a href="#architecture" data-page="architecture"><span class="num">03</span>Architecture</a>
+      <a href="#wizard-walkthrough" data-page="wizard-walkthrough"><span class="num">04</span>Wizard Walkthrough</a>
+    </div>
+    <div class="group">
+      <h4>Modules</h4>
+      <a href="#module-1" data-page="module-1"><span class="num">M1</span>Objectives</a>
+      <a href="#module-2" data-page="module-2"><span class="num">M2</span>Platforms</a>
+      <a href="#module-3" data-page="module-3"><span class="num">M3</span>Historical KPIs</a>
+      <a href="#module-4" data-page="module-4"><span class="num">M4</span>Cost per Unit</a>
+      <a href="#module-5" data-page="module-5"><span class="num">M5</span>LP Optimiser</a>
+      <a href="#module-6" data-page="module-6"><span class="num">M6</span>Forecasting</a>
+      <a href="#module-7" data-page="module-7"><span class="num">M7</span>Interpretation</a>
+    </div>
+    <div class="group">
+      <h4>Data &amp; Config</h4>
+      <a href="#csv-import" data-page="csv-import"><span class="num">D1</span>CSV Import</a>
+      <a href="#kpi-catalogue" data-page="kpi-catalogue"><span class="num">D2</span>KPI Catalogue</a>
+      <a href="#calibration" data-page="calibration"><span class="num">D3</span>Calibration Constants</a>
+    </div>
+    <div class="group">
+      <h4>Method &amp; Engineering</h4>
+      <a href="#decision-logic" data-page="decision-logic"><span class="num">E1</span>Decision Logic</a>
+      <a href="#contributing" data-page="contributing"><span class="num">E2</span>Contributing</a>
+      <a href="#faq" data-page="faq"><span class="num">E3</span>FAQ &amp; Troubleshooting</a>
+    </div>
+  </nav>
+  <main class="content" id="content" tabindex="-1"><p style="color:var(--mute)">Loading…</p></main>
+</div>
+
+<div id="tweaks-root"></div>
+
+<!-- Inline page templates -->
+<script type="text/template" data-page="home">
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Decision Support · v1.0 · MIT</div>
+    <h1>Marketing Budget Optimisation &amp; Decision Support Framework</h1>
+    <p class="deck">A linear-programming decision-support system for splitting a fixed marketing budget across platforms and objectives — with named constraints, data-driven uncertainty bounds, and a confidence score that refuses to claim certainty the data can't support.</p>
+  </div>
+  <div class="head-meta">
+    <b>Hoda Rezvanjoo</b><br/>
+    Independent Researcher<br/>
+    ORCID 0009-0006-3882-2669<br/><br/>
+    <a href="https://digital-budget-optimisation-engine.streamlit.app/" target="_blank" rel="noopener">Live demo ↗</a><br/>
+    <a href="https://github.com/Hoda834/digital-budget-optimisation-engine" target="_blank" rel="noopener">Source ↗</a>
+  </div>
+</div>
+
+<div class="hero">
+  <div class="lede">
+    <p>Marketing-budget decisions rarely fail for lack of data. They fail because budgets are limited and must satisfy competing objectives, platform performance is interdependent, business constraints are applied informally or too late, and scenario uncertainty is ignored or oversimplified.</p>
+    <p>The result is a recommendation no one can defend in a meeting.</p>
+  </div>
+  <figure class="shot">
+    <image-slot id="home-hero" style="width:100%;aspect-ratio: 16 / 10;" shape="rect" placeholder="Drop hero screenshot: results report with scenario tabs, allocation chart and confidence score visible"></image-slot>
+    <figcaption><span class="tag">Fig 1</span><span>Results report — Plan A allocation with confidence score and binding constraints.</span><span class="num">01 / hero</span></figcaption>
+  </figure>
+</div>
+
+<div class="statrow">
+  <div><div class="label">Platforms</div><div class="value">12<span class="unit">+ custom</span></div></div>
+  <div><div class="label">Objectives</div><div class="value">4<span class="unit">/ 3 scenarios</span></div></div>
+  <div><div class="label">Solve time</div><div class="value">&lt;1<span class="unit">second</span></div></div>
+  <div><div class="label">Test suite</div><div class="value">141<span class="unit">cases</span></div></div>
+</div>
+
+<div class="kv-grid">
+  <div><div class="k">Domain</div><div class="v">Decision support systems · constrained optimisation · marketing analytics</div></div>
+  <div><div class="k">Method</div><div class="v">Linear programming (PuLP / CBC), James-Stein shrinkage, piecewise-linear diminishing returns, Monte Carlo robustness</div></div>
+  <div><div class="k">Scale</div><div class="v">12 platforms × 4 objectives × 3 yield brackets × 3 scenarios per run, solves in &lt;1s</div></div>
+  <div><div class="k">Codebase</div><div class="v">~5,900 lines typed Python 3.11 · Streamlit UI · 141-case pytest suite · CI on every push</div></div>
+  <div><div class="k">Outputs</div><div class="v">Auditable allocation, per-KPI forecasts with data-driven confidence bands, classified decision report, Plan A / Plan B</div></div>
+  <div><div class="k">License</div><div class="v">MIT · cite as <code>CITATION.cff</code></div></div>
+</div>
+
+<h2><span class="num">§1</span>What it solves</h2>
+
+<p>This framework treats media-mix planning as a <strong>constrained optimisation problem with declared assumptions</strong>. Every floor, cap, weight and multiplier is named, visible on the results page, and editable without walking the wizard from scratch. Every binding constraint surfaces with its shadow price, so <em>"why is Facebook capped?"</em> has a literal answer rather than a hand-wave.</p>
+
+<p>Where the data is thin, the engine says so: short histories are shrunk toward the cross-platform mean, forecast confidence bands scale with the observation window, and a Monte Carlo robustness check flags any platform whose rank is fragile to plausible noise.</p>
+
+<h2><span class="num">§2</span>Scope (and what's out of scope)</h2>
+
+<div class="callout" data-label="In scope">
+  <p>Quarterly media-mix planning under declared business policy — producing a defensible allocation with explicit assumptions and uncertainty bounds.</p>
+</div>
+
+<div class="callout" data-label="Out of scope">
+  <p>Live-API continuous optimisation · sub-platform allocation at the campaign / ad-set / creative level · causal incrementality estimation · Bayesian recalibration between runs. The engine inherits whatever attribution bias is in the KPIs you supply.</p>
+</div>
+
+<p>These limits appear in the report's forecast caveat, in the README, and in <a href="#decision-logic">Decision Logic</a> — they are part of the artefact, not hidden.</p>
+
+<h2><span class="num">§3</span>Wiki contents</h2>
+
+<div class="kv-grid" style="grid-template-columns: 1fr 1fr;">
+  <div>
+    <div class="k">Orientation</div>
+    <div class="v">
+      <a href="#getting-started">Getting Started</a> ·
+      <a href="#architecture">Architecture</a> ·
+      <a href="#wizard-walkthrough">Wizard Walkthrough</a>
+    </div>
+  </div>
+  <div>
+    <div class="k">Modules</div>
+    <div class="v">
+      <a href="#module-1">M1 Objectives</a> ·
+      <a href="#module-2">M2 Platforms</a> ·
+      <a href="#module-3">M3 Historical KPIs</a> ·
+      <a href="#module-4">M4 CPU</a> ·
+      <a href="#module-5">M5 LP Optimiser</a> ·
+      <a href="#module-6">M6 Forecasting</a> ·
+      <a href="#module-7">M7 Interpretation</a>
+    </div>
+  </div>
+  <div>
+    <div class="k">Data &amp; configuration</div>
+    <div class="v">
+      <a href="#csv-import">CSV Import Reference</a> ·
+      <a href="#kpi-catalogue">KPI Catalogue</a> ·
+      <a href="#calibration">Calibration Constants</a>
+    </div>
+  </div>
+  <div>
+    <div class="k">Method &amp; engineering</div>
+    <div class="v">
+      <a href="#decision-logic">Decision Logic</a> ·
+      <a href="#contributing">Contributing</a> ·
+      <a href="#faq">FAQ &amp; Troubleshooting</a>
+    </div>
+  </div>
+</div>
+
+<figure class="shot" style="margin-top:48px">
+  <image-slot id="home-review" style="width:100%;aspect-ratio: 16 / 9;" shape="rect" placeholder="Drop screenshot: Step 5 Review & Run with the Run button visible"></image-slot>
+  <figcaption><span class="tag">Fig 2</span><span>Review-and-run step before solving.</span><span class="num">02 / wizard</span></figcaption>
+</figure>
+
+</script>
+<script type="text/template" data-page="getting-started">
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Orientation · 02</div>
+    <h1>Getting Started</h1>
+    <p class="deck">Local install, cloud version, your first plan, and how to verify the install without ever opening the UI.</p>
+  </div>
+  <div class="head-meta">
+    <b>~5 min</b><br/>read time<br/><br/>
+    Local · Cloud · CLI
+  </div>
+</div>
+
+<h2><span class="num">§1</span>Local install</h2>
+
+<pre><code>git clone https://github.com/Hoda834/digital-budget-optimisation-engine.git
+cd digital-budget-optimisation-engine
+pip install -r requirements.txt
+streamlit run app.py</code></pre>
+
+<p>The app opens at <code>http://localhost:8501</code>. PuLP ships with the CBC solver, so no separate solver install is needed. Python 3.11 is the tested target (<code>runtime.txt</code>); 3.10+ generally works but isn't CI-tested.</p>
+
+<figure class="shot">
+  <image-slot id="getstarted-step1" style="width:100%;aspect-ratio: 16 / 10;" shape="rect" placeholder="Drop screenshot: Wizard Step 1 (empty)"></image-slot>
+  <figcaption><span class="tag">Fig 1</span><span>Wizard Step 1 — objectives and budget.</span><span class="num">install verified</span></figcaption>
+</figure>
+
+<h2><span class="num">§2</span>Cloud version</h2>
+
+<p>Hosted at <a href="https://digital-budget-optimisation-engine.streamlit.app/" target="_blank" rel="noopener">digital-budget-optimisation-engine.streamlit.app</a>. It deploys from <code>main</code>; pushes redeploy automatically. If you see a stale error after a fix has merged, use <strong>Manage app → Reboot app</strong> and hard-refresh.</p>
+
+<h2><span class="num">§3</span>Your first plan in two minutes</h2>
+
+<ol>
+  <li><strong>Objectives &amp; budget.</strong> Pick one or more objectives, enter a budget (e.g. £50,000), enter a campaign duration in days. Skip the advanced boxes the first time.</li>
+  <li><strong>Platforms.</strong> Tick 3–5 platforms. For each, drag the active objectives into priority 1 / 2 — this tells the engine <em>"Facebook is best for engagement, second-best for awareness."</em></li>
+  <li><strong>Historical KPIs.</strong> Either type in budget + KPI values per platform, or upload the platform's standard CSV export. One row per platform-goal pair you selected.</li>
+  <li><strong>Policy.</strong> Leave defaults to start. Optional: per-platform minimum spend, per-goal minimum budget.</li>
+  <li><strong>Run.</strong> You'll get a results report with three scenarios, a recommended split, forecasts with confidence bands, a confidence score, and a Plan A / Plan B comparison.</li>
+</ol>
+
+<h2><span class="num">§4</span>Verifying the install without the UI</h2>
+
+<pre><code>PYTHONPATH=. python tests/behavioural_check.py</code></pre>
+
+<p>Runs ~10 realistic end-to-end scenarios (B2B SaaS, leads-only, engagement-only, with and without goal values, with and without test-and-learn reserve, with and without seasonality) and prints the full M1→M7 output for each. If this passes, the engine works; if the UI breaks afterward, the bug is in <code>app.py</code>, not the core.</p>
+
+<pre><code>pip install pytest &amp;&amp; pytest -q</code></pre>
+
+<p>Runs the full 141-case suite in ~30 seconds. The same command runs on every push and PR via GitHub Actions.</p>
+
+<figure class="shot">
+  <image-slot id="getstarted-pytest" style="width:100%;aspect-ratio: 16 / 5;" shape="rect" placeholder="Drop screenshot: terminal showing '141 passed'"></image-slot>
+  <figcaption><span class="tag">Fig 2</span><span>Full suite green — 141 tests covering smoke, edge cases, and behavioural regression.</span><span class="num">CI parity</span></figcaption>
+</figure>
+
+<h2><span class="num">§5</span>Repository layout</h2>
+
+<table>
+  <thead><tr><th>Path</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><code>app.py</code></td><td>Streamlit UI + wizard orchestration</td></tr>
+    <tr><td><code>core/wizard_state.py</code></td><td>Single source of truth for user inputs</td></tr>
+    <tr><td><code>core/kpi_config.py</code></td><td>Built-in + custom platform KPI catalogue</td></tr>
+    <tr><td><code>core/csv_import.py</code></td><td>CSV parsing + KPI composition</td></tr>
+    <tr><td><code>modules/module1..7.py</code></td><td>One module per decision layer</td></tr>
+    <tr><td><code>docs/</code></td><td>Long-form design notes</td></tr>
+    <tr><td><code>tests/</code></td><td>pytest suite + behavioural smoke check</td></tr>
+  </tbody>
+</table>
+
+</script>
+<script type="text/template" data-page="architecture">
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Orientation · 03</div>
+    <h1>Architecture</h1>
+    <p class="deck">One direction of data flow, one state object, named constraints. The shape of the system makes the math defensible.</p>
+  </div>
+  <div class="head-meta">
+    <b>7 modules</b><br/>~5,900 LOC<br/><br/>
+    Python 3.11 · Streamlit
+  </div>
+</div>
+
+<h2><span class="num">§1</span>Layers</h2>
+
+<div class="diagram">                        ┌──────────────────────────┐
+   Streamlit UI ─────── │   app.py (wizard + UI)   │
+                        └────────────┬─────────────┘
+                                     │ reads / writes
+                        ┌────────────▼─────────────┐
+   State machine ────── │   core/wizard_state.py   │
+                        └────────────┬─────────────┘
+                                     │ consumed by
+                ┌────────────────────┼────────────────────┐
+                ▼                    ▼                    ▼
+        ┌───────────────┐    ┌───────────────┐    ┌───────────────┐
+        │   Modules     │    │   Module 5    │    │  Modules 6–7  │
+        │   1 – 4       │──▶ │  LP solver    │──▶ │  forecast +   │
+        │   (inputs)    │    │   + MC        │    │ interpretation│
+        └───────────────┘    └───────────────┘    └───────────────┘
+                │                    │                    │
+                ▼                    ▼                    ▼
+        ┌───────────────────────────────────────────────────────┐
+        │   core/csv_import.py · core/kpi_config.py             │
+        │       (KPI schema + last-mile parser)                 │
+        └───────────────────────────────────────────────────────┘
+</div>
+
+<h2><span class="num">§2</span>Data flow</h2>
+
+<ol>
+  <li><strong>Module 1</strong> validates objectives + budget. Captures goal-value weights, test-and-learn carve-out, seasonality multipliers.</li>
+  <li><strong>Module 2</strong> assigns priority 1 / 2 to each platform per objective. "Active platforms" are those with at least one priority slot.</li>
+  <li><strong>Module 3</strong> collects per-platform historical budget + raw KPI values, either manually or via CSV.</li>
+  <li><strong>Module 4</strong> derives <code>cpu_per_goal[platform][goal][var]</code> — cost per one unit of each count KPI. Flags outliers (CPU > 100× the per-goal median) and drops them.</li>
+  <li><strong>Module 5</strong> builds the LP, runs three scenario solves, returns binding constraints + shadow prices + an objective decomposition, and on request runs Monte Carlo robustness analysis.</li>
+  <li><strong>Module 6</strong> turns each scenario's allocation into per-KPI forecasts with data-driven confidence bands.</li>
+  <li><strong>Module 7</strong> classifies the plan, scores confidence on a 40–100 scale, builds a diversification-capped Plan B, summarises risks.</li>
+</ol>
+
+<h2><span class="num">§3</span>Design principles</h2>
+
+<table>
+  <thead><tr><th>Principle</th><th>What it means in code</th></tr></thead>
+  <tbody>
+    <tr><td>One direction of data flow</td><td>Modules depend only on numbered predecessors. No circular imports between M1–M7.</td></tr>
+    <tr><td>Single state object</td><td><code>WizardState</code> is the source of truth. Modules read snapshots but never mutate state — each module is testable in isolation.</td></tr>
+    <tr><td>LP is one module, not many</td><td>Solver, diagnostics, Monte Carlo, and shrinkage live together in <code>module5.py</code> so the logic that explains the LP sits next to the LP itself.</td></tr>
+    <tr><td>Configuration is data, not branches</td><td><code>Module7Policy</code> is a frozen dataclass of every interpretation threshold. Tighten one field to make the report more conservative; no code change required.</td></tr>
+    <tr><td>Every constraint is named</td><td>Each <code>LpConstraint</code> carries a meaningful label so binding-constraint diagnostics work automatically.</td></tr>
+  </tbody>
+</table>
+
+<figure class="shot">
+  <image-slot id="arch-binding" style="width:100%;aspect-ratio: 16 / 9;" shape="rect" placeholder="Drop screenshot: 'Binding constraints' panel showing two or three named constraints with shadow prices"></image-slot>
+  <figcaption><span class="tag">Fig 1</span><span>Named constraints with shadow prices — auditable LP diagnostics.</span><span class="num">module 5</span></figcaption>
+</figure>
+
+<div class="callout" data-label="Why this matters">
+  <p>"Why is platform X capped?" has a literal answer rather than a hand-wave. The constraint label sits next to its shadow price in the diagnostics panel — the same label the developer wrote when building the LP. There is no translation step where meaning could be lost.</p>
+</div>
+
+</script>
+<script type="text/template" data-page="wizard-walkthrough">
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Orientation · 04</div>
+    <h1>Wizard Walkthrough</h1>
+    <p class="deck">The Streamlit UI is a five-step wizard. Each step gates the next. All inputs land on <code>WizardState</code>, the single source of truth that every module reads from.</p>
+  </div>
+  <div class="head-meta">
+    <b>5 steps</b><br/>1 state object<br/><br/>
+    Linear · Gated · Resettable
+  </div>
+</div>
+
+<h2><span class="num">§1</span>Step 1 — Objectives, budget, advanced</h2>
+
+<ul>
+  <li><strong>Objectives:</strong> any subset of Awareness, Engagement, Website Traffic, Lead Generation.</li>
+  <li><strong>Budget:</strong> total campaign budget. Currency auto-detected from the symbol (£→GBP, $→USD, €→EUR). A hard cap of 1×10⁹ catches unit errors silently introduced by spreadsheet exports.</li>
+  <li><strong>Campaign duration:</strong> optional, in days.</li>
+</ul>
+
+<h3>Advanced (collapsed by default)</h3>
+
+<ul>
+  <li><strong>Goal value weights</strong> — £ per unit KPI. When present, the system switches from priority-frequency weighting to expected-ROAS-per-£ (<code>value × productivity</code>), which is strictly more informative whenever you have any sense of unit value.</li>
+  <li><strong>Test-and-learn reserve</strong> — fraction held back from optimisation for new audiences / creative tests. 10–15% is standard strategist practice. Capped at 50%.</li>
+  <li><strong>Seasonality multipliers</strong> — per-goal expected productivity vs historical. Applied to <code>r_{p,g}</code> before the LP runs <em>and</em> to count-KPI forecasts after, so allocation and forecast remain consistent.</li>
+</ul>
+
+<figure class="shot">
+  <image-slot id="walk-step1" style="width:100%;aspect-ratio: 16 / 10;" shape="rect" placeholder="Drop screenshot: Step 1 basic + expanded Advanced panel"></image-slot>
+  <figcaption><span class="tag">Step 1</span><span>Basic and advanced — goal values, carve-out, seasonality.</span><span class="num">M1</span></figcaption>
+</figure>
+
+<h2><span class="num">§2</span>Step 2 — Platforms</h2>
+
+<p>Tick the platforms you'll consider. For each, set priority 1 (and optionally priority 2) from your active objectives. A platform with no priority assigned is treated as inactive — it appears in the list but the LP never funds it.</p>
+
+<p>Google appears as three distinct platforms (Search, Display, Performance Max) because their lead-gen productivities differ by an order of magnitude. Lumping them hides the most important channel decision the tool exists to inform.</p>
+
+<figure class="shot">
+  <image-slot id="walk-step2" style="width:100%;aspect-ratio: 16 / 9;" shape="rect" placeholder="Drop screenshot: Step 2 with several platforms ticked and priorities set"></image-slot>
+  <figcaption><span class="tag">Step 2</span><span>Platform selection and priority ranks.</span><span class="num">M2</span></figcaption>
+</figure>
+
+<h2><span class="num">§3</span>Step 3 — Historical KPIs</h2>
+
+<p>For each <code>(platform, objective)</code> pair you activated, provide:</p>
+
+<ul>
+  <li>Historical budget spent on that pair</li>
+  <li>Number of days the history covers (drives confidence bands and shrinkage strength)</li>
+  <li>Raw KPI values, either typed in or via the CSV import panel</li>
+  <li>Optional per-KPI observation list (a list of period-by-period values). When ≥3 observations exist, the engine uses the actual sample CV as the forecast band rather than the heuristic fallback.</li>
+</ul>
+
+<div style="display:grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+  <figure class="shot">
+    <image-slot id="walk-step3a" style="width:100%;aspect-ratio: 4 / 3;" shape="rect" placeholder="Drop: Step 3 manual entry"></image-slot>
+    <figcaption><span class="tag">Step 3a</span><span>Manual entry.</span></figcaption>
+  </figure>
+  <figure class="shot">
+    <image-slot id="walk-step3b" style="width:100%;aspect-ratio: 4 / 3;" shape="rect" placeholder="Drop: Step 3 CSV import with composition audit"></image-slot>
+    <figcaption><span class="tag">Step 3b</span><span>CSV import with composition audit trail.</span></figcaption>
+  </figure>
+</div>
+
+<h2><span class="num">§4</span>Step 4 — Policy</h2>
+
+<ul>
+  <li><strong>Minimum spend per platform</strong> in £ or %</li>
+  <li><strong>Minimum budget per goal</strong> in £ or %</li>
+  <li><strong>Scenario multipliers</strong> — defaults: conservative ÷1.2, base 1.0, optimistic ×1.15. Multiply the budget per scenario.</li>
+  <li><strong>Per-scenario goal multipliers</strong> — conservative raises upper-funnel productivity, optimistic raises conversion productivity, modelling the way real auctions shift through market regimes.</li>
+</ul>
+
+<figure class="shot">
+  <image-slot id="walk-step4" style="width:100%;aspect-ratio: 16 / 9;" shape="rect" placeholder="Drop screenshot: Step 4 policy form with floors set"></image-slot>
+  <figcaption><span class="tag">Step 4</span><span>Policy floors and scenario multipliers.</span><span class="num">M4 / M5</span></figcaption>
+</figure>
+
+<h2><span class="num">§5</span>Step 5 — Review and run</h2>
+
+<p>Solve the LP for all three scenarios. The results page surfaces:</p>
+
+<ul>
+  <li>Allocation table per scenario, with stacked-bar visualisation</li>
+  <li>Forecast table with data-driven confidence bands</li>
+  <li>Decision report — classification, confidence score, risks, Plan A and Plan B with the trade-off stated</li>
+  <li>"Binding constraints" diagnostics with shadow prices</li>
+  <li>"Refine and re-solve" panel — edit policy without rewalking the wizard</li>
+  <li>Opt-in Monte Carlo robustness analysis</li>
+</ul>
+
+<p>A <strong>Reset</strong> button at the top of every page clears <code>WizardState</code> for a fresh plan.</p>
+
+<figure class="shot">
+  <image-slot id="walk-step5" style="width:100%;aspect-ratio: 16 / 9;" shape="rect" placeholder="Drop screenshot: Step 5 review screen with Run button visible"></image-slot>
+  <figcaption><span class="tag">Step 5</span><span>Review and run.</span><span class="num">M5 → M7</span></figcaption>
+</figure>
+
+</script>
+<script type="text/template" data-page="module-1">
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Module · M1</div>
+    <h1>Objectives, Budget, Currency, Carve-out, Seasonality</h1>
+    <p class="deck">Module 1 validates the highest-level campaign inputs and stamps them onto <code>WizardState</code>. Nothing else advances until Module 1 is finalised — a deliberate flow-state constraint enforced by <code>FlowStateError</code> rather than implicit ordering.</p>
+  </div>
+  <div class="head-meta">
+    <b>modules/module1.py</b><br/>
+    Result: <code>Module1Result</code><br/><br/>
+    Gates: M2 → M7
+  </div>
+</div>
+
+<h2><span class="num">§1</span>Inputs</h2>
+
+<table>
+  <thead><tr><th>Field</th><th style="width:80px">Required</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td><code>selected_objectives</code></td><td>✓</td><td>Subset of <code>{aw, en, wt, lg}</code></td></tr>
+    <tr><td><code>total_budget</code></td><td>✓</td><td>Positive, ≤ <code>MAX_REASONABLE_BUDGET</code> (1×10⁹)</td></tr>
+    <tr><td><code>currency</code></td><td>—</td><td>One of GBP / USD / EUR</td></tr>
+    <tr><td><code>campaign_duration_days</code></td><td>—</td><td>Positive integer</td></tr>
+    <tr><td><code>goal_value_per_unit</code></td><td>—</td><td><code>{goal: £ per KPI unit}</code></td></tr>
+    <tr><td><code>test_and_learn_pct</code></td><td>—</td><td>In <code>[0, 0.5]</code></td></tr>
+    <tr><td><code>seasonality_index</code></td><td>—</td><td><code>{goal: multiplier}</code>, clamped to <code>[0.1, 10.0]</code></td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">§2</span>Why goal value weights matter</h2>
+
+<p>When empty, system goal weights are derived from priority-frequency across platforms — a rank-based heuristic, useful when unit values aren't known.</p>
+
+<p>When set, weights come from <code>value × expected_productivity</code> — i.e. expected return per £ allocated to that goal. This is utility-weighted optimisation, almost always more defensible than rank counting if you have any sense of what one lead or one impression is worth.</p>
+
+<h2><span class="num">§3</span>What the test-and-learn reserve does</h2>
+
+<p>Skims that fraction off the top of every scenario's budget <em>before</em> the LP sees it. The held-back amount is surfaced separately in the report — never silently merged with the optimised allocation. The LP only optimises <code>(1 − pct) × total</code>; the cap at 0.5 guarantees the LP always has something to allocate.</p>
+
+<p>This matches established strategist practice (10–15% reserved for new audiences or creative tests) and keeps experimentation budget visible rather than buried.</p>
+
+<h2><span class="num">§4</span>What <code>seasonality_index</code> does</h2>
+
+<p>A per-goal multiplier on productivity, applied at two points to keep allocation and forecast aligned:</p>
+
+<ul>
+  <li>Module 5 multiplies <code>r_{p,g}</code> by <code>seasonality_index[g]</code> before the LP runs.</li>
+  <li>Module 6 multiplies count-KPI forecasts by the same factor afterwards.</li>
+</ul>
+
+<p><code>1.0</code> means no adjustment, <code>&gt;1</code> means auctions expected to be cheaper than historical, <code>&lt;1</code> more expensive (December CPM inflation, competitor surge, etc.).</p>
+
+<figure class="shot">
+  <image-slot id="m1-advanced" style="width:100%;aspect-ratio: 16 / 9;" shape="rect" placeholder="Drop screenshot: expanded Advanced panel of Step 1 with goal values, T&L slider and seasonality table populated"></image-slot>
+  <figcaption><span class="tag">Fig 1</span><span>Advanced policy inputs — utility weights, carve-out, seasonality.</span><span class="num">M1.advanced</span></figcaption>
+</figure>
+
+</script>
+<script type="text/template" data-page="module-2">
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Module · M2</div>
+    <h1>Platform Selection and Priority Ranks</h1>
+    <p class="deck">For each of 12 built-in platforms (plus any custom ones), records whether it's selected and, within the active objectives, its priority 1 and optional priority 2. Priorities drive system goal weights when no goal values are set.</p>
+  </div>
+  <div class="head-meta">
+    <b>modules/module2.py</b><br/><br/>
+    12 built-ins +<br/>custom platforms
+  </div>
+</div>
+
+<h2><span class="num">§1</span>Platform codes</h2>
+
+<table>
+  <thead><tr><th>Code</th><th>Display</th><th>Code</th><th>Display</th></tr></thead>
+  <tbody>
+    <tr><td><code>fb</code></td><td>Facebook</td><td><code>tw</code></td><td>X (Twitter)<sup>kept for back-compat</sup></td></tr>
+    <tr><td><code>ig</code></td><td>Instagram</td><td><code>sn</code></td><td>Snapchat</td></tr>
+    <tr><td><code>li</code></td><td>LinkedIn</td><td><code>rd</code></td><td>Reddit</td></tr>
+    <tr><td><code>yt</code></td><td>YouTube</td><td><code>go_search</code></td><td>Google Search</td></tr>
+    <tr><td><code>tt</code></td><td>TikTok</td><td><code>go_display</code></td><td>Google Display Network</td></tr>
+    <tr><td><code>pt</code></td><td>Pinterest</td><td><code>go_pmax</code></td><td>Google Performance Max</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">§2</span>Why Google is three platforms</h2>
+
+<p>Search, Display, and PMax have lead-gen productivities that differ by an order of magnitude. Conflating them into one "Google" entry would hide the most important channel decision a marketer using this tool needs to make — so they're kept distinct.</p>
+
+<div class="callout" data-label="Decision recorded">
+  <p>Separating the three Googles costs a few extra rows on Step 2 and one extra column in the KPI catalogue. The benefit is that the LP can put £30k into Search and £0 into Display and PMax when that's the right answer — and surface it that way in the report. A unified "Google" entry would average the productivities and obscure that decision entirely.</p>
+</div>
+
+<h2><span class="num">§3</span>Active platforms vs selected</h2>
+
+<p><code>active_platforms</code> is the set of selected platforms that have at least one priority slot filled. This is the list Module 3 onward iterates over. A platform "selected but unprioritised" surfaces a validation error rather than being silently ignored — explicit beats implicit.</p>
+
+<figure class="shot">
+  <image-slot id="m2-google" style="width:100%;aspect-ratio: 16 / 10;" shape="rect" placeholder="Drop screenshot: Step 2 fully populated with Google Search, Display, and PMax all ticked"></image-slot>
+  <figcaption><span class="tag">Fig 1</span><span>Google Search, Display, and PMax kept as distinct platforms — their lead-gen productivities differ by an order of magnitude.</span><span class="num">M2.active</span></figcaption>
+</figure>
+
+</script>
+<script type="text/template" data-page="module-3">
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Module · M3</div>
+    <h1>Historical KPI Capture</h1>
+    <p class="deck">For each <code>(platform, goal)</code> active in Module 2, Module 3 collects budget spent, days of history, raw KPI values, and optionally a per-period observation list — which is the only path to forecast bands tighter than the heuristic fallback.</p>
+  </div>
+  <div class="head-meta">
+    <b>modules/module3.py</b><br/><br/>
+    Two entry paths:<br/>manual · CSV
+  </div>
+</div>
+
+<h2><span class="num">§1</span>What it collects</h2>
+
+<ul>
+  <li><code>platform_budgets[platform]</code> — £ historically spent</li>
+  <li><code>platform_kpis[platform][var]</code> — value per canonical KPI variable</li>
+  <li><code>module3_data[platform]["historical_days"]</code> — days of history</li>
+  <li><code>module3_data[platform]["kpi_observations"][var]</code> — list of period-by-period observations (optional, drives data-driven confidence bands)</li>
+</ul>
+
+<p>The "canonical KPI variable" for each <code>(platform, goal)</code> comes from <code>core/kpi_config.py</code>. See the <a href="#kpi-catalogue">KPI Catalogue</a> for the full table.</p>
+
+<h2><span class="num">§2</span>Two entry paths</h2>
+
+<h3>Manual</h3>
+<p>Form fields per KPI. Use when you have summary numbers from a spreadsheet or your head.</p>
+
+<h3>CSV import</h3>
+<p>For every supported platform, drop the platform's standard export file. The parser sniffs encoding, delimiter, and totals rows; composes canonical KPIs from raw columns with a documented rationale per platform; returns a <code>CSVParseResult</code> with parsed values <em>and</em> a per-component audit trail. See <a href="#csv-import">CSV Import Reference</a>.</p>
+
+<h2><span class="num">§3</span>What <code>historical_days</code> controls</h2>
+
+<p>This number is the engine's prior on how trustworthy each platform's data is. Two downstream effects:</p>
+
+<ol>
+  <li><strong>Shrinkage in Module 5.</strong> Short-history platforms are pulled toward the cross-platform mean (James-Stein-style). A 7-day history gets less weight on its own productivity than a 365-day history.</li>
+  <li><strong>Confidence bands in Module 6.</strong> When no <code>kpi_observations</code> exist, the band defaults to <code>0.30 × √(30 / historical_days)</code>. A 90-day history yields a ~17% band; 7 days yields ~62%.</li>
+</ol>
+
+<h2><span class="num">§4</span>What <code>kpi_observations</code> are</h2>
+
+<p>Per-period values (e.g. weekly leads for the last 12 weeks). When ≥3 observations exist for a KPI, Module 6 uses the actual sample CV as the forecast band — the engine prefers true noise over a heuristic. This is the <em>only</em> path to a band tighter than the window-scaled prior.</p>
+
+<div style="display:grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+  <figure class="shot">
+    <image-slot id="m3-manual" style="width:100%;aspect-ratio: 4 / 3;" shape="rect" placeholder="Drop: Step 3 manual entry, one platform expanded with kpi_observations populated"></image-slot>
+    <figcaption><span class="tag">Fig 1</span><span>Manual entry with per-period observations.</span></figcaption>
+  </figure>
+  <figure class="shot">
+    <image-slot id="m3-csv" style="width:100%;aspect-ratio: 4 / 3;" shape="rect" placeholder="Drop: CSV parsed OK with composition audit expander open"></image-slot>
+    <figcaption><span class="tag">Fig 2</span><span>CSV parsed with audit trail.</span></figcaption>
+  </figure>
+</div>
+
+</script>
+<script type="text/template" data-page="module-4">
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Module · M4</div>
+    <h1>Cost per Unit (CPU)</h1>
+    <p class="deck">Module 4 turns "budget × KPI value" into "cost per unit KPI" for every canonical count KPI on every active <code>(platform, goal)</code>. The productivity backbone the LP optimises against.</p>
+  </div>
+  <div class="head-meta">
+    <b>modules/module4.py</b><br/>
+    Result: <code>Module4Result</code><br/><br/>
+    Outlier multiple: 100×
+  </div>
+</div>
+
+<div class="math-block">
+  $$\text{cpu\_per\_goal}[p][g][v] \;=\; \frac{\text{platform\_budget}_p}{\text{kpi\_value}_{p,v}}$$
+  <span class="label">cost per unit of KPI v on platform p for goal g</span>
+</div>
+
+<h2><span class="num">§1</span>What it doesn't do</h2>
+
+<ul>
+  <li><strong>No CPU for rate KPIs.</strong> "Cost per percentage point" isn't meaningful in this model; rate KPIs (where present) are forecast in Module 6 but not LP'd.</li>
+  <li><strong>No imputation.</strong> A missing or zero KPI value drops the row with a warning recorded in <code>skipped_rows</code>. Module 5 sees only cells that survived this step.</li>
+</ul>
+
+<h2><span class="num">§2</span>Outlier sweep</h2>
+
+<p><code>CPU_OUTLIER_MULTIPLE = 100.0</code>. Any CPU greater than 100× the per-goal median is flagged and skipped. This catches:</p>
+
+<ul>
+  <li>Typos (5 leads instead of 500)</li>
+  <li>Unit errors (£1 ad spend for "100 impressions" when the export was in thousands)</li>
+  <li>Near-zero KPI values that would otherwise produce an effectively infinite "productivity" and dominate the LP</li>
+</ul>
+
+<p>Skipped rows surface in the diagnostics panel rather than being silently dropped, so the user can see <em>what</em> was filtered and why.</p>
+
+<figure class="shot">
+  <image-slot id="m4-skipped" style="width:100%;aspect-ratio: 16 / 9;" shape="rect" placeholder="Drop screenshot: 'Skipped rows' diagnostics expander with one or two real entries"></image-slot>
+  <figcaption><span class="tag">Fig 1</span><span>Outlier sweep — surfaced, not silently dropped.</span><span class="num">M4.skipped_rows</span></figcaption>
+</figure>
+
+<h2><span class="num">§3</span>Policy snapshot</h2>
+
+<p>Module 4 also stamps the current values of <code>min_spend_per_platform</code>, <code>min_budget_per_goal</code>, <code>scenario_multipliers</code>, and <code>scenario_goal_multipliers</code> onto its result. Module 5 then reads a single immutable snapshot rather than reaching back into <code>WizardState</code>, eliminating any risk of mid-solve mutation.</p>
+
+<div class="callout" data-label="Pattern">
+  <p>Modules consume snapshots, not live state. This is what keeps each module unit-testable in isolation — and what lets Module 5's "Refine and re-solve" panel build a new <code>Module4Result</code> snapshot and re-run from there, without rewalking the wizard.</p>
+</div>
+
+</script>
+<script type="text/template" data-page="module-5">
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Module · M5 · ≈1,500 LOC</div>
+    <h1>LP Optimiser</h1>
+    <p class="deck">Builds a linear program over <code>(platform, goal)</code> cells, solves it under three scenarios, returns allocations + diagnostics + (optionally) Monte Carlo robustness analysis. The engine's heart.</p>
+  </div>
+  <div class="head-meta">
+    <b>modules/module5.py</b><br/>
+    <code>Module5LPResult</code><br/>
+    <code>Module5ScenarioBundle</code><br/>
+    <code>Module5MonteCarloResult</code>
+  </div>
+</div>
+
+<h2><span class="num">§1</span>Decision variables</h2>
+
+<p>One variable per active <code>(p, g)</code> cell:</p>
+
+<div class="math-block">
+  $$x_{p,g} \;=\; \text{budget allocated to platform } p \text{ for goal } g \;\;(\pounds)$$
+</div>
+
+<p>…plus bracket variables for the piecewise-linear diminishing-returns structure (see <a href="#decision-logic">Decision Logic</a>).</p>
+
+<h2><span class="num">§2</span>Objective</h2>
+
+<div class="math-block">
+  $$\max_{x} \;\; \sum_{p}\sum_{g}\; w_g \cdot \tilde r_{p,g} \cdot x_{p,g}$$
+  <span class="label">maximise weighted, shrinkage-adjusted yield across the plan</span>
+</div>
+
+<ul>
+  <li><code>w_g</code> — system goal weight: priority-frequency, or value-derived (<code>value × productivity</code>) when goal values are set.</li>
+  <li><code>r̃_{p,g}</code> — per-goal-normalised productivity after shrinkage.</li>
+</ul>
+
+<h2><span class="num">§3</span>Constraints</h2>
+
+<table>
+  <thead><tr><th>Constraint</th><th>Form</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td>Total budget cap</td><td><code>Σ x_{p,g} ≤ B × (1 − tl_pct)</code></td><td>Test-and-learn carve-out</td></tr>
+    <tr><td>Per-platform floor</td><td><code>Σ_g x_{p,g} ≥ floor_p</code></td><td>User-declared minimum spend</td></tr>
+    <tr><td>Per-goal floor</td><td><code>Σ_p x_{p,g} ≥ floor_g</code></td><td>User-declared per-objective minimum</td></tr>
+    <tr><td>Goal validity</td><td><code>x_{p,g} = 0</code> when <code>g ∉ goals_by_platform[p]</code></td><td>A platform can't be funded for a goal it doesn't serve</td></tr>
+    <tr><td>Diminishing-returns brackets</td><td>3 slices per cell at 25/35/40 % at yields 1.0/0.65/0.35</td><td>No single cell can absorb the whole plan</td></tr>
+  </tbody>
+</table>
+
+<p>Every constraint is created as a <em>named</em> <code>LpConstraint</code>, so <code>Module5LPResult.binding_constraints</code> returns labels a human can read with their shadow prices attached. <em>"Why is Facebook capped?"</em> has a literal answer.</p>
+
+<div class="alloc-frame">
+  <div class="lbl"><span>Base scenario — allocation</span><span>£50,000 plan · 5 platforms</span></div>
+  <div class="alloc-mock"><div class="name">Google Search</div><div class="bar"><span class="accent" style="width:42%"></span></div><div class="pct">42%</div></div>
+  <div class="alloc-mock"><div class="name">Facebook</div><div class="bar"><span style="width:24%"></span></div><div class="pct">24%</div></div>
+  <div class="alloc-mock"><div class="name">LinkedIn</div><div class="bar"><span style="width:18%"></span></div><div class="pct">18%</div></div>
+  <div class="alloc-mock"><div class="name">Instagram</div><div class="bar"><span style="width:10%"></span></div><div class="pct">10%</div></div>
+  <div class="alloc-mock"><div class="name">YouTube</div><div class="bar"><span style="width:6%"></span></div><div class="pct">6%</div></div>
+</div>
+
+<h2><span class="num">§4</span>Productivity normalisation</h2>
+
+<div class="math-block">
+  $$r_{p,g} \;=\; \frac{1/\text{cpu}_{p,g,v}}{\sum_{p'} 1/\text{cpu}_{p',g,v}}$$
+  <span class="label">after normalisation, productivities within a goal sum to 1</span>
+</div>
+
+<p>Cross-goal comparison becomes scale-free — the <em>goal weights</em> are the control knob, not whether a goal happens to be measured in clicks (large numbers) or leads (small numbers).</p>
+
+<h2><span class="num">§5</span>Shrinkage</h2>
+
+<div class="math-block">
+  $$\tilde r_{p,g} \;=\; \alpha_p \,\hat r_{p,g} \;+\; (1-\alpha_p)\, \bar r_g, \qquad \alpha_p \;=\; \frac{\text{days}_p}{\text{days}_p + \kappa}, \;\; \kappa=30$$
+</div>
+
+<p>A 30-day history gets <code>α = 0.5</code> (half its own data, half the cross-platform prior). A 7-day history <code>α ≈ 0.19</code>. A 365-day history <code>α ≈ 0.92</code>. This is the standard remedy for the small-sample-winner failure mode in allocation problems — without it, a fluky strong week on one platform out-competes a year of mediocre data on another.</p>
+
+<div class="shrink-chart">
+  <svg viewBox="0 0 600 220" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- axes -->
+    <line x1="40" y1="180" x2="580" y2="180" stroke="currentColor" stroke-width="1"/>
+    <line x1="40" y1="20" x2="40" y2="180" stroke="currentColor" stroke-width="1"/>
+    <!-- prior line -->
+    <line x1="40" y1="110" x2="580" y2="110" stroke-dasharray="4 4" stroke="currentColor" stroke-opacity="0.45" stroke-width="1"/>
+    <text x="586" y="113" font-family="IBM Plex Mono" font-size="10" fill="currentColor" fill-opacity="0.6">prior</text>
+    <!-- alpha curve (shrinkage strength) -->
+    <path d="M 40,170 C 120,165 180,150 240,120 S 360,55 580,28" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    <!-- points -->
+    <g font-family="IBM Plex Mono" font-size="11" fill="currentColor">
+      <circle cx="80" cy="166" r="3" fill="var(--accent)"/>
+      <text x="88" y="160">7d · α≈0.19</text>
+      <circle cx="195" cy="130" r="3" fill="var(--accent)"/>
+      <text x="203" y="124">30d · α=0.50</text>
+      <circle cx="350" cy="74" r="3" fill="var(--accent)"/>
+      <text x="358" y="68">90d · α=0.75</text>
+      <circle cx="540" cy="32" r="3" fill="var(--accent)"/>
+      <text x="448" y="26">365d · α≈0.92</text>
+    </g>
+    <!-- axis labels -->
+    <text x="40" y="198" font-family="IBM Plex Mono" font-size="10" fill="currentColor" fill-opacity="0.6">history (days)</text>
+    <text x="40" y="14" font-family="IBM Plex Mono" font-size="10" fill="currentColor" fill-opacity="0.6">weight on own data →</text>
+  </svg>
+  <div class="legend">
+    <span><span class="sw" style="background:var(--accent)"></span>α = days / (days + κ), κ = 30</span>
+    <span><span class="sw" style="background:currentColor; opacity:0.45"></span>cross-platform prior r̄_g</span>
+  </div>
+</div>
+
+<h2><span class="num">§6</span>Three scenarios</h2>
+
+<p>Same LP, three solves:</p>
+
+<table>
+  <thead><tr><th>Scenario</th><th>Budget multiplier</th><th>Goal multipliers</th></tr></thead>
+  <tbody>
+    <tr><td>Conservative</td><td>1 / 1.2 ≈ 0.83</td><td>raise upper-funnel productivity</td></tr>
+    <tr><td>Base</td><td>1.00</td><td>no adjustment</td></tr>
+    <tr><td>Optimistic</td><td>1.15</td><td>raise conversion productivity</td></tr>
+  </tbody>
+</table>
+
+<p>This labelled-triple format matches how strategists communicate; the opt-in Monte Carlo (below) is for users who want a full distribution.</p>
+
+<h2><span class="num">§7</span>Monte Carlo robustness</h2>
+
+<p><code>run_module5_montecarlo</code> re-solves the base LP <code>N</code> times (default 200, max 1000) with productivities perturbed by their observed per-cell coefficient of variation (mean-preserving lognormal shocks). Returns:</p>
+
+<ul>
+  <li>Per-platform allocation mean / std / p5 / p50 / p95</li>
+  <li><code>unstable_platforms</code> — those with allocation CV above the threshold (<code>DEFAULT_INSTABILITY_CV = 0.20</code>)</li>
+  <li><code>stability_score</code> — <code>1 − mean CV</code> across materially-funded platforms (mean &gt; £1), clamped to <code>[0, 1]</code>. A plan-level scalar a marketer can quote.</li>
+  <li><code>cell_sigma</code> — the per-cell noise scale used for sampling, so the user can see <em>which</em> assumptions had the most noise</li>
+</ul>
+
+<p>Solves are deterministic given a seed — identical inputs and seed produce identical distributions. Reproducible.</p>
+
+<figure class="shot">
+  <image-slot id="m5-mc" style="width:100%;aspect-ratio: 16 / 9;" shape="rect" placeholder="Drop: Monte Carlo robustness expander — stability score % and per-platform distribution table"></image-slot>
+  <figcaption><span class="tag">Fig 1</span><span>Monte Carlo — plan-level stability score and per-platform allocation distribution.</span><span class="num">M5.MC</span></figcaption>
+</figure>
+
+<h2><span class="num">§8</span>Failure modes</h2>
+
+<ul>
+  <li><code>Module5ValidationError</code> — infeasible LP (impossible floor combination), all-zero productivities, scenario multiplier ≤ 0.</li>
+  <li><code>FlowStateError</code> — Module 4 not finalised.</li>
+</ul>
+
+</script>
+<script type="text/template" data-page="module-6">
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Module · M6</div>
+    <h1>Forecasting with Honest Uncertainty</h1>
+    <p class="deck">Module 6 turns each scenario's LP allocation into per-KPI forecasts with data-driven confidence bands. More data visibly narrows the band; thin data visibly widens it.</p>
+  </div>
+  <div class="head-meta">
+    <b>modules/module6.py</b><br/>
+    Result: <code>Module6Result</code><br/><br/>
+    Band ∈ [0.05, 1.00]
+  </div>
+</div>
+
+<div class="math-block">
+  $$\text{forecast\_count} \;=\; x_{p,g} \cdot \frac{1}{\text{cpu}_{p,g,v}} \cdot \text{seasonality}_g$$
+</div>
+
+<h2><span class="num">§1</span>Confidence bands — preference order</h2>
+
+<p>For each forecast, the band is selected from this hierarchy:</p>
+
+<ol>
+  <li><strong>Sample CV</strong> when <code>kpi_observations[var]</code> has ≥3 positive values. This is the actual noise in the data.</li>
+  <li><strong>Window-scaled prior</strong> — <code>band = DEFAULT_UNCERTAINTY_BAND × √(REF_WINDOW_DAYS / days)</code>. Defaults: <code>0.30</code>, <code>30</code>. So 90 days → ~17% band; 7 days → ~62% band, floored at 7 days so the band doesn't blow up on thin history.</li>
+  <li><strong>Flat default</strong> of 0.30 when neither observations nor <code>historical_days</code> are available.</li>
+</ol>
+
+<p>Bands are clamped to <code>[_MIN_BAND = 0.05, _MAX_BAND = 1.00]</code> so the engine doesn't claim false precision <em>or</em> produce a "forecast ± 200%" that's worse than useless.</p>
+
+<div class="callout" data-label="Distinguishing choice">
+  <p>Most planning tools either show no uncertainty or a flat "±X%" that has no relation to the input data. Here, the band is a function of what the user actually supplied: more observations or longer history → tighter band; thin or absent → wider band. The hierarchy is visible in the audit panel per KPI.</p>
+</div>
+
+<h2><span class="num">§2</span>Rate vs count KPIs</h2>
+
+<ul>
+  <li><strong>Count KPIs</strong> (impressions, clicks, leads, etc.) — forecast is <code>allocation × (1/cpu)</code>. Seasonality applies.</li>
+  <li><strong>Rate KPIs</strong> (engagement rate, view rate where present) — forecast is the historical rate, unchanged. No seasonality (rates don't shift with auction cost the way volumes do).</li>
+</ul>
+
+<h2><span class="num">§3</span>Why seasonality is applied in Module 6 too</h2>
+
+<p>Module 5 multiplies <code>r_{p,g}</code> by the seasonality index before solving. Module 6 multiplies count-KPI forecasts by the same factor afterwards. Without the second application, the predicted volume would diverge from what the LP optimised against; with it, allocation and forecast stay consistent.</p>
+
+<figure class="shot">
+  <image-slot id="m6-forecast" style="width:100%;aspect-ratio: 16 / 9;" shape="rect" placeholder="Drop: forecast table with visibly different band widths across platforms"></image-slot>
+  <figcaption><span class="tag">Fig 1</span><span>Forecast bands narrow with more data — tight on platforms with rich history, wide where history is thin.</span><span class="num">M6.bands</span></figcaption>
+</figure>
+
+</script>
+<script type="text/template" data-page="module-7">
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Module · M7</div>
+    <h1>Decision Interpretation</h1>
+    <p class="deck">Module 7 turns numerical outputs into a report a human can defend in a meeting. Classification, a confidence score on a 40–100 scale, binding constraints with shadow prices, Plan A and Plan B with the trade-off stated.</p>
+  </div>
+  <div class="head-meta">
+    <b>modules/module7.py</b><br/>
+    Result: <code>Module7Result</code><br/><br/>
+    Policy: <code>Module7Policy</code><br/>(frozen dataclass)
+  </div>
+</div>
+
+<h2><span class="num">§1</span>Classification</h2>
+
+<table>
+  <thead><tr><th>Class</th><th>Rule</th></tr></thead>
+  <tbody>
+    <tr><td>Corner-dominant</td><td>Top platform share ≥ <code>corner_concentration</code> (0.90) AND ≤ <code>corner_max_nonzero_cells</code> (2) funded cells</td></tr>
+    <tr><td>Concentrated</td><td>Top platform share between <code>balanced_concentration</code> (0.75) and 0.90</td></tr>
+    <tr><td>Balanced</td><td>Top platform share ≤ 0.75</td></tr>
+    <tr><td>Scenario-sensitive</td><td>Top platform differs across scenarios</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">§2</span>Confidence score</h2>
+
+<p>Starts at 100; deductions are applied per <code>Module7Policy</code>:</p>
+
+<div class="dial-row">
+  <div class="dial">
+    <div class="score">72<span class="denom"> / 100</span></div>
+    <div class="cls">Concentrated · base scenario</div>
+  </div>
+  <div class="pen">
+    <ul>
+      <li><span class="v">−12</span>Concentration ≥ 0.80</li>
+      <li><span class="v">−8</span>Few funded cells</li>
+      <li><span class="v">−8</span>Data-quality flag (small KPI counts)</li>
+    </ul>
+    <p style="margin-top:14px; color:var(--mute); font-size:13px;">All deductions trace to a named field on <code>Module7Policy</code>. The score never reads "100" — the engine has epistemic humility built in.</p>
+  </div>
+</div>
+
+<table>
+  <thead><tr><th>Trigger</th><th>Penalty</th></tr></thead>
+  <tbody>
+    <tr><td>Concentration ≥ 0.90</td><td>−20</td></tr>
+    <tr><td>Concentration ≥ 0.80</td><td>−12</td></tr>
+    <tr><td>Few funded cells</td><td>−8</td></tr>
+    <tr><td>Unstable across scenarios</td><td>−10</td></tr>
+    <tr><td>Missing forecast for a funded cell</td><td>−18</td></tr>
+    <tr><td>Data-quality flag</td><td>−12</td></tr>
+  </tbody>
+</table>
+
+<p>The floor is <code>confidence_floor = 40</code>. Incrementality, attribution bias, and absence of causal learning are real limitations; a top score would deny that.</p>
+
+<figure class="shot">
+  <image-slot id="m7-classify" style="width:100%;aspect-ratio: 16 / 9;" shape="rect" placeholder="Drop: classification + confidence-score header from a real report"></image-slot>
+  <figcaption><span class="tag">Fig 1</span><span>Classification and confidence score — every penalty traceable to a named policy field.</span><span class="num">M7.classify</span></figcaption>
+</figure>
+
+<h2><span class="num">§3</span>Plan B</h2>
+
+<p>Re-solves the LP under a diversification cap on the top platform's share (<code>plan_b_top_platform_cap = 0.70</code> by default), reporting the efficiency trade-off vs. Plan A.</p>
+
+<p>Plan B is surfaced prominently only when the trade-off is below <code>plan_b_meaningful_tradeoff_pct = 5.0</code> — i.e. when diversification is cheap. Above that, the report still shows Plan B but defers to Plan A. This avoids overselling risk-management when concentration is genuinely earning its place.</p>
+
+<figure class="shot">
+  <image-slot id="m7-planab" style="width:100%;aspect-ratio: 16 / 9;" shape="rect" placeholder="Drop: Plan A vs Plan B comparison block with efficiency trade-off"></image-slot>
+  <figcaption><span class="tag">Fig 2</span><span>Plan A (LP optimum) versus Plan B (diversification-capped) with the trade-off stated explicitly.</span><span class="num">M7.planB</span></figcaption>
+</figure>
+
+<h2><span class="num">§4</span>Why policy is a frozen dataclass</h2>
+
+<p><code>Module7Policy</code> exposes every threshold as a defaulted, named field. A risk-averse organisation passes a custom instance with <code>corner_concentration = 0.80</code> and <code>plan_b_top_platform_cap = 0.60</code> — no code fork, no monkey-patching, no hidden constants. The interpretation layer becomes a function of declared policy, which is the property that makes it auditable.</p>
+
+</script>
+<script type="text/template" data-page="csv-import">
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Data &amp; Config · D1</div>
+    <h1>CSV Import Reference</h1>
+    <p class="deck">A last-mile parser, not an ETL pipeline. Drop in a platform's standard export; the parser handles encoding, delimiter, totals-row filtering, and KPI composition — with a full per-component audit trail.</p>
+  </div>
+  <div class="head-meta">
+    <b>core/csv_import.py</b><br/><br/>
+    Returns:<br/><code>CSVParseResult</code>
+  </div>
+</div>
+
+<h2><span class="num">§1</span>What the parser does</h2>
+
+<ol>
+  <li><strong>Sniffs encoding</strong> — UTF-8 → UTF-8-BOM → Latin-1.</li>
+  <li><strong>Sniffs delimiter</strong> — <code>,</code> → <code>;</code> → <code>\t</code>.</li>
+  <li><strong>Filters totals rows</strong> — Google's <code>Total --</code>, Meta's summary rows, etc.</li>
+  <li><strong>Composes canonical KPIs</strong> from raw columns with a documented rationale per platform.</li>
+  <li><strong>Returns an audit trail</strong> — <code>CSVParseResult</code> carries per-component values, the operator used, any fallback taken, and any warning. Nothing is silently merged.</li>
+</ol>
+
+<h2><span class="num">§2</span>Composition operators</h2>
+
+<table>
+  <thead><tr><th>Operator</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>sum</code></td><td>Sum of components (e.g. Facebook engagement = reactions + comments + shares + saves)</td></tr>
+    <tr><td><code>first</code></td><td>First non-null component (used for unambiguous single-source KPIs)</td></tr>
+    <tr><td><code>max</code></td><td>Max of components (overlapping metrics)</td></tr>
+    <tr><td><code>mean</code></td><td>Average of components (rare; one rate KPI)</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">§3</span>Fallback policy</h2>
+
+<p>When the broken-out columns aren't in the export, the parser falls back to the platform's bundled metric (e.g. Meta's "Post engagement"). When this happens:</p>
+
+<ul>
+  <li>The result carries a prominent warning about double-count risk</li>
+  <li>The audit trail records which fallback was taken</li>
+</ul>
+
+<h2><span class="num">§4</span>Legacy back-compat</h2>
+
+<p>An older Meta export with only an <code>Engagement Rate</code> column (no individual count breakouts) is still parsed: engagement count is derived as <code>rate × awareness_count</code>. A warning surfaces so the user can replace with proper breakouts if they re-export.</p>
+
+<h2><span class="num">§5</span>User override</h2>
+
+<p>The "Customise composition" panel lets a marketer re-weight components per platform — count saves 3× because they're high-intent, reactions 0.5×, exclude follower-gain entirely, etc. Overrides apply per-platform per-session.</p>
+
+<h2><span class="num">§6</span>Audit trail</h2>
+
+<p>Every parsed CSV returns:</p>
+
+<ul>
+  <li>Per-component raw values</li>
+  <li>The operator applied</li>
+  <li>The composed canonical value</li>
+  <li>Any fallback or override</li>
+</ul>
+
+<p>This shows up in the "Show parsing detail" expander in Step 3. The whole composition is reviewable; nothing is hidden in code.</p>
+
+<figure class="shot">
+  <image-slot id="csv-audit" style="width:100%;aspect-ratio: 16 / 9;" shape="rect" placeholder="Drop: 'Show parsing detail' expander open with per-component values, operator, composed value, optional fallback warning"></image-slot>
+  <figcaption><span class="tag">Fig 1</span><span>Composition audit trail — every canonical KPI traceable to raw columns and operators.</span><span class="num">CSV.audit</span></figcaption>
+</figure>
+
+<figure class="shot">
+  <image-slot id="csv-override" style="width:100%;aspect-ratio: 16 / 9;" shape="rect" placeholder="Drop: 'Customise composition' panel with one or two components re-weighted"></image-slot>
+  <figcaption><span class="tag">Fig 2</span><span>Per-session composition overrides — saves up-weighted, follower-gain excluded.</span><span class="num">CSV.override</span></figcaption>
+</figure>
+
+</script>
+<script type="text/template" data-page="kpi-catalogue">
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Data &amp; Config · D2</div>
+    <h1>KPI Catalogue</h1>
+    <p class="deck">The canonical KPIs the LP and forecast operate on. <strong>Every canonical KPI is a count.</strong> The uniform-units refactor folded historical rate KPIs into summed count components so the LP never mixes percentages and totals.</p>
+  </div>
+  <div class="head-meta">
+    <b>core/kpi_config.py</b><br/><br/>
+    Uniform units<br/>per platform
+  </div>
+</div>
+
+<h2><span class="num">§1</span>Full table</h2>
+
+<table>
+  <thead><tr><th>Platform</th><th>Awareness</th><th>Engagement</th><th>Traffic</th><th>Lead Gen</th></tr></thead>
+  <tbody>
+    <tr><td>Facebook</td><td>Reach</td><td>reactions + comments + shares + saves + follows</td><td>Link clicks</td><td>Leads + Purchases</td></tr>
+    <tr><td>Instagram</td><td>Reach</td><td>likes + comments + shares + saves + follows</td><td>Link clicks</td><td>Leads + Purchases</td></tr>
+    <tr><td>LinkedIn</td><td>Impressions</td><td>reactions + comments + shares + followers</td><td>Clicks</td><td>Leads</td></tr>
+    <tr><td>YouTube</td><td>Views</td><td>likes + comments + shares + subscribers</td><td>Clicks</td><td>Conversions + Purchases</td></tr>
+    <tr><td>Google Search</td><td>Impressions</td><td style="color:var(--faint)">— none —</td><td>Clicks</td><td>Conversions + Purchases</td></tr>
+    <tr><td>Google Display</td><td>Impressions</td><td style="color:var(--faint)">— none —</td><td>Clicks</td><td>Conversions + Purchases</td></tr>
+    <tr><td>Google PMax</td><td>Impressions</td><td style="color:var(--faint)">— none —</td><td>Clicks</td><td>Conversions + Purchases</td></tr>
+    <tr><td>TikTok</td><td>Video Views</td><td>likes + comments + shares + saves + followers</td><td>Clicks</td><td>Leads + Purchases</td></tr>
+    <tr><td>Pinterest</td><td>Impressions</td><td>Saves</td><td>Outbound clicks</td><td>Leads + Checkouts</td></tr>
+    <tr><td>X (Twitter)</td><td>Impressions</td><td>likes + replies + reposts + bookmarks + followers</td><td>Link clicks</td><td>Leads</td></tr>
+    <tr><td>Snapchat</td><td>Reach</td><td>story opens + shares + subscribers</td><td>Swipe-ups</td><td>Leads + Purchases</td></tr>
+    <tr><td>Reddit</td><td>Impressions</td><td>upvotes + comments + shares + followers</td><td>Clicks</td><td>Leads</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">§2</span>Why Google has no engagement KPI</h2>
+
+<p>Google surfaces report CTR (a rate, violating uniform units within a platform) and "engaged clicks" (which would duplicate the Traffic KPI). Rather than fudge a composition that double-counts, Google platforms are omitted from Engagement. <strong>Honesty over completeness.</strong></p>
+
+<h2><span class="num">§3</span>Why link clicks are excluded from engagement</h2>
+
+<p>Link clicks belong to the Traffic objective. Counting them in engagement too would inflate engagement productivity and skew the LP toward platforms that report both.</p>
+
+<h2><span class="num">§4</span>Custom platforms</h2>
+
+<p>Users can define custom platforms with their own KPI config. The schema lives in <code>core/kpi_config.py</code> — each KPI row is:</p>
+
+<pre><code>{
+    "platform": "myco_app",
+    "goal": "lg",
+    "var": "myco_app_lg_signups",
+    "label": "Signups",
+    "kind": "count",
+    "components": ["signups"],
+    "operator": "sum",
+}</code></pre>
+
+<p>The wizard renders custom platforms alongside the built-ins.</p>
+
+<figure class="shot">
+  <image-slot id="kpi-custom" style="width:100%;aspect-ratio: 16 / 9;" shape="rect" placeholder="Drop: 'Custom platform' / 'Add platform' UI with a custom entry visible alongside built-ins"></image-slot>
+  <figcaption><span class="tag">Fig 1</span><span>Custom platforms render alongside built-ins with the same KPI schema.</span><span class="num">D2.custom</span></figcaption>
+</figure>
+
+</script>
+<script type="text/template" data-page="calibration">
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Data &amp; Config · D3</div>
+    <h1>Calibration Constants</h1>
+    <p class="deck">Every hand-tuned numeric constant in the engine, where it lives, what it does, and what changes when it moves. See <code>docs/CALIBRATION.md</code> for the long-form companion.</p>
+  </div>
+  <div class="head-meta">
+    <b>Reference page</b><br/><br/>
+    Every constant<br/>has a row
+  </div>
+</div>
+
+<h2><span class="num">§1</span>Module 1</h2>
+
+<table>
+  <thead><tr><th>Constant</th><th>Value</th><th>Where</th><th>Effect when changed</th></tr></thead>
+  <tbody>
+    <tr><td><code>MAX_REASONABLE_BUDGET</code></td><td>1 × 10⁹</td><td><code>module1.py</code></td><td>Catches unit errors. Raise only if you legitimately run &gt; £1bn campaigns.</td></tr>
+    <tr><td><code>test_and_learn_pct</code> max</td><td>0.5</td><td><code>wizard_state.py</code></td><td>Cap on carve-out. Higher leaves the LP with nothing to do.</td></tr>
+    <tr><td><code>seasonality_index</code> clamp</td><td>[0.1, 10.0]</td><td><code>module1.py</code></td><td>Out-of-range multipliers are usually unit errors.</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">§2</span>Module 4</h2>
+
+<table>
+  <thead><tr><th>Constant</th><th>Value</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>CPU_OUTLIER_MULTIPLE</code></td><td>100.0</td><td>CPU &gt; 100× the per-goal median is dropped. Lower = more aggressive filtering.</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">§3</span>Module 5</h2>
+
+<table>
+  <thead><tr><th>Constant</th><th>Value</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>YIELD_BRACKETS</code></td><td><code>[(0.25, 1.0), (0.35, 0.65), (0.40, 0.35)]</code></td><td>Diminishing returns. Steeper drop-off → more diversification.</td></tr>
+    <tr><td><code>SHRINKAGE_KAPPA</code></td><td>30</td><td>Days at which a platform's own history weights 50/50 against the prior.</td></tr>
+    <tr><td><code>DEFAULT_MC_TRIALS</code></td><td>200</td><td>Monte Carlo default. Slider exposes 50–1000.</td></tr>
+    <tr><td><code>DEFAULT_INSTABILITY_CV</code></td><td>0.20</td><td>Allocation CV above this flags a platform as unstable.</td></tr>
+    <tr><td>Scenario multipliers</td><td>conservative 1/1.2, base 1.0, optimistic 1.15</td><td>Budget scaling per scenario.</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">§4</span>Module 6</h2>
+
+<table>
+  <thead><tr><th>Constant</th><th>Value</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>DEFAULT_UNCERTAINTY_BAND</code></td><td>0.30</td><td>Fallback band when no observations and no history.</td></tr>
+    <tr><td><code>_REFERENCE_WINDOW_DAYS</code></td><td>30.0</td><td>The window the default band represents.</td></tr>
+    <tr><td><code>_MIN_BAND</code></td><td>0.05</td><td>Floor — below this is false precision.</td></tr>
+    <tr><td><code>_MAX_BAND</code></td><td>1.00</td><td>Ceiling — above this is useless.</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">§5</span>Module 7 — <code>Module7Policy</code></h2>
+
+<table>
+  <thead><tr><th>Field</th><th>Default</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>corner_concentration</code></td><td>0.90</td><td>Top-platform share for "Corner-dominant" classification.</td></tr>
+    <tr><td><code>balanced_concentration</code></td><td>0.75</td><td>Top-platform ceiling for "Balanced".</td></tr>
+    <tr><td><code>corner_max_nonzero_cells</code></td><td>2</td><td>Max funded cells for a corner solution.</td></tr>
+    <tr><td><code>confidence_floor</code></td><td>40</td><td>Confidence never goes lower.</td></tr>
+    <tr><td><code>dq_small_kpi_share</code></td><td>0.50</td><td>Triggers data-quality flag when ≥50% of count-KPI forecasts are below threshold.</td></tr>
+    <tr><td><code>dq_small_kpi_threshold</code></td><td>5.0</td><td>Forecast count below this is "small".</td></tr>
+    <tr><td><code>plan_b_top_platform_cap</code></td><td>0.70</td><td>Diversification cap on Plan B.</td></tr>
+    <tr><td><code>plan_b_meaningful_tradeoff_pct</code></td><td>5.0</td><td>Trade-off (%) above which Plan B is surfaced prominently.</td></tr>
+    <tr><td>All <code>confidence_*_penalty</code> fields</td><td>various</td><td>Deductions from the 100-point starting score.</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">§6</span>Changing a constant safely</h2>
+
+<ol>
+  <li>Run <code>pytest -q</code> first to record the green baseline.</li>
+  <li>Make the change.</li>
+  <li>Run <code>pytest -q</code> again — note which tests fail. Most "regressions" are the engine doing what you asked.</li>
+  <li>Run <code>PYTHONPATH=. python tests/behavioural_check.py</code> and skim the end-to-end output for any sign the change broke the <em>story</em> the engine tells, not just the numbers.</li>
+</ol>
+
+</script>
+<script type="text/template" data-page="decision-logic">
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Method &amp; Engineering · E1</div>
+    <h1>Decision Logic</h1>
+    <p class="deck">The <em>why</em> behind the engine's modelling choices. For raw numerics, see <a href="#calibration">Calibration Constants</a>.</p>
+  </div>
+  <div class="head-meta">
+    <b>Modelling decisions</b><br/>
+    with rationale<br/><br/>
+    8 decisions
+  </div>
+</div>
+
+<h2><span class="num">§1</span>Why linear programming, not heuristics or Bayesian / RL</h2>
+
+<ul>
+  <li><strong>Auditable.</strong> Every constraint has a name and a shadow price. <em>"Why is Facebook capped?"</em> gets a literal answer (the binding constraint <code>min_spend_li_floor</code> at £3,000). A heuristic can't be cross-examined.</li>
+  <li><strong>Solves in milliseconds.</strong> CBC handles all 12 platforms × 4 objectives × 3 brackets × 3 scenarios in well under a second. Fast enough to put diagnostics + Monte Carlo + Plan B in the same UI session.</li>
+  <li><strong>No training data needed.</strong> The tool is designed for one-shot quarterly planning, not continuous live-data optimisation. RL or Bayesian recalibration would be the wrong tool for the scope.</li>
+</ul>
+
+<h2><span class="num">§2</span>Why per-goal normalisation</h2>
+
+<p>Without it, "productivity" is in mixed units — clicks (large numbers) vs. leads (small). The LP would silently up-weight high-count goals. Per-goal normalisation makes the goal weights the actual control knob rather than an artefact of unit choice.</p>
+
+<h2><span class="num">§3</span>Why bracket-linear diminishing returns, not a smooth curve</h2>
+
+<p>A piecewise-linear bracket structure preserves the LP. A true concave function would require quadratic programming, which is:</p>
+
+<ul>
+  <li>a separate solver</li>
+  <li>harder to debug</li>
+  <li>slower</li>
+  <li>and buys very little — the bracket structure already prevents single-cell domination, which is the real failure mode</li>
+</ul>
+
+<p>Brackets <code>(25 / 35 / 40 % of budget at yields 1.0 / 0.65 / 0.35)</code> approximate the curvature of <em>"first £ buys best inventory, marginal £ buys worst"</em> without being arbitrary.</p>
+
+<h2><span class="num">§4</span>Why James-Stein shrinkage</h2>
+
+<p>Without it, a 7-day Facebook history with a fluky strong week out-competes a 365-day Instagram history in the LP. Shrinkage pulls short histories toward the cross-platform mean — the standard remedy for the small-sample-winner failure mode in allocation problems.</p>
+
+<p>Strength: <code>α = days / (days + κ)</code> with <code>κ = 30</code>. A 30-day history weights 50/50 against the prior. Long histories asymptote to their own data.</p>
+
+<div class="shrink-chart">
+  <svg viewBox="0 0 600 220" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+    <line x1="40" y1="180" x2="580" y2="180" stroke="currentColor" stroke-width="1"/>
+    <line x1="40" y1="20" x2="40" y2="180" stroke="currentColor" stroke-width="1"/>
+    <line x1="40" y1="110" x2="580" y2="110" stroke-dasharray="4 4" stroke="currentColor" stroke-opacity="0.45" stroke-width="1"/>
+    <text x="586" y="113" font-family="IBM Plex Mono" font-size="10" fill="currentColor" fill-opacity="0.6">prior r̄_g</text>
+    <!-- raw 7-day series -->
+    <polyline points="50,50 110,150 170,40 230,170 290,60 350,140 410,55 470,160 530,70" fill="none" stroke="currentColor" stroke-opacity="0.55" stroke-width="1.5"/>
+    <!-- shrunk version -->
+    <polyline points="50,108 110,115 170,106 230,118 290,107 350,114 410,107 470,116 530,108" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    <text x="40" y="14" font-family="IBM Plex Mono" font-size="10" fill="currentColor" fill-opacity="0.6">productivity →</text>
+    <text x="40" y="198" font-family="IBM Plex Mono" font-size="10" fill="currentColor" fill-opacity="0.6">period (week of 9-week sample)</text>
+  </svg>
+  <div class="legend">
+    <span><span class="sw" style="background:currentColor;opacity:0.55"></span>raw r̂_{p,g} — 7-day window swings</span>
+    <span><span class="sw" style="background:var(--accent)"></span>shrunk r̃_{p,g} — pulled toward prior</span>
+  </div>
+</div>
+
+<h2><span class="num">§5</span>Why three labelled scenarios, not a continuous distribution</h2>
+
+<p>Three named scenarios (conservative / base / optimistic) match how strategists actually communicate. A full distribution would be more rigorous in some sense but harder to put in front of a non-technical decision-maker. The opt-in Monte Carlo robustness check gives the distributional view for users who want it — best of both.</p>
+
+<h2><span class="num">§6</span>Why goal-value weights override priority-frequency</h2>
+
+<p>Priority-frequency is a rank-based heuristic, useful when unit values are unknown. When you <em>do</em> know "a lead is worth £100," that's strictly more informative than "we ranked lead-gen #1 on three platforms." So <code>value × productivity</code> (expected ROAS) beats priority count whenever the user supplies values.</p>
+
+<h2><span class="num">§7</span>Why the confidence floor is 40, not 0</h2>
+
+<p>A score of 0 would suggest the recommendation is worthless. That's never true — even a low-confidence LP is more defensible than a hand-picked split. The floor of 40 says <em>"treat with caution and require more measurement,"</em> which is the actionable interpretation.</p>
+
+<h2><span class="num">§8</span>Why <code>stability_score = 1 − mean CV</code></h2>
+
+<p>A single number that maps cleanly to "% stable." Alternatives:</p>
+
+<ul>
+  <li><strong>Fraction of stable platforms</strong> — discrete, jumps from 1.0 to 0.85 when one platform crosses the threshold. Bad UX.</li>
+  <li><strong>Worst CV</strong> — single noisy platform dominates; unrepresentative.</li>
+  <li><strong>Mean CV penalised by variance</strong> — too complex; the value of the metric is interpretability at a glance.</li>
+</ul>
+
+<p>The materially-funded threshold (mean &gt; £1) excludes platforms that got £0 in the optimum, so their "infinite CV" of noise around zero doesn't drag the stability score.</p>
+
+</script>
+<script type="text/template" data-page="contributing">
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Method &amp; Engineering · E2</div>
+    <h1>Contributing</h1>
+    <p class="deck">Branch model, coding bar, recipes for adding platforms, constraints and policy fields. What's in scope and what isn't.</p>
+  </div>
+  <div class="head-meta">
+    <b>License</b><br/>MIT<br/><br/>
+    CI on every<br/>push &amp; PR
+  </div>
+</div>
+
+<h2><span class="num">§1</span>Setup</h2>
+
+<pre><code>git clone https://github.com/Hoda834/digital-budget-optimisation-engine.git
+cd digital-budget-optimisation-engine
+pip install -r requirements.txt
+pip install pytest
+pytest -q   # should print "141 passed"</code></pre>
+
+<h2><span class="num">§2</span>Branch model</h2>
+
+<ul>
+  <li><code>main</code> is what Streamlit Cloud serves. Don't push directly.</li>
+  <li>Feature branches: <code>feature/&lt;short-description&gt;</code> or <code>fix/&lt;short-description&gt;</code>.</li>
+  <li>Open a PR against <code>main</code>. CI runs <code>pytest -q</code> on every push and PR.</li>
+</ul>
+
+<figure class="shot">
+  <image-slot id="contrib-ci" style="width:100%;aspect-ratio: 16 / 7;" shape="rect" placeholder="Drop: successful GitHub Actions run on a PR — green checkmark + 'All checks have passed'"></image-slot>
+  <figcaption><span class="tag">Fig 1</span><span>CI runs the full pytest suite on every push and PR.</span><span class="num">CI green</span></figcaption>
+</figure>
+
+<h2><span class="num">§3</span>Coding bar</h2>
+
+<ul>
+  <li><strong>Type hints required</strong> on public functions in <code>modules/</code> and <code>core/</code>. <code>from __future__ import annotations</code> at the top of every module.</li>
+  <li><strong>Comments explain why, not what.</strong> README and <code>docs/</code> carry long-form explanation; keep code comments terse.</li>
+  <li><strong>No new constants without a calibration entry.</strong> Every hand-tuned numeric literal needs a row in <a href="#calibration">Calibration Constants</a> and <code>docs/CALIBRATION.md</code>.</li>
+  <li><strong>Snapshots, not live state.</strong> Modules read from <code>Module4Result</code>-style immutable snapshots, never reach back into <code>WizardState</code> mid-solve.</li>
+</ul>
+
+<h2><span class="num">§4</span>Adding a platform</h2>
+
+<ol>
+  <li>Add the platform code to <code>ALLOWED_PLATFORMS</code> and <code>PLATFORMS</code> (<code>wizard_state.py</code> and <code>module2.py</code>).</li>
+  <li>Add the display name to <code>PLATFORM_NAMES</code> in <code>module7.py</code>.</li>
+  <li>Add KPI rows to <code>KPI_CONFIG</code> in <code>core/kpi_config.py</code> — one per <code>(platform, goal, var)</code>.</li>
+  <li>If the platform has a standard CSV export, add a parser block in <code>core/csv_import.py</code> with column mappings and composition rules.</li>
+  <li>Add a smoke test in <code>tests/smoke_test.py</code> and an edge-case entry in <code>tests/edge_cases.py</code> if the platform has unusual behaviour.</li>
+</ol>
+
+<h2><span class="num">§5</span>Adding a constraint to the LP</h2>
+
+<ol>
+  <li>Add the constraint inside <code>_solve_single_lp</code> with a <strong>named</strong> <code>LpConstraint</code>.</li>
+  <li>The name will appear automatically in <code>binding_constraints</code> and the diagnostics panel.</li>
+  <li>If user-tunable, add the field to <code>WizardState</code>, surface it in <code>app.py</code> (Step 4 or "Refine and re-solve"), and snapshot it into <code>Module4Result</code>.</li>
+</ol>
+
+<h2><span class="num">§6</span>Adding a <code>Module7Policy</code> field</h2>
+
+<ol>
+  <li>Add a defaulted field to <code>Module7Policy</code> (the class is <code>frozen=True</code>, so callers explicitly pass a new instance).</li>
+  <li>Reference it where a magic number would otherwise live.</li>
+  <li>Add a row to <a href="#calibration">Calibration Constants</a> documenting what changes when the value moves.</li>
+</ol>
+
+<h2><span class="num">§7</span>In scope / out of scope</h2>
+
+<div class="callout" data-label="In scope">
+  <p>New constraints, new platforms, better diagnostics, better forecast-band heuristics, more scenario archetypes (recession, growth, brand pivot), UI polish that doesn't change behaviour, tests (especially edge cases).</p>
+</div>
+
+<div class="callout" data-label="Out of scope">
+  <p>Platform API connectors (this is a planner, not an operator), continuous learning / Bayesian recalibration (different product), campaign / ad-set / creative-level optimisation (downstream of the channel split), attribution and incrementality modelling (would need a different data foundation).</p>
+</div>
+
+<h2><span class="num">§8</span>License</h2>
+
+<p>MIT. By contributing you agree your contributions are licensed under the same terms.</p>
+
+<figure class="shot">
+  <image-slot id="contrib-tests" style="width:100%;aspect-ratio: 16 / 5;" shape="rect" placeholder="Drop: terminal showing '141 passed' from pytest"></image-slot>
+  <figcaption><span class="tag">Fig 2</span><span>141-case suite covers smoke, edge cases, and behavioural regression.</span><span class="num">tests green</span></figcaption>
+</figure>
+
+</script>
+<script type="text/template" data-page="faq">
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Method &amp; Engineering · E3</div>
+    <h1>FAQ &amp; Troubleshooting</h1>
+    <p class="deck">Common crashes, surprising allocations, CSV import issues, and how to file a useful bug report.</p>
+  </div>
+  <div class="head-meta">
+    <b>Triage page</b><br/><br/>
+    Errors · allocations<br/>· CSV · perf
+  </div>
+</div>
+
+<h2><span class="num">§1</span>Crashes and error messages</h2>
+
+<h3><code>AttributeError: 'Module5MonteCarloResult' object has no attribute 'stability_score'</code></h3>
+<p>You're running stale code. The fix is in <code>main</code>. On Streamlit Cloud: <strong>Manage app → Reboot app</strong>, then hard-refresh.</p>
+
+<figure class="shot">
+  <image-slot id="faq-traceback" style="width:100%;aspect-ratio: 16 / 7;" shape="rect" placeholder="Drop: the actual redacted Streamlit AttributeError traceback"></image-slot>
+  <figcaption><span class="tag">Fig 1</span><span>A real example — the AttributeError traceback as Streamlit Cloud surfaces it.</span><span class="num">crash</span></figcaption>
+</figure>
+
+<h3><code>Module5ValidationError: LP infeasible</code></h3>
+<p>Your floors are mutually impossible. Common causes:</p>
+<ul>
+  <li>Sum of per-platform minimums &gt; total budget</li>
+  <li>Sum of per-goal minimums &gt; total budget (after test-and-learn carve-out)</li>
+  <li>A goal floor on an objective no active platform serves</li>
+</ul>
+<p>Open Step 4, lower a floor, re-solve.</p>
+
+<h3><code>FlowStateError: Module X not finalised</code></h3>
+<p>You skipped a wizard step or <code>WizardState</code> got corrupted. Click <strong>Reset</strong> at the top, walk the wizard again.</p>
+
+<h3><code>All N Monte Carlo trials failed</code></h3>
+<p>Either productivities are all zero (check Module 4 didn't skip every row), or per-cell CVs are extreme (check <code>kpi_observations</code> for outliers).</p>
+
+<h2><span class="num">§2</span>Surprising allocations</h2>
+
+<h3>"Why does Facebook get 90% of the budget?"</h3>
+<p>Open the diagnostics panel:</p>
+<ol>
+  <li><strong>Productivity column</strong> — is Facebook genuinely an order of magnitude better, or is its history thin and getting too much weight? If thin, set a meaningful <code>historical_days</code> value.</li>
+  <li><strong>Binding constraints</strong> — if your only floor binds, the LP has freedom to corner.</li>
+  <li><strong>Plan B</strong> — set <code>plan_b_top_platform_cap</code> to 0.6 and look at the diversified alternative.</li>
+  <li><strong>Monte Carlo</strong> — if stability_score &lt; 70%, the ranking isn't trustworthy. Diversify by policy, not by hoping the LP does it.</li>
+</ol>
+
+<h3>"Why is the conservative scenario <em>bigger</em> than the base?"</h3>
+<p>Almost always a swapped <code>scenario_multipliers</code>. Check Step 4 — conservative should multiply by ~0.83, not ~1.2.</p>
+
+<h3>"Why are my forecast bands enormous?"</h3>
+<p>You have very little history (<code>historical_days &lt; 14</code>) or supplied <code>kpi_observations</code> with high noise. Check the audit panel on Step 3 — the band per KPI shows which path was taken (CV vs window-scaled vs default).</p>
+
+<h2><span class="num">§3</span>CSV imports</h2>
+
+<h3>"The parser doesn't recognise my export."</h3>
+<p>Check encoding (re-save as UTF-8 if exported from Excel), delimiter (the parser tries <code>,</code> → <code>;</code> → <code>\t</code>), and that the header row matches the platform's standard export. If columns have been renamed, the parser can't find them. Switch to manual entry if needed.</p>
+
+<h3>"Engagement comes out way too high."</h3>
+<p>Likely a fallback to the platform's bundled metric (which double-counts components). Look for the warning in the parsing detail panel. Either add broken-out columns to your export or use the custom-composition override.</p>
+
+<h2><span class="num">§4</span>Performance</h2>
+
+<h3>"Monte Carlo takes forever."</h3>
+<p>Each trial is one LP solve (~50ms on a typical plan). 200 trials ≈ 10s; 1,000 ≈ 50s. Single process, single solver — no parallel runner yet. Don't push past 500 unless you're willing to wait.</p>
+
+<h3>"Streamlit hangs on solve."</h3>
+<p>Usually the LP solves fine but the UI is rendering many charts. Reduce active platforms or collapse the diagnostics expanders.</p>
+
+<h2><span class="num">§5</span>How to file a useful bug report</h2>
+
+<ol>
+  <li>Reset the wizard.</li>
+  <li>Reproduce with minimal inputs (1 objective, 2 platforms).</li>
+  <li>Copy the full traceback from "Manage app" logs.</li>
+  <li>Open an issue with the traceback, the inputs, expected vs actual behaviour, and a link to the deployed run if possible.</li>
+</ol>
+
+<figure class="shot">
+  <image-slot id="faq-reboot" style="width:100%;aspect-ratio: 16 / 9;" shape="rect" placeholder="Drop: Streamlit Cloud 'Manage app' → 'Reboot app' UI"></image-slot>
+  <figcaption><span class="tag">Fig 2</span><span>Streamlit Cloud — Manage app, then Reboot.</span><span class="num">recovery</span></figcaption>
+</figure>
+
+</script>
+
+
+<!-- KaTeX -->
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+        onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]})"></script>
+
+<!-- Router -->
+<script>
+
+const PAGES = [
+  { slug: 'home',                title: 'Home' },
+  { slug: 'getting-started',     title: 'Getting Started' },
+  { slug: 'architecture',        title: 'Architecture' },
+  { slug: 'wizard-walkthrough',  title: 'Wizard Walkthrough' },
+  { slug: 'module-1',            title: 'Module 1 — Objectives' },
+  { slug: 'module-2',            title: 'Module 2 — Platforms' },
+  { slug: 'module-3',            title: 'Module 3 — Historical KPIs' },
+  { slug: 'module-4',            title: 'Module 4 — Cost per Unit' },
+  { slug: 'module-5',            title: 'Module 5 — LP Optimiser' },
+  { slug: 'module-6',            title: 'Module 6 — Forecasting' },
+  { slug: 'module-7',            title: 'Module 7 — Interpretation' },
+  { slug: 'csv-import',          title: 'CSV Import Reference' },
+  { slug: 'kpi-catalogue',       title: 'KPI Catalogue' },
+  { slug: 'calibration',         title: 'Calibration Constants' },
+  { slug: 'decision-logic',      title: 'Decision Logic' },
+  { slug: 'contributing',        title: 'Contributing' },
+  { slug: 'faq',                 title: 'FAQ & Troubleshooting' },
+];
+const SLUG_INDEX = Object.fromEntries(PAGES.map((p, i) => [p.slug, i]));
+function currentSlug() {
+  const raw = (location.hash || '#home').replace(/^#/, '');
+  return SLUG_INDEX[raw] !== undefined ? raw : 'home';
+}
+function pageHtml(slug) {
+  const tpl = document.querySelector('script[type="text/template"][data-page="' + slug + '"]');
+  return tpl ? tpl.textContent : null;
+}
+function loadPage(slug) {
+  const content = document.getElementById('content');
+  const html = pageHtml(slug);
+  if (html === null) {
+    content.innerHTML = '<div class="page-head"><div><div class="eyebrow">Error</div><h1>Page not found</h1></div></div><p><a href="#home">← Back to Home</a></p>';
+    return;
+  }
+  const idx = SLUG_INDEX[slug];
+  const prev = idx > 0 ? PAGES[idx - 1] : null;
+  const next = idx < PAGES.length - 1 ? PAGES[idx + 1] : null;
+  let nav = '<div class="page-foot">';
+  nav += prev ? '<a href="#' + prev.slug + '" class="prev"><div class="lbl">← Previous</div><div class="ttl">' + prev.title + '</div></a>' : '<div></div>';
+  nav += next ? '<a href="#' + next.slug + '" class="next"><div class="lbl">Next →</div><div class="ttl">' + next.title + '</div></a>' : '<div></div>';
+  nav += '</div>';
+  content.innerHTML = html + nav;
+  if (window.renderMathInElement) {
+    window.renderMathInElement(content, {
+      delimiters: [
+        { left: '$$', right: '$$', display: true },
+        { left: '$', right: '$', display: false },
+      ],
+      throwOnError: false,
+    });
+  }
+  document.querySelectorAll('.sidebar a').forEach(a => {
+    a.classList.toggle('active', a.dataset.page === slug);
+    if (a.dataset.page === slug) a.style.position = 'relative';
+  });
+  const page = PAGES[idx];
+  document.getElementById('crumb-page').textContent = page.title;
+  document.title = page.title + ' — MBOE Wiki';
+  window.scrollTo({ top: 0, behavior: 'instant' });
+}
+window.addEventListener('hashchange', () => loadPage(currentSlug()));
+window.addEventListener('DOMContentLoaded', () => loadPage(currentSlug()));
+
+</script>
+
+<!-- image-slot web component (inlined) -->
+<script>
+/* BEGIN USAGE */
+/**
+ * <image-slot> — user-fillable image placeholder.
+ *
+ * Drop this into a deck, mockup, or page wherever you want the user to
+ * supply an image. You control the slot's shape and size; the user fills it
+ * by dragging an image file onto it (or clicking to browse). The dropped
+ * image persists across reloads via a .image-slots.state.json sidecar —
+ * same read-via-fetch / write-via-window.omelette pattern as
+ * design_canvas.jsx, so the filled slot shows on share links, downloaded
+ * zips, and PPTX export. Outside the omelette runtime the slot is read-only.
+ *
+ * The host bridge only allows sidecar writes at the project root, so the
+ * HTML that uses this component is assumed to live at the project root too
+ * (same constraint as design_canvas.jsx).
+ *
+ * Attributes:
+ *   id           Persistence key. REQUIRED for the drop to survive reload —
+ *                every slot on the page needs a distinct id.
+ *   shape        'rect' | 'rounded' | 'circle' | 'pill'   (default 'rounded')
+ *                'circle' applies 50% border-radius; on a non-square slot
+ *                that's an ellipse — set equal width and height for a true
+ *                circle.
+ *   radius       Corner radius in px for 'rounded'.       (default 12)
+ *   mask         Any CSS clip-path value. Overrides `shape` — use this for
+ *                hexagons, blobs, arbitrary polygons.
+ *   fit          object-fit: cover | contain | fill.       (default 'cover')
+ *                With cover (the default) double-clicking the filled slot
+ *                enters a reframe mode: the whole image spills past the mask
+ *                (translucent outside, opaque inside), drag to reposition,
+ *                corner-drag to scale. The crop persists alongside the image
+ *                in the sidecar. contain/fill stay static.
+ *   position     object-position for fit=contain|fill.     (default '50% 50%')
+ *   placeholder  Empty-state caption.                      (default 'Drop an image')
+ *   src          Optional initial/fallback image URL. A user drop overrides
+ *                it; clearing the drop reveals src again.
+ *
+ * Size and layout come from ordinary CSS on the element — width/height
+ * inline or from a parent grid — so it composes with any layout.
+ *
+ * Usage:
+ *   <image-slot id="hero"   style="width:800px;height:450px" shape="rounded" radius="20"
+ *               placeholder="Drop a hero image"></image-slot>
+ *   <image-slot id="avatar" style="width:120px;height:120px" shape="circle"></image-slot>
+ *   <image-slot id="kite"   style="width:300px;height:300px"
+ *               mask="polygon(50% 0, 100% 50%, 50% 100%, 0 50%)"></image-slot>
+ */
+/* END USAGE */
+
+(() => {
+  const STATE_FILE = '.image-slots.state.json';
+  // 2× a ~600px slot in a 1920-wide deck — retina-sharp without making the
+  // sidecar enormous. A 1200px WebP at q=0.85 is ~150-300KB.
+  const MAX_DIM = 1200;
+  // Raster formats only. SVG is excluded (can carry script; createImageBitmap
+  // on SVG blobs is inconsistent). GIF is excluded because the canvas
+  // re-encode keeps only the first frame, so an animated GIF would silently
+  // go still — better to reject than surprise.
+  const ACCEPT = ['image/png', 'image/jpeg', 'image/webp', 'image/avif'];
+
+  // ── Shared sidecar store ────────────────────────────────────────────────
+  // One fetch + immediate write-on-change for every <image-slot> on the
+  // page. Reads via fetch() so viewing works anywhere the HTML and sidecar
+  // are served together; writes go through window.omelette.writeFile, which
+  // the host allowlists to *.state.json basenames only.
+  const subs = new Set();
+  let slots = {};
+  // ids explicitly cleared before the sidecar fetch resolved — otherwise
+  // the merge below can't tell "never set" from "just deleted" and would
+  // resurrect the sidecar's stale value.
+  const tombstones = new Set();
+  let loaded = false;
+  let loadP = null;
+
+  function load() {
+    if (loadP) return loadP;
+    loadP = fetch(STATE_FILE)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        // Merge: sidecar loses to any in-memory change that raced ahead of
+        // the fetch (drop or clear) so neither is clobbered by hydration.
+        if (j && typeof j === 'object') {
+          const merged = Object.assign({}, j, slots);
+          // A framing-only write that raced ahead of hydration must not
+          // drop a user image that's only on disk — inherit u from the
+          // sidecar for any in-memory entry that lacks one.
+          for (const k in slots) {
+            if (merged[k] && !merged[k].u && j[k]) {
+              merged[k].u = typeof j[k] === 'string' ? j[k] : j[k].u;
+            }
+          }
+          for (const id of tombstones) delete merged[id];
+          slots = merged;
+        }
+        tombstones.clear();
+      })
+      .catch(() => {})
+      .then(() => { loaded = true; subs.forEach((fn) => fn()); });
+    return loadP;
+  }
+
+  // Serialize writes so two near-simultaneous drops on different slots
+  // can't reorder at the backend and leave the sidecar with only the
+  // first. A save requested mid-flight just marks dirty and re-fires on
+  // completion with the then-current slots.
+  let saving = false;
+  let saveDirty = false;
+  function save() {
+    if (saving) { saveDirty = true; return; }
+    const w = window.omelette && window.omelette.writeFile;
+    if (!w) return;
+    saving = true;
+    Promise.resolve(w(STATE_FILE, JSON.stringify(slots)))
+      .catch(() => {})
+      .then(() => { saving = false; if (saveDirty) { saveDirty = false; save(); } });
+  }
+
+  const S_MAX = 5;
+  const clampS = (s) => Math.max(1, Math.min(S_MAX, s));
+
+  // Normalize a stored slot value. Pre-reframe sidecars stored a bare
+  // data-URL string; newer ones store {u, s, x, y}. Either shape is valid.
+  function getSlot(id) {
+    const v = slots[id];
+    if (!v) return null;
+    return typeof v === 'string' ? { u: v, s: 1, x: 0, y: 0 } : v;
+  }
+
+  function setSlot(id, val) {
+    if (!id) return;
+    if (val) { slots[id] = val; tombstones.delete(id); }
+    else { delete slots[id]; if (!loaded) tombstones.add(id); }
+    subs.forEach((fn) => fn());
+    // A drop is rare + high-value — write immediately so nav-away can't lose
+    // it. Gate on the initial read so we don't overwrite a sidecar we haven't
+    // merged yet; the merge in load() keeps this change once the read lands.
+    if (loaded) save(); else load().then(save);
+  }
+
+  // ── Image downscale ─────────────────────────────────────────────────────
+  // Encode through a canvas so the sidecar carries resized bytes, not the
+  // raw upload. Longest side is capped at 2× the slot's rendered width
+  // (retina) and at MAX_DIM. WebP keeps alpha and is ~10× smaller than PNG
+  // for photos, so there's no need for per-image format picking.
+  async function toDataUrl(file, targetW) {
+    const bitmap = await createImageBitmap(file);
+    try {
+      const cap = Math.min(MAX_DIM, Math.max(1, Math.round(targetW * 2)) || MAX_DIM);
+      const scale = Math.min(1, cap / Math.max(bitmap.width, bitmap.height));
+      const w = Math.max(1, Math.round(bitmap.width * scale));
+      const h = Math.max(1, Math.round(bitmap.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+      return canvas.toDataURL('image/webp', 0.85);
+    } finally {
+      bitmap.close && bitmap.close();
+    }
+  }
+
+  // ── Custom element ──────────────────────────────────────────────────────
+  const stylesheet =
+    ':host{display:inline-block;position:relative;vertical-align:top;' +
+    '  font:13px/1.3 system-ui,-apple-system,sans-serif;color:rgba(0,0,0,.55);width:240px;height:160px}' +
+    '.frame{position:absolute;inset:0;overflow:hidden;background:rgba(0,0,0,.04)}' +
+    // .frame img (clipped) and .spill (unclipped ghost + handles) share the
+    // same left/top/width/height in frame-%, computed by _applyView(), so the
+    // inside-mask crop and the outside-mask spill stay pixel-aligned.
+    '.frame img{position:absolute;max-width:none;transform:translate(-50%,-50%);' +
+    '  -webkit-user-drag:none;user-select:none;touch-action:none}' +
+    // Reframe mode (double-click): the full image spills past the mask. The
+    // spill layer is sized to the IMAGE bounds so its corners are where the
+    // resize handles belong. The ghost <img> inside is translucent; the real
+    // clipped <img> underneath shows the opaque in-mask crop.
+    '.spill{position:absolute;transform:translate(-50%,-50%);display:none;z-index:1;' +
+    '  cursor:grab;touch-action:none}' +
+    ':host([data-panning]) .spill{cursor:grabbing}' +
+    '.spill .ghost{position:absolute;inset:0;width:100%;height:100%;opacity:.35;' +
+    '  pointer-events:none;-webkit-user-drag:none;user-select:none;' +
+    '  box-shadow:0 0 0 1px rgba(0,0,0,.2),0 12px 32px rgba(0,0,0,.2)}' +
+    '.spill .handle{position:absolute;width:12px;height:12px;border-radius:50%;' +
+    '  background:#fff;box-shadow:0 0 0 1.5px #c96442,0 1px 3px rgba(0,0,0,.3);' +
+    '  transform:translate(-50%,-50%)}' +
+    '.spill .handle[data-c=nw]{left:0;top:0;cursor:nwse-resize}' +
+    '.spill .handle[data-c=ne]{left:100%;top:0;cursor:nesw-resize}' +
+    '.spill .handle[data-c=sw]{left:0;top:100%;cursor:nesw-resize}' +
+    '.spill .handle[data-c=se]{left:100%;top:100%;cursor:nwse-resize}' +
+    ':host([data-reframe]){z-index:10}' +
+    ':host([data-reframe]) .spill{display:block}' +
+    ':host([data-reframe]) .frame{box-shadow:0 0 0 2px #c96442}' +
+    '.empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;' +
+    '  justify-content:center;gap:6px;text-align:center;padding:12px;box-sizing:border-box;' +
+    '  cursor:pointer;user-select:none}' +
+    '.empty svg{opacity:.45}' +
+    '.empty .cap{max-width:90%;font-weight:500;letter-spacing:.01em}' +
+    '.empty .sub{font-size:11px}' +
+    '.empty .sub u{text-underline-offset:2px;text-decoration-color:rgba(0,0,0,.25)}' +
+    '.empty:hover .sub u{color:rgba(0,0,0,.75);text-decoration-color:currentColor}' +
+    ':host([data-over]) .frame{outline:2px solid #c96442;outline-offset:-2px;' +
+    '  background:rgba(201,100,66,.10)}' +
+    '.ring{position:absolute;inset:0;pointer-events:none;border:1.5px dashed rgba(0,0,0,.25);' +
+    '  transition:border-color .12s}' +
+    ':host([data-over]) .ring{border-color:#c96442}' +
+    ':host([data-filled]) .ring{display:none}' +
+    // Controls sit BELOW the mask (top:100%), absolutely positioned so the
+    // author-declared slot height is unaffected. The gap is padding, not a
+    // top offset, so the hover target stays contiguous with the frame.
+    '.ctl{position:absolute;top:100%;left:50%;transform:translateX(-50%);padding-top:8px;' +
+    '  display:flex;gap:6px;opacity:0;pointer-events:none;transition:opacity .12s;z-index:2;' +
+    '  white-space:nowrap}' +
+    ':host([data-filled][data-editable]:hover) .ctl,:host([data-reframe]) .ctl' +
+    '  {opacity:1;pointer-events:auto}' +
+    '.ctl button{appearance:none;border:0;border-radius:6px;padding:5px 10px;cursor:pointer;' +
+    '  background:rgba(0,0,0,.65);color:#fff;font:11px/1 system-ui,-apple-system,sans-serif;' +
+    '  backdrop-filter:blur(6px)}' +
+    '.ctl button:hover{background:rgba(0,0,0,.8)}' +
+    '.err{position:absolute;left:8px;bottom:8px;right:8px;color:#b3261e;font-size:11px;' +
+    '  background:rgba(255,255,255,.85);padding:4px 6px;border-radius:5px;pointer-events:none}';
+
+  const icon =
+    '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' +
+    '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/>' +
+    '<path d="m21 15-5-5L5 21"/></svg>';
+
+  class ImageSlot extends HTMLElement {
+    static get observedAttributes() {
+      return ['shape', 'radius', 'mask', 'fit', 'position', 'placeholder', 'src', 'id'];
+    }
+
+    constructor() {
+      super();
+      const root = this.attachShadow({ mode: 'open' });
+      // .spill and .ctl sit OUTSIDE .frame so overflow:hidden + border-radius
+      // on the frame (circle, pill, rounded) can't clip them.
+      root.innerHTML =
+        '<style>' + stylesheet + '</style>' +
+        '<div class="frame" part="frame">' +
+        '  <img part="image" alt="" draggable="false" style="display:none">' +
+        '  <div class="empty" part="empty">' + icon +
+        '    <div class="cap"></div>' +
+        '    <div class="sub">or <u>browse files</u></div></div>' +
+        '  <div class="ring" part="ring"></div>' +
+        '</div>' +
+        '<div class="spill">' +
+        '  <img class="ghost" alt="" draggable="false">' +
+        '  <div class="handle" data-c="nw"></div><div class="handle" data-c="ne"></div>' +
+        '  <div class="handle" data-c="sw"></div><div class="handle" data-c="se"></div>' +
+        '</div>' +
+        '<div class="ctl"><button data-act="replace" title="Replace image">Replace</button>' +
+        '  <button data-act="clear" title="Remove image">Remove</button></div>' +
+        '<input type="file" accept="' + ACCEPT.join(',') + '" hidden>';
+      this._frame = root.querySelector('.frame');
+      this._ring = root.querySelector('.ring');
+      this._img = root.querySelector('.frame img');
+      this._empty = root.querySelector('.empty');
+      this._cap = root.querySelector('.cap');
+      this._sub = root.querySelector('.sub');
+      this._spill = root.querySelector('.spill');
+      this._ghost = root.querySelector('.ghost');
+      this._err = null;
+      this._input = root.querySelector('input');
+      this._depth = 0;
+      this._gen = 0;
+      this._view = { s: 1, x: 0, y: 0 };
+      this._subFn = () => this._render();
+      // Shadow-DOM listeners live with the shadow DOM — bound once here so
+      // disconnect/reconnect (e.g. React remount) doesn't stack handlers.
+      this._empty.addEventListener('click', () => this._input.click());
+      root.addEventListener('click', (e) => {
+        const act = e.target && e.target.getAttribute && e.target.getAttribute('data-act');
+        if (act === 'replace') { this._exitReframe(true); this._input.click(); }
+        if (act === 'clear') {
+          this._exitReframe(false);
+          this._gen++;
+          this._local = null;
+          if (this.id) setSlot(this.id, null); else this._render();
+        }
+      });
+      this._input.addEventListener('change', () => {
+        const f = this._input.files && this._input.files[0];
+        if (f) this._ingest(f);
+        this._input.value = '';
+      });
+      // naturalWidth/Height aren't known until load — re-apply so the cover
+      // baseline is computed from real dimensions, not the 100%×100% fallback.
+      this._img.addEventListener('load', () => this._applyView());
+      // Gated on editable + fit=cover so share links and contain/fill slots
+      // stay static.
+      this.addEventListener('dblclick', (e) => {
+        if (!this.hasAttribute('data-editable') || !this._reframes()) return;
+        e.preventDefault();
+        if (this.hasAttribute('data-reframe')) this._exitReframe(true);
+        else this._enterReframe();
+      });
+      // Pan + resize both originate on the spill layer. A handle pointerdown
+      // drives an aspect-locked resize anchored at the opposite corner; any
+      // other pointerdown on the spill pans. Offsets are frame-% so a
+      // reframed slot survives responsive resize / PPTX export.
+      this._spill.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0 || !this.hasAttribute('data-reframe')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        this._spill.setPointerCapture(e.pointerId);
+        const rect = this.getBoundingClientRect();
+        const fw = rect.width || 1, fh = rect.height || 1;
+        const corner = e.target.getAttribute && e.target.getAttribute('data-c');
+        let move;
+        if (corner) {
+          // Resize about the OPPOSITE corner. Viewport-px throughout (rect
+          // fw/fh, not clientWidth) so the math survives a transform:scale()
+          // ancestor — deck_stage renders slides scaled-to-fit.
+          const iw = this._img.naturalWidth || 1, ih = this._img.naturalHeight || 1;
+          const base = Math.max(fw / iw, fh / ih);
+          const sx = corner.includes('e') ? 1 : -1;
+          const sy = corner.includes('s') ? 1 : -1;
+          const s0 = this._view.s;
+          const w0 = iw * base * s0, h0 = ih * base * s0;
+          const cx0 = (50 + this._view.x) / 100 * fw;
+          const cy0 = (50 + this._view.y) / 100 * fh;
+          const ox = cx0 - sx * w0 / 2, oy = cy0 - sy * h0 / 2;
+          const diag0 = Math.hypot(w0, h0);
+          const ux = sx * w0 / diag0, uy = sy * h0 / diag0;
+          move = (ev) => {
+            const proj = (ev.clientX - rect.left - ox) * ux +
+                         (ev.clientY - rect.top - oy) * uy;
+            const s = clampS(s0 * proj / diag0);
+            const d = diag0 * s / s0;
+            this._view.s = s;
+            this._view.x = (ox + ux * d / 2) / fw * 100 - 50;
+            this._view.y = (oy + uy * d / 2) / fh * 100 - 50;
+            this._clampView();
+            this._applyView();
+          };
+        } else {
+          this.setAttribute('data-panning', '');
+          const start = { px: e.clientX, py: e.clientY, x: this._view.x, y: this._view.y };
+          move = (ev) => {
+            this._view.x = start.x + (ev.clientX - start.px) / fw * 100;
+            this._view.y = start.y + (ev.clientY - start.py) / fh * 100;
+            this._clampView();
+            this._applyView();
+          };
+        }
+        const up = () => {
+          try { this._spill.releasePointerCapture(e.pointerId); } catch {}
+          this._spill.removeEventListener('pointermove', move);
+          this._spill.removeEventListener('pointerup', up);
+          this._spill.removeEventListener('pointercancel', up);
+          this.removeAttribute('data-panning');
+          this._dragUp = null;
+        };
+        // Stashed so _exitReframe (Escape / outside-click mid-drag) can
+        // tear the capture + listeners down synchronously.
+        this._dragUp = up;
+        this._spill.addEventListener('pointermove', move);
+        this._spill.addEventListener('pointerup', up);
+        this._spill.addEventListener('pointercancel', up);
+      });
+      // Wheel zoom stays available inside reframe mode as a trackpad nicety —
+      // zooms toward the cursor (offset' = cursor·(1-k) + offset·k).
+      this.addEventListener('wheel', (e) => {
+        if (!this.hasAttribute('data-reframe')) return;
+        e.preventDefault();
+        const r = this.getBoundingClientRect();
+        const cx = (e.clientX - r.left) / r.width * 100 - 50;
+        const cy = (e.clientY - r.top) / r.height * 100 - 50;
+        const prev = this._view.s;
+        const next = clampS(prev * Math.pow(1.0015, -e.deltaY));
+        if (next === prev) return;
+        const k = next / prev;
+        this._view.s = next;
+        this._view.x = cx * (1 - k) + this._view.x * k;
+        this._view.y = cy * (1 - k) + this._view.y * k;
+        this._clampView();
+        this._applyView();
+      }, { passive: false });
+    }
+
+    connectedCallback() {
+      // Warn once per page — an id-less slot works for the session but
+      // cannot persist, and two id-less slots would share nothing.
+      if (!this.id && !ImageSlot._warned) {
+        ImageSlot._warned = true;
+        console.warn('<image-slot> without an id will not persist its dropped image.');
+      }
+      this.addEventListener('dragenter', this);
+      this.addEventListener('dragover', this);
+      this.addEventListener('dragleave', this);
+      this.addEventListener('drop', this);
+      subs.add(this._subFn);
+      // width%/height% in _applyView encode the frame aspect at call time —
+      // a host resize (responsive grid, pane divider) would stretch the
+      // image until the next _render. Re-render on size change: _render()
+      // re-seeds _view from stored before clamp/apply, so a shrink→grow
+      // cycle round-trips instead of ratcheting x/y toward the narrower
+      // frame's clamp range.
+      this._ro = new ResizeObserver(() => this._render());
+      this._ro.observe(this);
+      load();
+      this._render();
+    }
+
+    disconnectedCallback() {
+      subs.delete(this._subFn);
+      this.removeEventListener('dragenter', this);
+      this.removeEventListener('dragover', this);
+      this.removeEventListener('dragleave', this);
+      this.removeEventListener('drop', this);
+      if (this._ro) { this._ro.disconnect(); this._ro = null; }
+      this._exitReframe(false);
+    }
+
+    _enterReframe() {
+      if (this.hasAttribute('data-reframe')) return;
+      this.setAttribute('data-reframe', '');
+      this._applyView();
+      // Close on click outside (the spill handler stopPropagation()s so
+      // in-image drags don't reach this) and on Escape. Listeners are held
+      // on the instance so _exitReframe / disconnectedCallback can detach
+      // exactly what was attached.
+      this._outside = (e) => {
+        if (e.composedPath && e.composedPath().includes(this)) return;
+        this._exitReframe(true);
+      };
+      this._esc = (e) => { if (e.key === 'Escape') this._exitReframe(true); };
+      document.addEventListener('pointerdown', this._outside, true);
+      document.addEventListener('keydown', this._esc, true);
+    }
+
+    _exitReframe(commit) {
+      if (!this.hasAttribute('data-reframe')) return;
+      if (this._dragUp) this._dragUp();
+      this.removeAttribute('data-reframe');
+      this.removeAttribute('data-panning');
+      if (this._outside) document.removeEventListener('pointerdown', this._outside, true);
+      if (this._esc) document.removeEventListener('keydown', this._esc, true);
+      this._outside = this._esc = null;
+      if (commit) this._commitView();
+    }
+
+    attributeChangedCallback() { if (this.shadowRoot) this._render(); }
+
+    // handleEvent — one listener object for all four drag events keeps the
+    // add/remove symmetric and the depth counter correct.
+    handleEvent(e) {
+      if (e.type === 'dragenter' || e.type === 'dragover') {
+        // Without preventDefault the browser never fires 'drop'.
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+        if (e.type === 'dragenter') this._depth++;
+        this.setAttribute('data-over', '');
+      } else if (e.type === 'dragleave') {
+        // dragenter/leave fire for every descendant crossing — count depth
+        // so hovering the icon inside the empty state doesn't flicker.
+        if (--this._depth <= 0) { this._depth = 0; this.removeAttribute('data-over'); }
+      } else if (e.type === 'drop') {
+        e.preventDefault();
+        e.stopPropagation();
+        this._depth = 0;
+        this.removeAttribute('data-over');
+        const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        if (f) this._ingest(f);
+      }
+    }
+
+    async _ingest(file) {
+      this._setError(null);
+      if (!file || ACCEPT.indexOf(file.type) < 0) {
+        this._setError('Drop a PNG, JPEG, WebP, or AVIF image.');
+        return;
+      }
+      // toDataUrl can take hundreds of ms on a large photo. A Clear or a
+      // newer drop during that window would be clobbered when this await
+      // resumes — bump + capture a generation so stale encodes bail.
+      const gen = ++this._gen;
+      try {
+        const w = this.clientWidth || this.offsetWidth || MAX_DIM;
+        const url = await toDataUrl(file, w);
+        if (gen !== this._gen) return;
+        // Only exit reframe once the new image is in hand — a rejected type
+        // or decode failure leaves the in-progress crop untouched.
+        this._exitReframe(false);
+        const val = { u: url, s: 1, x: 0, y: 0 };
+        setSlot(this.id || '', val);
+        // Keep a session-local copy for id-less slots so the drop still
+        // shows, even though it cannot persist.
+        if (!this.id) { this._local = val; this._render(); }
+      } catch (err) {
+        if (gen !== this._gen) return;
+        this._setError('Could not read that image.');
+        console.warn('<image-slot> ingest failed:', err);
+      }
+    }
+
+    _setError(msg) {
+      if (this._err) { this._err.remove(); this._err = null; }
+      if (!msg) return;
+      const d = document.createElement('div');
+      d.className = 'err'; d.textContent = msg;
+      this.shadowRoot.appendChild(d);
+      this._err = d;
+      setTimeout(() => { if (this._err === d) { d.remove(); this._err = null; } }, 3000);
+    }
+
+    // Reframing (pan/resize) is only meaningful for fit=cover — contain/fill
+    // keep the old object-fit path and double-click is a no-op.
+    _reframes() {
+      return this.hasAttribute('data-filled') &&
+        (this.getAttribute('fit') || 'cover') === 'cover';
+    }
+
+    // Cover-baseline geometry, shared by clamp/apply/resize. Null until the
+    // img has loaded (naturalWidth is 0 before that) or when the slot has no
+    // layout box — ResizeObserver fires with a 0×0 rect under display:none,
+    // and clamping against a degenerate 1×1 frame would silently pull the
+    // stored pan toward zero.
+    _geom() {
+      const iw = this._img.naturalWidth, ih = this._img.naturalHeight;
+      const fw = this.clientWidth, fh = this.clientHeight;
+      if (!iw || !ih || !fw || !fh) return null;
+      return { iw, ih, fw, fh, base: Math.max(fw / iw, fh / ih) };
+    }
+
+    _clampView() {
+      // Pan range on each axis is half the overflow past the frame edge.
+      const g = this._geom();
+      if (!g) return;
+      const mx = Math.max(0, (g.iw * g.base * this._view.s / g.fw - 1) * 50);
+      const my = Math.max(0, (g.ih * g.base * this._view.s / g.fh - 1) * 50);
+      this._view.x = Math.max(-mx, Math.min(mx, this._view.x));
+      this._view.y = Math.max(-my, Math.min(my, this._view.y));
+    }
+
+    _applyView() {
+      const g = this._geom();
+      const fit = this.getAttribute('fit') || 'cover';
+      if (fit !== 'cover' || !g) {
+        // Non-cover, or dimensions not known yet (before img load).
+        this._img.style.width = '100%';
+        this._img.style.height = '100%';
+        this._img.style.left = '50%';
+        this._img.style.top = '50%';
+        this._img.style.objectFit = fit;
+        this._img.style.objectPosition = this.getAttribute('position') || '50% 50%';
+        return;
+      }
+      // Cover baseline: img fills the frame on its tighter axis at s=1, so
+      // pan works immediately on the overflowing axis without zooming first.
+      // Width/height and left/top are all frame-% — depends only on the
+      // frame aspect ratio, so a responsive resize keeps the same crop. The
+      // spill layer mirrors the same box so its corners = image corners.
+      const k = g.base * this._view.s;
+      const w = (g.iw * k / g.fw * 100) + '%';
+      const h = (g.ih * k / g.fh * 100) + '%';
+      const l = (50 + this._view.x) + '%';
+      const t = (50 + this._view.y) + '%';
+      this._img.style.width = w; this._img.style.height = h;
+      this._img.style.left = l; this._img.style.top = t;
+      this._img.style.objectFit = '';
+      this._spill.style.width = w; this._spill.style.height = h;
+      this._spill.style.left = l; this._spill.style.top = t;
+    }
+
+    _commitView() {
+      const v = { s: this._view.s, x: this._view.x, y: this._view.y };
+      if (this._userUrl) v.u = this._userUrl;
+      // Framing-only (no u) persists too so an author-src slot remembers its
+      // crop; clearing the sidecar still falls through to src=.
+      if (this.id) setSlot(this.id, v);
+      else { this._local = v; }
+    }
+
+    _render() {
+      // Shape / mask. Presets use border-radius so the dashed ring can
+      // follow the rounded outline; clip-path is only applied for an
+      // explicit `mask` (the ring is hidden there since a rectangle
+      // dashed border chopped by an arbitrary polygon looks broken).
+      const mask = this.getAttribute('mask');
+      const shape = (this.getAttribute('shape') || 'rounded').toLowerCase();
+      let radius = '';
+      if (shape === 'circle') radius = '50%';
+      else if (shape === 'pill') radius = '9999px';
+      else if (shape === 'rounded') {
+        const n = parseFloat(this.getAttribute('radius'));
+        radius = (Number.isFinite(n) ? n : 12) + 'px';
+      }
+      this._frame.style.borderRadius = mask ? '' : radius;
+      this._frame.style.clipPath = mask || '';
+      this._ring.style.borderRadius = mask ? '' : radius;
+      this._ring.style.display = mask ? 'none' : '';
+
+      // Controls and reframe entry gate on this so share links stay read-only.
+      const editable = !!(window.omelette && window.omelette.writeFile);
+      this.toggleAttribute('data-editable', editable);
+      this._sub.style.display = editable ? '' : 'none';
+
+      // Content. The sidecar is also writable by the agent's write_file
+      // tool, so its value isn't guaranteed canvas-originated — only accept
+      // data:image/ URLs from it. The `src` attribute is author-controlled
+      // (Claude wrote it into the HTML) so it passes through unchanged.
+      let stored = this.id ? getSlot(this.id) : this._local;
+      if (stored && stored.u && !/^data:image\//i.test(stored.u)) stored = null;
+      const srcAttr = this.getAttribute('src') || '';
+      this._userUrl = (stored && stored.u) || null;
+      const url = this._userUrl || srcAttr;
+      // Don't clobber an in-flight reframe with a store-triggered re-render.
+      if (!this.hasAttribute('data-reframe')) {
+        this._view = {
+          s: stored && Number.isFinite(stored.s) ? clampS(stored.s) : 1,
+          x: stored && Number.isFinite(stored.x) ? stored.x : 0,
+          y: stored && Number.isFinite(stored.y) ? stored.y : 0,
+        };
+      }
+      this._cap.textContent = this.getAttribute('placeholder') || 'Drop an image';
+      // Toggle via style.display — the [hidden] attribute alone loses to
+      // the display:flex / display:block rules in the stylesheet above.
+      if (url) {
+        if (this._img.getAttribute('src') !== url) {
+          this._img.src = url;
+          this._ghost.src = url;
+        }
+        this._img.style.display = 'block';
+        this._empty.style.display = 'none';
+        this.setAttribute('data-filled', '');
+        this._clampView();
+        this._applyView();
+      } else {
+        this._img.style.display = 'none';
+        this._img.removeAttribute('src');
+        this._ghost.removeAttribute('src');
+        this._empty.style.display = 'flex';
+        this.removeAttribute('data-filled');
+      }
+    }
+  }
+
+  if (!customElements.get('image-slot')) {
+    customElements.define('image-slot', ImageSlot);
+  }
+})();
+
+</script>
+
+<!-- React + Babel for the Tweaks panel -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel">
+
+/* BEGIN USAGE */
+// tweaks-panel.jsx
+// Reusable Tweaks shell + form-control helpers.
+// Exports (to window): useTweaks, TweaksPanel, TweakSection, TweakRow, TweakSlider,
+//   TweakToggle, TweakRadio, TweakSelect, TweakText, TweakNumber, TweakColor, TweakButton.
+//
+// Owns the host protocol (listens for __activate_edit_mode / __deactivate_edit_mode,
+// posts __edit_mode_available / __edit_mode_set_keys / __edit_mode_dismissed) so
+// individual prototypes don't re-roll it. Ships a consistent set of controls so you
+// don't hand-draw <input type="range">, segmented radios, steppers, etc.
+//
+// Usage (in an HTML file that loads React + Babel):
+//
+//   const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+//     "primaryColor": "#D97757",
+//     "palette": ["#D97757", "#29261b", "#f6f4ef"],
+//     "fontSize": 16,
+//     "density": "regular",
+//     "dark": false
+//   }/*EDITMODE-END*/;
+//
+//   function App() {
+//     const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+//     return (
+//       <div style={{ fontSize: t.fontSize, color: t.primaryColor }}>
+//         Hello
+//         <TweaksPanel>
+//           <TweakSection label="Typography" />
+//           <TweakSlider label="Font size" value={t.fontSize} min={10} max={32} unit="px"
+//                        onChange={(v) => setTweak('fontSize', v)} />
+//           <TweakRadio  label="Density" value={t.density}
+//                        options={['compact', 'regular', 'comfy']}
+//                        onChange={(v) => setTweak('density', v)} />
+//           <TweakSection label="Theme" />
+//           <TweakColor  label="Primary" value={t.primaryColor}
+//                        options={['#D97757', '#2A6FDB', '#1F8A5B', '#7A5AE0']}
+//                        onChange={(v) => setTweak('primaryColor', v)} />
+//           <TweakColor  label="Palette" value={t.palette}
+//                        options={[['#D97757', '#29261b', '#f6f4ef'],
+//                                  ['#475569', '#0f172a', '#f1f5f9']]}
+//                        onChange={(v) => setTweak('palette', v)} />
+//           <TweakToggle label="Dark mode" value={t.dark}
+//                        onChange={(v) => setTweak('dark', v)} />
+//         </TweaksPanel>
+//       </div>
+//     );
+//   }
+//
+// TweakRadio is the segmented control for 2–3 short options (auto-falls-back to
+// TweakSelect past ~16/~10 chars per label); reach for TweakSelect directly when
+// options are many or long. For color tweaks always curate 3-4 options rather than
+// a free picker; an option can also be a whole 2–5 color palette (the stored value
+// is the array). The Tweak* controls are a floor, not a ceiling — build custom
+// controls inside the panel if a tweak calls for UI they don't cover.
+/* END USAGE */
+// ─────────────────────────────────────────────────────────────────────────────
+
+const __TWEAKS_STYLE = `
+  .twk-panel{position:fixed;right:16px;bottom:16px;z-index:2147483646;width:280px;
+    max-height:calc(100vh - 32px);display:flex;flex-direction:column;
+    transform:scale(var(--dc-inv-zoom,1));transform-origin:bottom right;
+    background:rgba(250,249,247,.78);color:#29261b;
+    -webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%);
+    border:.5px solid rgba(255,255,255,.6);border-radius:14px;
+    box-shadow:0 1px 0 rgba(255,255,255,.5) inset,0 12px 40px rgba(0,0,0,.18);
+    font:11.5px/1.4 ui-sans-serif,system-ui,-apple-system,sans-serif;overflow:hidden}
+  .twk-hd{display:flex;align-items:center;justify-content:space-between;
+    padding:10px 8px 10px 14px;cursor:move;user-select:none}
+  .twk-hd b{font-size:12px;font-weight:600;letter-spacing:.01em}
+  .twk-x{appearance:none;border:0;background:transparent;color:rgba(41,38,27,.55);
+    width:22px;height:22px;border-radius:6px;cursor:default;font-size:13px;line-height:1}
+  .twk-x:hover{background:rgba(0,0,0,.06);color:#29261b}
+  .twk-body{padding:2px 14px 14px;display:flex;flex-direction:column;gap:10px;
+    overflow-y:auto;overflow-x:hidden;min-height:0;
+    scrollbar-width:thin;scrollbar-color:rgba(0,0,0,.15) transparent}
+  .twk-body::-webkit-scrollbar{width:8px}
+  .twk-body::-webkit-scrollbar-track{background:transparent;margin:2px}
+  .twk-body::-webkit-scrollbar-thumb{background:rgba(0,0,0,.15);border-radius:4px;
+    border:2px solid transparent;background-clip:content-box}
+  .twk-body::-webkit-scrollbar-thumb:hover{background:rgba(0,0,0,.25);
+    border:2px solid transparent;background-clip:content-box}
+  .twk-row{display:flex;flex-direction:column;gap:5px}
+  .twk-row-h{flex-direction:row;align-items:center;justify-content:space-between;gap:10px}
+  .twk-lbl{display:flex;justify-content:space-between;align-items:baseline;
+    color:rgba(41,38,27,.72)}
+  .twk-lbl>span:first-child{font-weight:500}
+  .twk-val{color:rgba(41,38,27,.5);font-variant-numeric:tabular-nums}
+
+  .twk-sect{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+    color:rgba(41,38,27,.45);padding:10px 0 0}
+  .twk-sect:first-child{padding-top:0}
+
+  .twk-field{appearance:none;box-sizing:border-box;width:100%;min-width:0;height:26px;padding:0 8px;
+    border:.5px solid rgba(0,0,0,.1);border-radius:7px;
+    background:rgba(255,255,255,.6);color:inherit;font:inherit;outline:none}
+  .twk-field:focus{border-color:rgba(0,0,0,.25);background:rgba(255,255,255,.85)}
+  select.twk-field{padding-right:22px;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='rgba(0,0,0,.5)' d='M0 0h10L5 6z'/></svg>");
+    background-repeat:no-repeat;background-position:right 8px center}
+
+  .twk-slider{appearance:none;-webkit-appearance:none;width:100%;height:4px;margin:6px 0;
+    border-radius:999px;background:rgba(0,0,0,.12);outline:none}
+  .twk-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+    width:14px;height:14px;border-radius:50%;background:#fff;
+    border:.5px solid rgba(0,0,0,.12);box-shadow:0 1px 3px rgba(0,0,0,.2);cursor:default}
+  .twk-slider::-moz-range-thumb{width:14px;height:14px;border-radius:50%;
+    background:#fff;border:.5px solid rgba(0,0,0,.12);box-shadow:0 1px 3px rgba(0,0,0,.2);cursor:default}
+
+  .twk-seg{position:relative;display:flex;padding:2px;border-radius:8px;
+    background:rgba(0,0,0,.06);user-select:none}
+  .twk-seg-thumb{position:absolute;top:2px;bottom:2px;border-radius:6px;
+    background:rgba(255,255,255,.9);box-shadow:0 1px 2px rgba(0,0,0,.12);
+    transition:left .15s cubic-bezier(.3,.7,.4,1),width .15s}
+  .twk-seg.dragging .twk-seg-thumb{transition:none}
+  .twk-seg button{appearance:none;position:relative;z-index:1;flex:1;border:0;
+    background:transparent;color:inherit;font:inherit;font-weight:500;min-height:22px;
+    border-radius:6px;cursor:default;padding:4px 6px;line-height:1.2;
+    overflow-wrap:anywhere}
+
+  .twk-toggle{position:relative;width:32px;height:18px;border:0;border-radius:999px;
+    background:rgba(0,0,0,.15);transition:background .15s;cursor:default;padding:0}
+  .twk-toggle[data-on="1"]{background:#34c759}
+  .twk-toggle i{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;
+    background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s}
+  .twk-toggle[data-on="1"] i{transform:translateX(14px)}
+
+  .twk-num{display:flex;align-items:center;box-sizing:border-box;min-width:0;height:26px;padding:0 0 0 8px;
+    border:.5px solid rgba(0,0,0,.1);border-radius:7px;background:rgba(255,255,255,.6)}
+  .twk-num-lbl{font-weight:500;color:rgba(41,38,27,.6);cursor:ew-resize;
+    user-select:none;padding-right:8px}
+  .twk-num input{flex:1;min-width:0;height:100%;border:0;background:transparent;
+    font:inherit;font-variant-numeric:tabular-nums;text-align:right;padding:0 8px 0 0;
+    outline:none;color:inherit;-moz-appearance:textfield}
+  .twk-num input::-webkit-inner-spin-button,.twk-num input::-webkit-outer-spin-button{
+    -webkit-appearance:none;margin:0}
+  .twk-num-unit{padding-right:8px;color:rgba(41,38,27,.45)}
+
+  .twk-btn{appearance:none;height:26px;padding:0 12px;border:0;border-radius:7px;
+    background:rgba(0,0,0,.78);color:#fff;font:inherit;font-weight:500;cursor:default}
+  .twk-btn:hover{background:rgba(0,0,0,.88)}
+  .twk-btn.secondary{background:rgba(0,0,0,.06);color:inherit}
+  .twk-btn.secondary:hover{background:rgba(0,0,0,.1)}
+
+  .twk-swatch{appearance:none;-webkit-appearance:none;width:56px;height:22px;
+    border:.5px solid rgba(0,0,0,.1);border-radius:6px;padding:0;cursor:default;
+    background:transparent;flex-shrink:0}
+  .twk-swatch::-webkit-color-swatch-wrapper{padding:0}
+  .twk-swatch::-webkit-color-swatch{border:0;border-radius:5.5px}
+  .twk-swatch::-moz-color-swatch{border:0;border-radius:5.5px}
+
+  .twk-chips{display:flex;gap:6px}
+  .twk-chip{position:relative;appearance:none;flex:1;min-width:0;height:46px;
+    padding:0;border:0;border-radius:6px;overflow:hidden;cursor:default;
+    box-shadow:0 0 0 .5px rgba(0,0,0,.12),0 1px 2px rgba(0,0,0,.06);
+    transition:transform .12s cubic-bezier(.3,.7,.4,1),box-shadow .12s}
+  .twk-chip:hover{transform:translateY(-1px);
+    box-shadow:0 0 0 .5px rgba(0,0,0,.18),0 4px 10px rgba(0,0,0,.12)}
+  .twk-chip[data-on="1"]{box-shadow:0 0 0 1.5px rgba(0,0,0,.85),
+    0 2px 6px rgba(0,0,0,.15)}
+  .twk-chip>span{position:absolute;top:0;bottom:0;right:0;width:34%;
+    display:flex;flex-direction:column;box-shadow:-1px 0 0 rgba(0,0,0,.1)}
+  .twk-chip>span>i{flex:1;box-shadow:0 -1px 0 rgba(0,0,0,.1)}
+  .twk-chip>span>i:first-child{box-shadow:none}
+  .twk-chip svg{position:absolute;top:6px;left:6px;width:13px;height:13px;
+    filter:drop-shadow(0 1px 1px rgba(0,0,0,.3))}
+`;
+
+// ── useTweaks ───────────────────────────────────────────────────────────────
+// Single source of truth for tweak values. setTweak persists via the host
+// (__edit_mode_set_keys → host rewrites the EDITMODE block on disk).
+function useTweaks(defaults) {
+  const [values, setValues] = React.useState(defaults);
+  // Accepts either setTweak('key', value) or setTweak({ key: value, ... }) so a
+  // useState-style call doesn't write a "[object Object]" key into the persisted
+  // JSON block.
+  const setTweak = React.useCallback((keyOrEdits, val) => {
+    const edits = typeof keyOrEdits === 'object' && keyOrEdits !== null
+      ? keyOrEdits : { [keyOrEdits]: val };
+    setValues((prev) => ({ ...prev, ...edits }));
+    window.parent.postMessage({ type: '__edit_mode_set_keys', edits }, '*');
+    // Same-window signal so in-page listeners (deck-stage rail thumbnails)
+    // can react — the parent message only reaches the host, not peers.
+    window.dispatchEvent(new CustomEvent('tweakchange', { detail: edits }));
+  }, []);
+  return [values, setTweak];
+}
+
+// ── TweaksPanel ─────────────────────────────────────────────────────────────
+// Floating shell. Registers the protocol listener BEFORE announcing
+// availability — if the announce ran first, the host's activate could land
+// before our handler exists and the toolbar toggle would silently no-op.
+// The close button posts __edit_mode_dismissed so the host's toolbar toggle
+// flips off in lockstep; the host echoes __deactivate_edit_mode back which
+// is what actually hides the panel.
+function TweaksPanel({ title = 'Tweaks', children }) {
+  const [open, setOpen] = React.useState(false);
+  const dragRef = React.useRef(null);
+  const offsetRef = React.useRef({ x: 16, y: 16 });
+  const PAD = 16;
+
+  const clampToViewport = React.useCallback(() => {
+    const panel = dragRef.current;
+    if (!panel) return;
+    const w = panel.offsetWidth, h = panel.offsetHeight;
+    const maxRight = Math.max(PAD, window.innerWidth - w - PAD);
+    const maxBottom = Math.max(PAD, window.innerHeight - h - PAD);
+    offsetRef.current = {
+      x: Math.min(maxRight, Math.max(PAD, offsetRef.current.x)),
+      y: Math.min(maxBottom, Math.max(PAD, offsetRef.current.y)),
+    };
+    panel.style.right = offsetRef.current.x + 'px';
+    panel.style.bottom = offsetRef.current.y + 'px';
+  }, []);
+
+  React.useEffect(() => {
+    if (!open) return;
+    clampToViewport();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', clampToViewport);
+      return () => window.removeEventListener('resize', clampToViewport);
+    }
+    const ro = new ResizeObserver(clampToViewport);
+    ro.observe(document.documentElement);
+    return () => ro.disconnect();
+  }, [open, clampToViewport]);
+
+  React.useEffect(() => {
+    const onMsg = (e) => {
+      const t = e?.data?.type;
+      if (t === '__activate_edit_mode') setOpen(true);
+      else if (t === '__deactivate_edit_mode') setOpen(false);
+    };
+    window.addEventListener('message', onMsg);
+    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
+  const dismiss = () => {
+    setOpen(false);
+    window.parent.postMessage({ type: '__edit_mode_dismissed' }, '*');
+  };
+
+  const onDragStart = (e) => {
+    const panel = dragRef.current;
+    if (!panel) return;
+    const r = panel.getBoundingClientRect();
+    const sx = e.clientX, sy = e.clientY;
+    const startRight = window.innerWidth - r.right;
+    const startBottom = window.innerHeight - r.bottom;
+    const move = (ev) => {
+      offsetRef.current = {
+        x: startRight - (ev.clientX - sx),
+        y: startBottom - (ev.clientY - sy),
+      };
+      clampToViewport();
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+
+  if (!open) return null;
+  return (
+    <>
+      <style>{__TWEAKS_STYLE}</style>
+      <div ref={dragRef} className="twk-panel" data-omelette-chrome=""
+           style={{ right: offsetRef.current.x, bottom: offsetRef.current.y }}>
+        <div className="twk-hd" onMouseDown={onDragStart}>
+          <b>{title}</b>
+          <button className="twk-x" aria-label="Close tweaks"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={dismiss}>✕</button>
+        </div>
+        <div className="twk-body">
+          {children}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ── Layout helpers ──────────────────────────────────────────────────────────
+
+function TweakSection({ label, children }) {
+  return (
+    <>
+      <div className="twk-sect">{label}</div>
+      {children}
+    </>
+  );
+}
+
+function TweakRow({ label, value, children, inline = false }) {
+  return (
+    <div className={inline ? 'twk-row twk-row-h' : 'twk-row'}>
+      <div className="twk-lbl">
+        <span>{label}</span>
+        {value != null && <span className="twk-val">{value}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// ── Controls ────────────────────────────────────────────────────────────────
+
+function TweakSlider({ label, value, min = 0, max = 100, step = 1, unit = '', onChange }) {
+  return (
+    <TweakRow label={label} value={`${value}${unit}`}>
+      <input type="range" className="twk-slider" min={min} max={max} step={step}
+             value={value} onChange={(e) => onChange(Number(e.target.value))} />
+    </TweakRow>
+  );
+}
+
+function TweakToggle({ label, value, onChange }) {
+  return (
+    <div className="twk-row twk-row-h">
+      <div className="twk-lbl"><span>{label}</span></div>
+      <button type="button" className="twk-toggle" data-on={value ? '1' : '0'}
+              role="switch" aria-checked={!!value}
+              onClick={() => onChange(!value)}><i /></button>
+    </div>
+  );
+}
+
+function TweakRadio({ label, value, options, onChange }) {
+  const trackRef = React.useRef(null);
+  const [dragging, setDragging] = React.useState(false);
+  // The active value is read by pointer-move handlers attached for the lifetime
+  // of a drag — ref it so a stale closure doesn't fire onChange for every move.
+  const valueRef = React.useRef(value);
+  valueRef.current = value;
+
+  // Segments wrap mid-word once per-segment width runs out. The track is
+  // ~248px (280 panel − 28 body pad − 4 seg pad), each button loses 12px
+  // to its own padding, and 11.5px system-ui averages ~6.3px/char — so 2
+  // options fit ~16 chars each, 3 fit ~10. Past that (or >3 options), fall
+  // back to a dropdown rather than wrap.
+  const labelLen = (o) => String(typeof o === 'object' ? o.label : o).length;
+  const maxLen = options.reduce((m, o) => Math.max(m, labelLen(o)), 0);
+  const fitsAsSegments = maxLen <= ({ 2: 16, 3: 10 }[options.length] ?? 0);
+  if (!fitsAsSegments) {
+    // <select> emits strings — map back to the original option value so the
+    // fallback stays type-preserving (numbers, booleans) like the segment path.
+    const resolve = (s) => {
+      const m = options.find((o) => String(typeof o === 'object' ? o.value : o) === s);
+      return m === undefined ? s : typeof m === 'object' ? m.value : m;
+    };
+    return <TweakSelect label={label} value={value} options={options}
+                        onChange={(s) => onChange(resolve(s))} />;
+  }
+  const opts = options.map((o) => (typeof o === 'object' ? o : { value: o, label: o }));
+  const idx = Math.max(0, opts.findIndex((o) => o.value === value));
+  const n = opts.length;
+
+  const segAt = (clientX) => {
+    const r = trackRef.current.getBoundingClientRect();
+    const inner = r.width - 4;
+    const i = Math.floor(((clientX - r.left - 2) / inner) * n);
+    return opts[Math.max(0, Math.min(n - 1, i))].value;
+  };
+
+  const onPointerDown = (e) => {
+    setDragging(true);
+    const v0 = segAt(e.clientX);
+    if (v0 !== valueRef.current) onChange(v0);
+    const move = (ev) => {
+      if (!trackRef.current) return;
+      const v = segAt(ev.clientX);
+      if (v !== valueRef.current) onChange(v);
+    };
+    const up = () => {
+      setDragging(false);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  return (
+    <TweakRow label={label}>
+      <div ref={trackRef} role="radiogroup" onPointerDown={onPointerDown}
+           className={dragging ? 'twk-seg dragging' : 'twk-seg'}>
+        <div className="twk-seg-thumb"
+             style={{ left: `calc(2px + ${idx} * (100% - 4px) / ${n})`,
+                      width: `calc((100% - 4px) / ${n})` }} />
+        {opts.map((o) => (
+          <button key={o.value} type="button" role="radio" aria-checked={o.value === value}>
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </TweakRow>
+  );
+}
+
+function TweakSelect({ label, value, options, onChange }) {
+  return (
+    <TweakRow label={label}>
+      <select className="twk-field" value={value} onChange={(e) => onChange(e.target.value)}>
+        {options.map((o) => {
+          const v = typeof o === 'object' ? o.value : o;
+          const l = typeof o === 'object' ? o.label : o;
+          return <option key={v} value={v}>{l}</option>;
+        })}
+      </select>
+    </TweakRow>
+  );
+}
+
+function TweakText({ label, value, placeholder, onChange }) {
+  return (
+    <TweakRow label={label}>
+      <input className="twk-field" type="text" value={value} placeholder={placeholder}
+             onChange={(e) => onChange(e.target.value)} />
+    </TweakRow>
+  );
+}
+
+function TweakNumber({ label, value, min, max, step = 1, unit = '', onChange }) {
+  const clamp = (n) => {
+    if (min != null && n < min) return min;
+    if (max != null && n > max) return max;
+    return n;
+  };
+  const startRef = React.useRef({ x: 0, val: 0 });
+  const onScrubStart = (e) => {
+    e.preventDefault();
+    startRef.current = { x: e.clientX, val: value };
+    const decimals = (String(step).split('.')[1] || '').length;
+    const move = (ev) => {
+      const dx = ev.clientX - startRef.current.x;
+      const raw = startRef.current.val + dx * step;
+      const snapped = Math.round(raw / step) * step;
+      onChange(clamp(Number(snapped.toFixed(decimals))));
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  return (
+    <div className="twk-num">
+      <span className="twk-num-lbl" onPointerDown={onScrubStart}>{label}</span>
+      <input type="number" value={value} min={min} max={max} step={step}
+             onChange={(e) => onChange(clamp(Number(e.target.value)))} />
+      {unit && <span className="twk-num-unit">{unit}</span>}
+    </div>
+  );
+}
+
+// Relative-luminance contrast pick — checkmarks drawn over a swatch need to
+// read on both #111 and #fafafa without per-option configuration. Hex input
+// only (#rgb / #rrggbb); named or rgb()/hsl() colors fall through to "light".
+function __twkIsLight(hex) {
+  const h = String(hex).replace('#', '');
+  const x = h.length === 3 ? h.replace(/./g, (c) => c + c) : h.padEnd(6, '0');
+  const n = parseInt(x.slice(0, 6), 16);
+  if (Number.isNaN(n)) return true;
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return r * 299 + g * 587 + b * 114 > 148000;
+}
+
+const __TwkCheck = ({ light }) => (
+  <svg viewBox="0 0 14 14" aria-hidden="true">
+    <path d="M3 7.2 5.8 10 11 4.2" fill="none" strokeWidth="2.2"
+          strokeLinecap="round" strokeLinejoin="round"
+          stroke={light ? 'rgba(0,0,0,.78)' : '#fff'} />
+  </svg>
+);
+
+// TweakColor — curated color/palette picker. Each option is either a single
+// hex string or an array of 1-5 hex strings; the card adapts — a lone color
+// renders solid, a palette renders colors[0] as the hero (left ~2/3) with the
+// rest stacked in a sharp column on the right. onChange emits the
+// option in the shape it was passed (string stays string, array stays array).
+// Without options it falls back to the native color input for back-compat.
+function TweakColor({ label, value, options, onChange }) {
+  if (!options || !options.length) {
+    return (
+      <div className="twk-row twk-row-h">
+        <div className="twk-lbl"><span>{label}</span></div>
+        <input type="color" className="twk-swatch" value={value}
+               onChange={(e) => onChange(e.target.value)} />
+      </div>
+    );
+  }
+  // Native <input type=color> emits lowercase hex per the HTML spec, so
+  // compare case-insensitively. String() guards JSON.stringify(undefined),
+  // which returns the primitive undefined (no .toLowerCase).
+  const key = (o) => String(JSON.stringify(o)).toLowerCase();
+  const cur = key(value);
+  return (
+    <TweakRow label={label}>
+      <div className="twk-chips" role="radiogroup">
+        {options.map((o, i) => {
+          const colors = Array.isArray(o) ? o : [o];
+          const [hero, ...rest] = colors;
+          const sup = rest.slice(0, 4);
+          const on = key(o) === cur;
+          return (
+            <button key={i} type="button" className="twk-chip" role="radio"
+                    aria-checked={on} data-on={on ? '1' : '0'}
+                    aria-label={colors.join(', ')} title={colors.join(' · ')}
+                    style={{ background: hero }}
+                    onClick={() => onChange(o)}>
+              {sup.length > 0 && (
+                <span>
+                  {sup.map((c, j) => <i key={j} style={{ background: c }} />)}
+                </span>
+              )}
+              {on && <__TwkCheck light={__twkIsLight(hero)} />}
+            </button>
+          );
+        })}
+      </div>
+    </TweakRow>
+  );
+}
+
+function TweakButton({ label, onClick, secondary = false }) {
+  return (
+    <button type="button" className={secondary ? 'twk-btn secondary' : 'twk-btn'}
+            onClick={onClick}>{label}</button>
+  );
+}
+
+Object.assign(window, {
+  useTweaks, TweaksPanel, TweakSection, TweakRow,
+  TweakSlider, TweakToggle, TweakRadio, TweakSelect,
+  TweakText, TweakNumber, TweakColor, TweakButton,
+});
+
+</script>
+<script type="text/babel">
+// Wiki Tweaks panel — accent color, title scale, theme
+
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "accent": "#c8281e",
+  "titleScale": 1.0,
+  "theme": "light"
+}/*EDITMODE-END*/;
+
+function WikiTweaksApp() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+
+  React.useEffect(() => {
+    document.documentElement.style.setProperty('--accent', t.accent);
+    document.documentElement.style.setProperty('--title-scale', t.titleScale);
+    document.documentElement.setAttribute('data-theme', t.theme);
+  }, [t.accent, t.titleScale, t.theme]);
+
+  return (
+    <TweaksPanel>
+      <TweakSection label="Accent" />
+      <TweakColor
+        label="Accent color"
+        value={t.accent}
+        options={['#c8281e', '#1a1a1a', '#0f5fa8', '#7a5a26', '#1f8a5b', '#7a3aa8']}
+        onChange={(v) => setTweak('accent', v)}
+      />
+      <TweakSection label="Typography" />
+      <TweakSlider
+        label="Title scale"
+        value={t.titleScale}
+        min={0.8}
+        max={1.4}
+        step={0.05}
+        onChange={(v) => setTweak('titleScale', v)}
+      />
+      <TweakSection label="Theme" />
+      <TweakRadio
+        label="Mode"
+        value={t.theme}
+        options={['light', 'dark']}
+        onChange={(v) => setTweak('theme', v)}
+      />
+    </TweaksPanel>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('tweaks-root'));
+root.render(<WikiTweaksApp />);
+
+</script>
+
+</body>
+</html>
