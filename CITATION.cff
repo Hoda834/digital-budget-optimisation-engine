@@ -6,8 +6,8 @@ authors:
   - family-names: "Rezvanjoo"
     given-names: "Hoda"
     orcid: "https://orcid.org/0009-0006-3882-2669"
-version: 0.1.0
-date-released: 2026-05-19
+version: 0.2.0
+date-released: 2026-06-01
 license: MIT
 repository-code: "https://github.com/Hoda834/digital-budget-optimisation-engine"
 url: "https://hodarezvanjoo.com"
