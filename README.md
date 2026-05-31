@@ -282,7 +282,7 @@ This project demonstrates applied expertise in:
 
 If you use this software in academic work, please cite it using the metadata in `CITATION.cff`, or as follows:
 
-> Rezvanjoo, H. (2026). *Marketing Budget Optimisation and Decision Support Framework* (Version 0.1.0). https://github.com/Hoda834/digital-budget-optimisation-engine
+> Rezvanjoo, H. (2026). *Marketing Budget Optimisation and Decision Support Framework* (Version 0.2.0). https://github.com/Hoda834/digital-budget-optimisation-engine
 
 ---
 
