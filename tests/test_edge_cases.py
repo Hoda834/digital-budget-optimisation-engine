@@ -1687,3 +1687,47 @@ def test_lg_split_purchases_parses_independently():
         f"swallowed by Leads fallthrough; got "
         f"{result['kpis'].get('FB_LG_PURCHASES')}"
     )
+
+
+def test_conservative_scenario_dropped_when_floor_exceeds_cap():
+    """A per-platform floor that fits the base cap but exceeds the (smaller)
+    conservative cap must cause the conservative scenario to be dropped, while
+    base and optimistic survive.
+
+    Guards the ``continue`` branch in ``run_module5_lp_scenarios`` that the
+    paper's "evaluates each allocation across up to three scenarios" claim
+    relies on. The discriminating check is built in: with a feasible floor all
+    three scenarios survive, so a pass here means the drop is caused by
+    infeasibility, not by an unconditional bug.
+    """
+    def survived(fb_floor):
+        s = WizardState()
+        complete_module1_and_advance(
+            s, raw_objectives=["lg"], raw_budget=10_000.0, raw_duration_days=30,
+        )
+        run_module2(s, selected_platforms=["fb", "li"], priorities_input={
+            "fb": {"priority_1": "lg", "priority_2": None},
+            "li": {"priority_1": "lg", "priority_2": None},
+        })
+        s.min_spend_per_platform = {"fb": fb_floor, "li": 0.0}
+        s.scenario_multipliers = {"conservative": 0.85, "base": 1.0, "optimistic": 1.15}
+        finalise_module3_from_inputs(s, platform_inputs={
+            "fb": {"budget": 1_000.0, "historical_days": 30, "kpis": {"FB_LG_LEADS": 100.0}},
+            "li": {"budget": 1_000.0, "historical_days": 30, "kpis": {"LI_LG_LEADS": 10.0}},
+        })
+        run_module4(s)
+        run_module5(s)
+        return set(s.module5_scenario_bundle.results_by_scenario.keys())
+
+    # £8,000 fits the conservative cap (£10,000 x 0.85 = £8,500): all three survive.
+    assert survived(8_000.0) == {"conservative", "base", "optimistic"}, (
+        "feasible floor should leave every scenario intact"
+    )
+    # £9,000 exceeds the conservative cap: conservative drops, the rest survive.
+    infeasible = survived(9_000.0)
+    assert "conservative" not in infeasible, (
+        "conservative must be dropped when its floor exceeds its budget cap"
+    )
+    assert {"base", "optimistic"} <= infeasible, (
+        "feasible scenarios must still be reported when another is dropped"
+    )
