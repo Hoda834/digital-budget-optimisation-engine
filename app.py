@@ -2282,7 +2282,7 @@ def module2_ui(state: WizardState) -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="Marketing Budget Optimisation", layout="wide")
+    st.set_page_config(page_title="CLARO — Marketing Budget Optimisation", layout="wide")
     initialise_state()
 
     state: WizardState = st.session_state["wizard_state"]
