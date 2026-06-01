@@ -10,7 +10,7 @@ Instead of looking at channels separately, the system treats marketing as a cons
 
 The framework is designed to help managers make better decisions, not just to automate processes.
 
-https://github.com/Hoda834/digital-budget-optimisation-engine.wiki.git
+📖 Project wiki: https://github.com/Hoda834/digital-budget-optimisation-engine/wiki
 
 ---
 
@@ -203,7 +203,7 @@ pip install pytest
 pytest -q
 ```
 
-The suite covers 213 cases across two files — `tests/smoke_test.py` (happy-path and feature regressions) and `tests/edge_cases.py` (encoding, malformed input, infeasibility, custom platforms, rate-only campaigns, multi-component composition, Monte Carlo, all-platforms stress).
+The suite covers 213 cases across four files — `tests/smoke_test.py` (happy-path and feature regressions), `tests/test_edge_cases.py` (encoding, malformed input, infeasibility, custom platforms, rate-only campaigns, multi-component composition, Monte Carlo, all-platforms stress), `tests/test_accuracy.py` (hand-computable numeric checks), and `tests/test_bug_fixes.py` (named regression guards).
 
 The same command runs automatically on every push and pull request via GitHub Actions.
 
@@ -230,8 +230,11 @@ The same command runs automatically on every push and pull request via GitHub Ac
 │   └── module7.py               # Insights + Module7Policy
 ├── docs/                        # Design + modelling documentation
 ├── tests/
+│   ├── conftest.py              # Headless session-state fixture
 │   ├── smoke_test.py            # Happy-path + feature regressions
-│   ├── edge_cases.py            # Adversarial: encoding, malformed, infeasible
+│   ├── test_edge_cases.py       # Adversarial: encoding, malformed, infeasible
+│   ├── test_accuracy.py         # Hand-computable numeric checks
+│   ├── test_bug_fixes.py        # Named regression guards
 │   └── behavioural_check.py     # Realistic scenarios printed end-to-end
 ├── .github/workflows/tests.yml  # CI runs pytest on every push
 ├── LICENSE
@@ -246,10 +249,10 @@ The same command runs automatically on every push and pull request via GitHub Ac
 
 Detailed explanations of system behaviour and modelling choices are provided in the `docs/` directory:
 
-* **modules.md** – role and responsibility of each module
-* **scenarios.md** – scenario design and interpretation logic
-* **decision_logic.md** – optimisation assumptions and modelling rationale
-* **calibration.md** – every hand-set numeric constant in the engine, its source / intuition, what changes if the value moves, and whether a user-facing override exists
+* **MODULES.md** – role and responsibility of each module
+* **SCENARIOS.md** – scenario design and interpretation logic
+* **DECISION_LOGIC.md** – optimisation assumptions and modelling rationale
+* **CALIBRATION.md** – every hand-set numeric constant in the engine, its source / intuition, what changes if the value moves, and whether a user-facing override exists
 
 These documents expand on the architectural and decision principles outlined above.
 
