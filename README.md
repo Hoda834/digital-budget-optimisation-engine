@@ -107,7 +107,7 @@ The composition is auditable — every parsed CSV returns a breakdown showing pe
 
 ### 5. Forecasting Layer with Honest Uncertainty
 
-Module 6 produces per-KPI forecasts from the LP allocation. Confidence bands are **data-driven**:
+Module 6 produces per-KPI forecasts from the LP allocation. Uncertainty bands are **data-driven** (and are deliberately *not* called "confidence" — that word is reserved for Module 7's decision confidence score, a separate concept):
 
 * If Module 3 has ≥3 historical observations per KPI, the band is the sample coefficient of variation — true noise from data.
 * Otherwise, the band scales by `√(30 / historical_days)` — a 90-day history produces a ~17% band, a 7-day history ~62%.
@@ -226,7 +226,7 @@ The same command runs automatically on every push and pull request via GitHub Ac
 │   ├── module3.py               # Historical KPIs (manual or via CSV)
 │   ├── module4.py               # Cost-per-unit + outlier sweep
 │   ├── module5.py               # LP with shrinkage, Monte Carlo, diagnostics
-│   ├── module6.py               # Forecasts with data-driven confidence bands
+│   ├── module6.py               # Forecasts with data-driven uncertainty bands
 │   └── module7.py               # Insights + Module7Policy
 ├── docs/                        # Design + modelling documentation
 ├── tests/

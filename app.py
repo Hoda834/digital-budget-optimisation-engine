@@ -292,7 +292,7 @@ def build_forecast_df(
 ) -> pd.DataFrame:
     """Build the per-KPI forecast table.
 
-    Confidence bands surfaced by Module 6 (``predicted_kpi_low``,
+    Uncertainty bands surfaced by Module 6 (``predicted_kpi_low``,
     ``predicted_kpi_high``, ``band_pct``) are carried into the table so
     the report shows the ±range the engine knows, not just the central
     point estimate.
@@ -1249,7 +1249,7 @@ def module3_ui(state: WizardState) -> None:
                     step=1,
                     key=f"hist_days_{platform}",
                     help="How many days of past performance these numbers cover. "
-                         "Confidence bands shrink as the window grows (more data → less noise).",
+                         "Uncertainty bands shrink as the window grows (more data → less noise).",
                 )
             with col_budget:
                 budget = st.number_input(
@@ -1689,7 +1689,7 @@ def results_ui(state: WizardState) -> None:
                         st.dataframe(show_forecast, use_container_width=True, hide_index=True)
                         st.caption(
                             "Predicted KPI is the central forecast; low / high and ±% "
-                            "show the confidence band Module 6 derived from data "
+                            "show the uncertainty band Module 6 derived from data "
                             "(observation CV when available, otherwise scaled by the "
                             "historical window length). Allocated Budget shows the shared "
                             "(Platform, Objective) cell budget once per cell; sibling KPIs "
@@ -2075,7 +2075,7 @@ def module1_ui(state: WizardState) -> None:
             min_value=1,
             value=int(state.campaign_duration_days or 30),
             step=1,
-            help="Used to scale industry-effective minimums and historical-window confidence bands.",
+            help="Used to scale industry-effective minimums and historical-window uncertainty bands.",
         )
 
     # ── Goal values (utility weights) ──────────────────────────────────────

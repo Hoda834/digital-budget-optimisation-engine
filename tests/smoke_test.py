@@ -1506,7 +1506,7 @@ def test_module6_band_falls_back_to_default_without_module3_data() -> None:
     assert row.band_pct == pytest.approx(DEFAULT_UNCERTAINTY_BAND)
 
 
-def test_module6_count_kpi_has_confidence_band() -> None:
+def test_module6_count_kpi_has_uncertainty_band() -> None:
     """Module 6 must surface a ±band on every count-KPI forecast so the
     output cannot be mistaken for a precise commitment."""
     from modules.module6 import compute_module6_forecast, DEFAULT_UNCERTAINTY_BAND
@@ -1799,7 +1799,7 @@ def test_build_forecast_df_collapses_cell_budget_to_primary_row() -> None:
     expected_roas = (primary["Predicted KPI"] * 0.001) / primary["Allocated Budget"]
     assert primary["ROAS"] == pytest.approx(expected_roas, rel=1e-6)
 
-    # And the new confidence-band columns are present and well-formed.
+    # And the new uncertainty-band columns are present and well-formed.
     for _, row in fb_aw_rows.iterrows():
         assert row["Predicted KPI (low)"] <= row["Predicted KPI"] <= row["Predicted KPI (high)"]
         assert row["Band ±%"] >= 0.0

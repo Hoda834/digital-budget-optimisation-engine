@@ -226,7 +226,7 @@ warnings, not constraints. Each section flags which category a constant is in.
 - **Source:** Empirical Bayes in the textbook sense estimates the prior
   strength from the data; here it's fixed at 30 days because:
   1. The reference window matches the conventional "campaign month"
-     baseline used in Module 6's confidence bands.
+     baseline used in Module 6's uncertainty bands.
   2. The data needed for genuine empirical Bayes estimation
      (cross-platform variance of true productivities) isn't reliably
      available from typical Module 3 inputs.
@@ -258,12 +258,12 @@ warnings, not constraints. Each section flags which category a constant is in.
 
 ---
 
-## 5. Confidence bands on the forecast
+## 5. Uncertainty bands on the forecast
 
 ### `DEFAULT_UNCERTAINTY_BAND = 0.30`
 
 - **Location:** `modules/module6.py:22`
-- **Role:** ±30% fallback confidence band on count-KPI forecasts when
+- **Role:** ±30% fallback uncertainty band on count-KPI forecasts when
   no per-KPI history is available. Used when Module 3 has neither
   multi-period observations nor a `historical_days` field.
 - **Source:** Industry convention. Display ad performance week-to-week
@@ -291,7 +291,7 @@ warnings, not constraints. Each section flags which category a constant is in.
 ### Band clamps `_MIN_BAND = 0.05, _MAX_BAND = 1.00`
 
 - **Location:** `modules/module6.py:31–32`
-- **Role:** Hard limits on per-KPI confidence bands. Floor at 5%
+- **Role:** Hard limits on per-KPI uncertainty bands. Floor at 5%
   prevents pathological zero-variance inputs from producing zero
   bands (false precision); cap at 100% prevents bands from rendering
   forecasts meaningless ("plan delivers between 0 and 2× the point
