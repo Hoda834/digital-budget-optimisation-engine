@@ -15,7 +15,7 @@ _KPI_KIND: Dict[str, str] = {
     for row in KPI_CONFIG
 }
 
-# Default ±30% confidence band on count-KPI forecasts.  This is the *fallback*
+# Default ±30% uncertainty band on count-KPI forecasts.  This is the *fallback*
 # used when no per-KPI history is available; whenever Module 3 has either
 # multi-period observations or a historical_days length, the band is derived
 # from data (see _band_for_kpi).
@@ -86,8 +86,8 @@ class Module6ForecastRow:
     ratio_kpi_per_budget: float   # count KPI: units/£; rate KPI: the rate value itself
     allocated_budget: float
     predicted_kpi: float          # count KPI: units; rate KPI: expected rate (dimensionless)
-    predicted_kpi_low: float = 0.0    # lower bound of the confidence band
-    predicted_kpi_high: float = 0.0   # upper bound of the confidence band
+    predicted_kpi_low: float = 0.0    # lower bound of the uncertainty band
+    predicted_kpi_high: float = 0.0   # upper bound of the uncertainty band
     band_source: str = "default"      # "observations" | "window_scaled" | "default"
     band_pct: float = 0.0             # the band fraction actually used for this row
 
@@ -270,7 +270,7 @@ def compute_module6_forecast(
                     d.skipped_invalid_ratio_items += 1
                     continue
 
-                # Confidence band: count KPIs get a ±band% range to reflect the
+                # Uncertainty band: count KPIs get a ±band% range to reflect the
                 # inherent noise of digital ad performance.  Rate KPIs already
                 # bake in averaging across the historical window, so we keep
                 # the point estimate without a wider band.

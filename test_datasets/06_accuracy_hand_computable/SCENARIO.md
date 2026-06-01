@@ -40,7 +40,7 @@ FB is 10× more productive than LI.
 ## What this stresses
 
 - Forecast formula correctness (count KPI)
-- Confidence-band default at the reference 30-day window
+- Uncertainty-band default at the reference 30-day window
 - Budget closure on a one-objective LP
 - The pipeline's ability to round-trip historical_count and
   historical_budget through M3 → M4 → M5 → M6 without distortion

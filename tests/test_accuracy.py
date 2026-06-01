@@ -8,7 +8,7 @@ output matches the hand-computed value to a tight tolerance.
 
 Categories:
   ACC-F: Forecast accuracy        (Module 6: predicted_kpi = spend × ratio)
-  ACC-B: Confidence band accuracy (Module 6: ±band% on count KPIs)
+  ACC-B: Uncertainty band accuracy (Module 6: ±band% on count KPIs)
   ACC-C: Constraint accuracy      (Module 5: budget closure, floors honoured)
   ACC-S: Scenario accuracy        (Module 5: scenario budget = multiplier × total)
   ACC-P: Plan B accuracy          (Module 7: cap binds exactly, trade-off correct)
@@ -208,7 +208,7 @@ def test_ACC_F_04_zero_allocation_produces_zero_forecast():
 
 
 # ═════════════════════════════════════════════════════════════════════════
-# ACC-B: Confidence band accuracy
+# ACC-B: Uncertainty band accuracy
 # Formula: band = 0.30 × sqrt(30 / historical_days), clamped to [0.05, 1.00]
 # ═════════════════════════════════════════════════════════════════════════
 
@@ -706,7 +706,7 @@ def test_ACC_F_06_summed_forecast_matches_per_platform_arithmetic():
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# ACC-B-04 / 05 / 06: extended confidence-band accuracy
+# ACC-B-04 / 05 / 06: extended uncertainty-band accuracy
 # ─────────────────────────────────────────────────────────────────────────
 
 

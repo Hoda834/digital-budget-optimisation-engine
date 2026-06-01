@@ -364,7 +364,7 @@ def finalise_module3_from_inputs(
                     continue
             validated_kpis[var] = v
 
-        # Optional multi-period observations for variance-based confidence
+        # Optional multi-period observations for variance-based uncertainty
         # bands in Module 6.  Shape: {var: [v1, v2, ...]}.  Only count KPIs are
         # supported (rate KPIs are already an average).  Each list must contain
         # positive finite values; invalid entries are dropped, and lists with
