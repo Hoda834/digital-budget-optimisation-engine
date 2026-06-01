@@ -1,4 +1,6 @@
-# Marketing Budget Optimisation and Decision Support Framework
+# CLARO — Constrained Linear Allocation and Resource Optimiser
+
+*A decision-support framework for marketing budget allocation.*
 
 ## Overview
 
@@ -282,7 +284,7 @@ This project demonstrates applied expertise in:
 
 If you use this software in academic work, please cite it using the metadata in `CITATION.cff`, or as follows:
 
-> Rezvanjoo, H. (2026). *Marketing Budget Optimisation and Decision Support Framework* (Version 0.2.0). https://github.com/Hoda834/digital-budget-optimisation-engine
+> Rezvanjoo, H. (2026). *CLARO: Constrained Linear Allocation and Resource Optimiser — a Decision-Support Framework for Marketing Budget Allocation* (Version 0.2.0). https://github.com/Hoda834/digital-budget-optimisation-engine
 
 ---
 
