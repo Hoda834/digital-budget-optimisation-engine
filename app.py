@@ -1728,13 +1728,13 @@ def results_ui(state: WizardState) -> None:
     # SECTION 5 — ADVANCED CONTROLS (refine, diagnostics, robustness)
     # ═══════════════════════════════════════════════════════════════════════
     with st.expander("Decision mode and refine policy", expanded=False):
+        _mode_options = ["Performance first", "Risk managed"]
         st.selectbox(
             "Decision mode",
-            options=["Performance first", "Risk managed", "Exploration"],
-            index=["Performance first", "Risk managed", "Exploration"].index(decision_mode),
+            options=_mode_options,
+            index=_mode_options.index(decision_mode) if decision_mode in _mode_options else 0,
             key="_decision_mode",
-            help="Performance first chooses the LP optimum. Risk managed always offers Plan B. "
-                 "Exploration loosens scenario coupling.",
+            help="Performance first chooses the LP optimum. Risk managed always offers Plan B.",
         )
  
         st.caption(
