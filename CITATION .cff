@@ -7,10 +7,18 @@ authors:
     given-names: "Hoda"
     orcid: "https://orcid.org/0009-0006-3882-2669"
 version: 0.2.0
-date-released: 2026-06-01
+doi: 10.5281/zenodo.20517534
+date-released: 2026-06-02
 license: MIT
 repository-code: "https://github.com/Hoda834/digital-budget-optimisation-engine"
 url: "https://hodarezvanjoo.com"
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.20517492
+    description: "Concept DOI — always resolves to the latest version"
+  - type: doi
+    value: 10.5281/zenodo.20517534
+    description: "Version DOI — v0.2.0 (the archived snapshot)"
 keywords:
   - linear programming
   - decision support systems
