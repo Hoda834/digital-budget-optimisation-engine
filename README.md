@@ -178,7 +178,7 @@ For the audiences this is designed for (strategists, agency planning leads, in-h
 
 ```bash
 pip install -r requirements.txt
-streamlit run app.py
+streamlit run src/app.py
 ```
 
 The application opens in your browser at `http://localhost:8501`.
@@ -187,7 +187,7 @@ or https://digital-budget-optimisation-engine.streamlit.app/
 A quick way to verify the pipeline without the UI:
 
 ```bash
-PYTHONPATH=. python tests/behavioural_check.py
+PYTHONPATH=src python tests/behavioural_check.py
 ```
 
 That runs 10+ realistic scenarios (B2B SaaS, leads-only, engagement-only, with and without goal values, with and without test-and-learn reserve, with and without seasonality) and prints the full M1→M7 output for each.
@@ -213,21 +213,23 @@ The same command runs automatically on every push and pull request via GitHub Ac
 
 ```text
 .
-├── app.py                       # Streamlit UI + wizard orchestration
-├── core/
-│   ├── wizard_state.py          # State machine, custom platforms, goal values,
-│   │                            #   carve-out, seasonality
-│   ├── kpi_config.py            # Built-in + custom platform KPI catalogue
-│   └── csv_import.py            # CSV parsing + composition layer
-├── modules/
-│   ├── module1.py               # Objective, budget, currency, duration,
-│   │                            #   goal values, carve-out, seasonality
-│   ├── module2.py               # Platform selection + priority ranks
-│   ├── module3.py               # Historical KPIs (manual or via CSV)
-│   ├── module4.py               # Cost-per-unit + outlier sweep
-│   ├── module5.py               # LP with shrinkage, Monte Carlo, diagnostics
-│   ├── module6.py               # Forecasts with data-driven uncertainty bands
-│   └── module7.py               # Insights + Module7Policy
+├── src/                         # Source code
+│   ├── app.py                   # Streamlit UI + wizard orchestration
+│   ├── core/
+│   │   ├── wizard_state.py      # State machine, custom platforms, goal values,
+│   │   │                        #   carve-out, seasonality
+│   │   ├── kpi_config.py        # Built-in + custom platform KPI catalogue
+│   │   └── csv_import.py        # CSV parsing + composition layer
+│   └── modules/
+│       ├── module1.py           # Objective, budget, currency, duration,
+│       │                        #   goal values, carve-out, seasonality
+│       ├── module2.py           # Platform selection + priority ranks
+│       ├── module3.py           # Historical KPIs (manual or via CSV)
+│       ├── module4.py           # Cost-per-unit + outlier sweep
+│       ├── module5.py           # LP with shrinkage, Monte Carlo, diagnostics
+│       ├── module6.py           # Forecasts with data-driven uncertainty bands
+│       └── module7.py           # Insights + Module7Policy
+├── conftest.py                  # Puts src/ on sys.path for tests
 ├── docs/                        # Design + modelling documentation
 ├── tests/
 │   ├── conftest.py              # Headless session-state fixture
@@ -237,7 +239,7 @@ The same command runs automatically on every push and pull request via GitHub Ac
 │   ├── test_bug_fixes.py        # Named regression guards
 │   └── behavioural_check.py     # Realistic scenarios printed end-to-end
 ├── .github/workflows/tests.yml  # CI runs pytest on every push
-├── LICENSE
+├── LICENSE.txt
 ├── CITATION.cff
 ├── requirements.txt
 └── README.md
@@ -305,7 +307,7 @@ Issues and discussions are welcome.
 
 ## License
 
-This project is released under the MIT License. See [LICENSE](LICENSE) for details.
+This project is released under the MIT License. See [LICENSE.txt](LICENSE.txt) for details.
 
 ---
 
