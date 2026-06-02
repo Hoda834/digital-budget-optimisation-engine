@@ -203,7 +203,7 @@ pip install pytest
 pytest -q
 ```
 
-The suite covers 213 cases across four files — `tests/smoke_test.py` (happy-path and feature regressions), `tests/test_edge_cases.py` (encoding, malformed input, infeasibility, custom platforms, rate-only campaigns, multi-component composition, Monte Carlo, all-platforms stress), `tests/test_accuracy.py` (hand-computable numeric checks), and `tests/test_bug_fixes.py` (named regression guards).
+The suite covers 214 cases across four files — `tests/smoke_test.py` (happy-path and feature regressions), `tests/test_edge_cases.py` (encoding, malformed input, infeasibility, custom platforms, rate-only campaigns, multi-component composition, Monte Carlo, all-platforms stress), `tests/test_accuracy.py` (hand-computable numeric checks), and `tests/test_bug_fixes.py` (named regression guards).
 
 The same command runs automatically on every push and pull request via GitHub Actions.
 
