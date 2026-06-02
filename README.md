@@ -1,7 +1,8 @@
 # CLARO — Constrained Linear Allocation and Resource Optimiser
 
-*A decision-support framework for marketing budget allocation.*
 [![DOI](https://zenodo.org/badge/1114086677.svg)](https://doi.org/10.5281/zenodo.20517492)
+
+*A decision-support framework for marketing budget allocation.*
 
 ## Overview
 
