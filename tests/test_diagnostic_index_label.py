@@ -1,10 +1,3 @@
-"""Lock the renamed user-facing label.
-
-The interpretation layer's score is presented to users as the "diagnostic
-index" (v0.2.1). This test guards against a regression that reintroduces
-the older "confidence score" wording in the narrative outputs, which would
-desync the software from the manuscript.
-"""
 from __future__ import annotations
 
 from core.wizard_state import WizardState
@@ -47,5 +40,5 @@ def test_narrative_uses_diagnostic_index_not_confidence():
 def test_score_value_still_present_and_bounded():
     ins = _pipeline()
     si = next(iter(ins.scenario_insights.values()))
-    score = si.confidence_score  # field name unchanged in v0.2.1 (label-only rename)
+    score = si.confidence_score  
     assert 40 <= int(score) <= 100
