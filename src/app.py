@@ -1840,7 +1840,7 @@ def results_ui(state: WizardState) -> None:
                     elif bc.kind == "budget_cap":
                         target_label = "Total budget"
                     binding_rows.append({
-                        "Constraint": bc.name,
+                        "Constraint": _friendly_constraint_name(state, bc.name),
                         "Kind": bc.kind,
                         "Target": target_label,
                         "Limit": money(bc.rhs),
@@ -1858,7 +1858,7 @@ def results_ui(state: WizardState) -> None:
                     if name in already_shown:
                         continue
                     sp_rows.append({
-                        "Constraint": name,
+                        "Constraint": _friendly_constraint_name(state, name),
                         "Shadow price": number(price, 4),
                     })
                 if sp_rows:
@@ -2182,6 +2182,25 @@ def _platform_display_name(state: WizardState, code: str) -> str:
     """Display label for a platform code (built-in catalogue only)."""
     code_l = str(code).lower()
     return PLATFORM_NAMES.get(code_l, code_l)
+
+
+def _friendly_constraint_name(state: WizardState, raw_name: str) -> str:
+    """Human-readable label for a raw LP constraint key.
+
+    Keys look like 'budget_cap', 'min_platform_<code>', 'min_goal_<code>'.
+    Falls back to the raw key if the prefix is unrecognised, so an unknown
+    constraint is never hidden or mislabelled.
+    """
+    name = str(raw_name)
+    if name == "budget_cap":
+        return "Total budget"
+    if name.startswith("min_platform_"):
+        code = name[len("min_platform_"):]
+        return f"Minimum spend on {_platform_display_name(state, code)}"
+    if name.startswith("min_goal_"):
+        code = name[len("min_goal_"):]
+        return f"Minimum budget for {_GOAL_LABEL.get(code, code)}"
+    return name
 
 
 def module2_ui(state: WizardState) -> None:
