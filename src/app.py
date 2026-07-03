@@ -679,7 +679,7 @@ def create_pdf_bytes(
                getattr(ins, "confidence_score", None) is not None:
                 story.append(
                     Paragraph(
-                        f"<b>Confidence:</b> {int(ins.confidence_score)}/100 "
+                        f"<b>Diagnostic index:</b> {int(ins.confidence_score)}/100 "
                         f"&nbsp;&nbsp; <b>Decision pattern:</b> {ins.classification}",
                         styles["BodyText"],
                     )
@@ -1454,7 +1454,7 @@ def results_ui(state: WizardState) -> None:
         if cls is not None and conf is not None:
             col_a, col_b = st.columns(2)
             with col_a:
-                st.metric("Confidence", f"{int(conf)} / 100")
+                st.metric("Diagnostic index", f"{int(conf)} / 100")
             with col_b:
                 st.metric("Decision pattern", str(cls))
  

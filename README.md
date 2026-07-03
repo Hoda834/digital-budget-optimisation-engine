@@ -109,7 +109,7 @@ The composition is auditable — every parsed CSV returns a breakdown showing pe
 
 ### 5. Forecasting Layer with Honest Uncertainty
 
-Module 6 produces per-KPI forecasts from the LP allocation. Uncertainty bands are **data-driven** (and are deliberately *not* called "confidence" — that word is reserved for Module 7's decision confidence score, a separate concept):
+Module 6 produces per-KPI forecasts from the LP allocation. Uncertainty bands are **data-driven** (and are deliberately *not* called "confidence" — that concept is reserved for Module 7's diagnostic index, a separate concept):
 
 * If Module 3 has ≥3 historical observations per KPI, the band is the sample coefficient of variation — true noise from data.
 * Otherwise, the band scales by `√(30 / historical_days)` — a 90-day history produces a ~17% band, a 7-day history ~62%.
@@ -127,13 +127,13 @@ Module 6 produces per-KPI forecasts from the LP allocation. Uncertainty bands ar
 
 ### 7. Decision Interpretation Layer (Module 7)
 
-Configurable via `Module7Policy` — every threshold (corner concentration, confidence penalties, Plan B cap) is a named, defaulted field on a frozen dataclass, not a magic literal.
+Configurable via `Module7Policy` — every threshold (corner concentration, diagnostic-index penalties, Plan B cap) is a named, defaulted field on a frozen dataclass, not a magic literal.
 
 Outputs per scenario:
 
 * Executive summary explaining the allocation logic
 * Classification (Corner-dominant / Concentrated / Balanced / Scenario-sensitive)
-* Confidence score (40–100) penalising concentration, instability, missing forecasts, data-quality flags
+* Diagnostic-index (40–100) penalising concentration, instability, missing forecasts, data-quality flags
 * Binding vs non-binding constraints (with shadow prices)
 * Plan A (performance-first) and Plan B (risk-managed) with the efficiency trade-off explicit
 * Risks and recommendations
@@ -291,7 +291,7 @@ This project demonstrates applied expertise in:
 
 If you use this software in academic work, please cite it using the metadata in `CITATION.cff`, or as follows:
 
-> Rezvanjoo, H. (2026). *CLARO: Constrained Linear Allocation and Resource Optimiser — a Decision-Support Framework for Marketing Budget Allocation* (Version 0.2.0). https://github.com/Hoda834/digital-budget-optimisation-engine
+> Rezvanjoo, H. (2026). *CLARO: Constrained Linear Allocation and Resource Optimiser — a Decision-Support Framework for Marketing Budget Allocation* (Version 0.2.1). https://github.com/Hoda834/digital-budget-optimisation-engine
 
 ---
 

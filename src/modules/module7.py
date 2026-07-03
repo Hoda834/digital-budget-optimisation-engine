@@ -629,7 +629,7 @@ def _risks_recs(
         recs.append("Review the historical KPI values and ensure consistent units and time windows across platforms.")
 
     if confidence <= 55:
-        risks.append("Overall confidence is moderate to low.")
+        risks.append("Overall diagnostic index is moderate to low.")
         recs.append("Use this allocation as a starting point and validate with a short test cycle before committing the full budget.")
 
     if plan_b and plan_b.tradeoff_percent is not None and plan_b.tradeoff_percent >= policy.plan_b_meaningful_tradeoff_pct:
@@ -667,7 +667,7 @@ def _summary_text(
         lane = "no dominant lane"
 
     parts: List[str] = []
-    parts.append(f"Scenario {scenario_name}: {classification} decision with confidence score {confidence}/100.")
+    parts.append(f"Scenario {scenario_name}: {classification} decision with diagnostic index {confidence}/100.")
     parts.append(f"The optimiser concentrates spend around {lane}.")
     if dp:
         parts.append(f"Top platform share is about {pr} percent.")
