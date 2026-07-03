@@ -635,7 +635,7 @@ def create_pdf_bytes(
         scen_name, lp_res, fc_res = base_scenario
 
         total_budget = getattr(state, "total_budget", 0.0) or 0.0
-        duration = getattr(state, "duration_days", 0) or 0
+        duration = getattr(state, "campaign_duration_days", 0) or 0
         story.append(
             Paragraph(
                 f"Spend {money(total_budget)} over {duration} days as follows:",
@@ -1420,7 +1420,7 @@ def results_ui(state: WizardState) -> None:
     # SECTION 1 — HEADLINE: the recommended plan
     # ═══════════════════════════════════════════════════════════════════════
     total_budget = float(getattr(state, "total_budget", 0.0) or 0.0)
-    duration = int(getattr(state, "duration_days", 0) or 0)
+    duration = int(getattr(state, "campaign_duration_days", 0) or 0)
     st.markdown(
         f"### Spend {money(total_budget)} over {duration} days as follows"
     )
