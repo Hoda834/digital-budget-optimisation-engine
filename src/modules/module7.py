@@ -508,11 +508,15 @@ def _plan_b_risk_managed(
 ) -> Optional[PlanOutput]:
     """Return a diversified alternative that caps the dominant platform.
 
-    The LP (Plan A) already satisfies all minimum-spend constraints set in
-    Module 2, so we do not re-enforce them here — that would re-implement
-    policy independently and risk inconsistency.  We simply scale down the
-    top platform and redistribute the freed budget to the remaining platforms
-    in proportion to their LP productivity scores.
+    Plan A (the LP optimum) already satisfies every minimum-spend floor set
+    in Module 2.  When we scale the top platform down towards the
+    diversification cap, we clamp the scaled value at that platform's own
+    minimum-spend floor so the alternative plan cannot violate a constraint
+    the LP was required to honour.  This keeps Plan B feasible under the
+    original Module 2 constraints: the redistributed allocation respects the
+    same per-platform floors as Plan A.  If the floor is higher than the
+    diversification cap, the floor wins and Plan B simply diversifies as far
+    as the floor allows.
     """
     total_budget = max(0.0, _f(getattr(lp, "total_budget_used", 0.0)))
     if total_budget <= 0:
@@ -537,8 +541,15 @@ def _plan_b_risk_managed(
     cap_value = max(0.0, float(cap_top_platform_share)) * total_budget
     current_top = max(0.0, _f(pt_a.get(top_p, 0.0)))
 
-    if current_top <= cap_value + 1e-6:
-        # Already within the cap — Plan B = Plan A.
+    # The top platform must not be scaled below its own Module 2 minimum-spend
+    # floor.  Raise the effective cap to the floor when the floor is higher, so
+    # Plan B can never produce an allocation the LP would have rejected.
+    floors = getattr(state, "min_spend_per_platform", {}) or {}
+    top_floor = max(0.0, _f(floors.get(top_p, 0.0)))
+    effective_cap_value = max(cap_value, top_floor)
+
+    if current_top <= effective_cap_value + 1e-6:
+        # Already within the (floor-adjusted) cap — Plan B = Plan A.
         return PlanOutput(
             allocation=plan_a.allocation,
             objective_value_estimate=_estimate_objective_value(plan_a.allocation, lp),
@@ -550,12 +561,12 @@ def _plan_b_risk_managed(
     if not scores:
         return None
 
-    # Start from Plan A and scale down the top platform.
+    # Start from Plan A and scale down the top platform to the effective cap.
     alloc_b: Dict[str, Dict[str, float]] = {
         p: {_k(g): max(0.0, _f(v)) for g, v in (gmap or {}).items()}
         for p, gmap in plan_a.allocation.items()
     }
-    factor = cap_value / current_top
+    factor = effective_cap_value / current_top
     for g in list(alloc_b.get(top_p, {}).keys()):
         alloc_b[top_p][g] *= factor
 
