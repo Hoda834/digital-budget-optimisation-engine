@@ -205,7 +205,7 @@ pip install pytest
 pytest -q
 ```
 
-The suite covers 225 cases across seven files — `tests/smoke_test.py` (happy-path and feature regressions), `tests/test_edge_cases.py` (encoding, malformed input, infeasibility, custom platforms, rate-only campaigns, multi-component composition, Monte Carlo, all-platforms stress), `tests/test_accuracy.py` (hand-computable numeric checks), `tests/test_bug_fixes.py` (named regression guards), `tests/test_plan_b_feasibility.py` (the risk-managed alternative stays within Module 2's floors), `tests/test_diagnostic_index_label.py` (narrative wording and score bounds), and `tests/test_examples_reproduce.py` (runs every script in `examples/` and pins its documented figures).
+The suite covers 243 cases across eight files — `tests/smoke_test.py` (happy-path and feature regressions), `tests/test_edge_cases.py` (encoding, malformed input, infeasibility, custom platforms, rate-only campaigns, multi-component composition, Monte Carlo, all-platforms stress), `tests/test_accuracy.py` (hand-computable numeric checks), `tests/test_bug_fixes.py` (named regression guards), `tests/test_plan_b_feasibility.py` (the risk-managed alternative stays within Module 2's floors), `tests/test_diagnostic_index_label.py` (narrative wording and score bounds), `tests/test_examples_reproduce.py` (runs every script in `examples/` and pins its documented figures), and `tests/test_behavioural_invariants.py` (asserted behavioural expectations, Plan B floor/conservation/degradation guarantees, diagnostic-index invariants, a golden reference scenario, and randomised property checks).
 
 The same command runs automatically on every push and pull request via GitHub Actions.
 
@@ -285,7 +285,8 @@ PYTHONPATH=src python examples/benchmark/run_benchmark.py
 │   ├── test_plan_b_feasibility.py   # Risk-managed plan stays within Module 2 floors
 │   ├── test_diagnostic_index_label.py  # Narrative wording + score bounds
 │   ├── test_examples_reproduce.py   # Runs every examples/ script, pins its figures
-│   └── behavioural_check.py         # Realistic scenarios printed end-to-end
+│   ├── test_behavioural_invariants.py  # Asserted invariants, golden reference, property checks
+│   └── behavioural_check.py         # Realistic scenarios printed end-to-end (demo, not collected)
 ├── test_datasets/                   # Scenario fixtures + internal verifiers
 │   ├── 01_b2b_saas_leadgen/ … 06_accuracy_hand_computable/
 │   ├── _generate.py                 # Regenerates the fixture CSVs
