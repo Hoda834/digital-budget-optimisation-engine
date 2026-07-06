@@ -205,9 +205,40 @@ pip install pytest
 pytest -q
 ```
 
-The suite covers 214 cases across four files — `tests/smoke_test.py` (happy-path and feature regressions), `tests/test_edge_cases.py` (encoding, malformed input, infeasibility, custom platforms, rate-only campaigns, multi-component composition, Monte Carlo, all-platforms stress), `tests/test_accuracy.py` (hand-computable numeric checks), and `tests/test_bug_fixes.py` (named regression guards).
+The suite covers 225 cases across seven files — `tests/smoke_test.py` (happy-path and feature regressions), `tests/test_edge_cases.py` (encoding, malformed input, infeasibility, custom platforms, rate-only campaigns, multi-component composition, Monte Carlo, all-platforms stress), `tests/test_accuracy.py` (hand-computable numeric checks), `tests/test_bug_fixes.py` (named regression guards), `tests/test_plan_b_feasibility.py` (the risk-managed alternative stays within Module 2's floors), `tests/test_diagnostic_index_label.py` (narrative wording and score bounds), and `tests/test_examples_reproduce.py` (runs every script in `examples/` and pins its documented figures).
 
 The same command runs automatically on every push and pull request via GitHub Actions.
+
+---
+
+## Examples and reproducibility
+
+The `examples/` folder contains runnable, self-verifying examples. Every
+script executes the full pipeline (no mocked components) and prints the
+allocation, classification, and diagnostic index it produces.
+
+```bash
+PYTHONPATH=src python examples/case_study/run_case_study.py
+PYTHONPATH=src python examples/case_study/run_data_sensitivity.py
+PYTHONPATH=src python examples/case_study/run_parameter_sensitivity.py
+PYTHONPATH=src python examples/minimal_examples/run_balanced_example.py
+PYTHONPATH=src python examples/minimal_examples/run_concentrated_example.py
+PYTHONPATH=src python examples/benchmark/run_benchmark.py
+```
+
+- `examples/case_study/` is a five-platform, two-objective allocation
+  under three policy configurations. Its `campaign_data.xlsx` is a
+  filled copy of the app's unified import template, so the same run can
+  be reproduced by hand by uploading that exact workbook into Module 3
+  of the guided interface. `SCENARIO.md` documents the inputs,
+  provenance, and expected output. The two sensitivity scripts sweep
+  the input data and the engine's own heuristic constants respectively.
+- `examples/minimal_examples/` holds two small end-to-end cases: a
+  balanced two-platform optimum, and a concentrated three-platform
+  optimum where the risk-managed alternative visibly redistributes.
+- `examples/benchmark/` times the LP solver across problem sizes.
+  Absolute timings vary by hardware; the reproducible claim is the
+  sub-linear, sub-100ms scaling.
 
 ---
 
@@ -233,14 +264,34 @@ The same command runs automatically on every push and pull request via GitHub Ac
 │       └── module7.py           # Insights + Module7Policy
 ├── conftest.py                  # Puts src/ on sys.path for tests
 ├── docs/                        # Design + modelling documentation
+├── examples/                    # Runnable, self-verifying examples
+│   ├── case_study/
+│   │   ├── campaign_data.xlsx           # Filled unified import workbook
+│   │   ├── SCENARIO.md                  # Inputs, provenance, expected output
+│   │   ├── run_case_study.py            # Three policy configurations
+│   │   ├── run_data_sensitivity.py      # Input-data productivity sweep
+│   │   └── run_parameter_sensitivity.py # Heuristic-parameter sweep (5 sub-analyses)
+│   ├── minimal_examples/
+│   │   ├── run_balanced_example.py      # Balanced two-platform optimum
+│   │   └── run_concentrated_example.py  # Concentrated optimum + risk-managed plan
+│   └── benchmark/
+│       └── run_benchmark.py             # LP solve-time scaling
 ├── tests/
-│   ├── conftest.py              # Headless session-state fixture
-│   ├── smoke_test.py            # Happy-path + feature regressions
-│   ├── test_edge_cases.py       # Adversarial: encoding, malformed, infeasible
-│   ├── test_accuracy.py         # Hand-computable numeric checks
-│   ├── test_bug_fixes.py        # Named regression guards
-│   └── behavioural_check.py     # Realistic scenarios printed end-to-end
-├── .github/workflows/tests.yml  # CI runs pytest on every push
+│   ├── conftest.py                  # Headless session-state fixture
+│   ├── smoke_test.py                # Happy-path + feature regressions
+│   ├── test_edge_cases.py           # Adversarial: encoding, malformed, infeasible
+│   ├── test_accuracy.py             # Hand-computable numeric checks
+│   ├── test_bug_fixes.py            # Named regression guards
+│   ├── test_plan_b_feasibility.py   # Risk-managed plan stays within Module 2 floors
+│   ├── test_diagnostic_index_label.py  # Narrative wording + score bounds
+│   ├── test_examples_reproduce.py   # Runs every examples/ script, pins its figures
+│   └── behavioural_check.py         # Realistic scenarios printed end-to-end
+├── test_datasets/                   # Scenario fixtures + internal verifiers
+│   ├── 01_b2b_saas_leadgen/ … 06_accuracy_hand_computable/
+│   ├── _generate.py                 # Regenerates the fixture CSVs
+│   ├── _run_scenarios.py            # Runs all scenarios end-to-end
+│   └── _verify_lp.py                # Hand-checked LP cases
+├── .github/workflows/tests.yml      # CI runs pytest on every push
 ├── LICENSE.txt
 ├── CITATION.cff
 ├── requirements.txt
