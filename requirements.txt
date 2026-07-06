@@ -5,3 +5,4 @@ numpy==1.26.4
 reportlab==4.1.0
 openpyxl==3.1.5
 pypdf==6.12.2
+pytest>=8.0
