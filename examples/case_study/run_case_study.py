@@ -9,9 +9,18 @@ by hand through the guided interface using this exact file. See
 SCENARIO.md for the full inputs and provenance.
 
 Run from the repo root:
-    PYTHONPATH=src python examples/case_study/run_case_study.py
+    python examples/case_study/run_case_study.py
 """
 from __future__ import annotations
+
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / "src"
+
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 import os
 from typing import Dict
@@ -50,8 +59,14 @@ TEST_AND_LEARN_PCT = 0.15
 def load_platform_inputs(pmax_purchases_override: float = None) -> Dict[str, Dict]:
     """Load the workbook through the same parser the app's upload uses."""
     with open(os.path.join(HERE, "campaign_data.xlsx"), "rb") as f:
-        parsed = parse_unified_template_xlsx(f.read(), platform_display_names=PLATFORM_NAMES)
+        parsed = parse_unified_template_xlsx(
+            f.read(),
+            platform_display_names=PLATFORM_NAMES,
+        )
+
+
     out: Dict[str, Dict] = {}
+
     for code, res in parsed.items():
         if code.startswith("__"):
             continue
