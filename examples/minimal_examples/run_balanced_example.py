@@ -8,9 +8,18 @@ on 8,000, both with a 3,000 minimum spend. Run in risk-managed mode so
 the alternative plan is computed for comparison.
 
 Run from the repo root:
-    PYTHONPATH=src python examples/minimal_examples/run_balanced_example.py
+     python examples/minimal_examples/run_balanced_example.py
 """
 from __future__ import annotations
+
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / "src"
+
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 from core.wizard_state import WizardState
 from modules.module1 import complete_module1_and_advance
