@@ -9,7 +9,7 @@ campaign_data.xlsx in this folder. The workbook value itself (5,200) is
 the case study's central point.
 
 Run from the repo root:
-    PYTHONPATH=src python examples/case_study/run_data_sensitivity.py
+    python examples/case_study/run_data_sensitivity.py
 """
 from __future__ import annotations
 
