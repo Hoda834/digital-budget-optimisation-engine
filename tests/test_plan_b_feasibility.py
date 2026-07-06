@@ -1,6 +1,6 @@
 """Plan B (risk-managed alternative) must stay feasible under Module 2 floors.
 
-Reviewer question: when the risk-managed alternative redistributes budget away
+Question under test: when the risk-managed alternative redistributes budget away
 from the dominant platform, does the resulting plan still respect the
 minimum-spend floors the LP was required to honour?
 
