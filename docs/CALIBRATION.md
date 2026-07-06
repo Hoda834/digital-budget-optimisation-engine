@@ -400,7 +400,97 @@ warnings, not constraints. Each section flags which category a constant is in.
 
 ---
 
-## 8. Known limitations the constants don't address
+## 8. Diagnostic index: classification, penalties, and thresholds
+
+### Classification breakpoints `corner_concentration = 0.90`, `balanced_concentration = 0.75`
+
+- **Location:** `modules/module7.py:49,53` (`Module7Policy`)
+- **Role:** A scenario is Corner-dominant when the top platform's share
+  is at or above 0.90 (or at most two cells are funded), Balanced when
+  the top share is at or below 0.75 with three or more funded cells,
+  and Concentrated in between.
+- **Source:** Author-chosen round numbers. 0.90 marks "one platform is
+  effectively the whole plan"; 0.75 marks "no platform has a
+  controlling share." Nothing in between was empirically fitted.
+- **Sensitivity:** `test_module7_policy_thresholds_change_classification`
+  confirms that tightening these thresholds does change which
+  scenarios classify as Corner-dominant versus Concentrated, so the
+  labels are real breakpoints, not cosmetic.
+- **Honest caveat for a reviewer:** the diagnostic-index penalty
+  thresholds below (0.90 / 0.80) are deliberately *not* the same as
+  these classification breakpoints (0.90 / 0.75). This is by design,
+  the index penalises concentration slightly earlier than the label
+  changes, so a scenario can carry a concentration deduction before it
+  is formally called Concentrated, but it means a reader comparing the
+  two systems side by side will notice they don't line up, and should
+  not expect them to.
+- **Override:** pass a custom `Module7Policy(corner_concentration=...,
+  balanced_concentration=...)` to `run_module7`.
+
+### Diagnostic-index deductions
+
+- **Location:** `modules/module7.py:59–67` (`Module7Policy`)
+- **Values:**
+
+  | Trigger | Deduction |
+  |---|---:|
+  | High concentration (top share ≥ 0.90) | 20 |
+  | Medium concentration (top share ≥ 0.80) | 12 |
+  | Two or fewer funded cells | 8 |
+  | Unstable across scenarios | 10 |
+  | Missing forecast | 18 |
+  | Declared data-quality concern | 12 |
+  | Floor (index never reported below this) | 40 |
+
+  The missing-forecast and data-quality deductions are mutually
+  exclusive (a missing forecast is the root cause of the data-quality
+  note, so only one is applied).
+- **Role:** The index starts at 100 and subtracts each triggered
+  deduction, floored at 40 so a recommendation is never shown as
+  near-zero.
+- **Source:** Author-chosen during development, ordered by practical
+  severity (concentration and a missing forecast are penalised most
+  heavily; a two-cell plan and cross-scenario instability less so).
+  None of the seven numbers were fitted to outcome data or back-tested
+  against real campaign performance.
+- **Sensitivity:** `test_module7_policy_thresholds_change_classification`
+  demonstrates the mechanism responds to a custom policy (it substitutes
+  a 40-point high-concentration penalty and confirms the output
+  changes). No test currently sweeps a range of alternative deduction
+  values against the case-study scenarios to show how far the reported
+  index could move under a different, still-reasonable weighting
+  scheme; that would be the natural next step for a reviewer who wants
+  more than "the mechanism works."
+- **Honest caveat for a reviewer:** these are v1 defaults, not
+  calibrated parameters. This table exists so the exact numbers are
+  visible in one place rather than only in source.
+- **Override:** pass a custom `Module7Policy(confidence_high_concentration_penalty=...)`
+  etc. to `run_module7`; see `test_module7_policy_thresholds_change_classification`
+  for a working example.
+
+### Diversification cap `plan_b_top_platform_cap = 0.70`
+
+- **Location:** `modules/module7.py:78` (`Module7Policy`); consumed by
+  `_plan_b_risk_managed` at `modules/module7.py:507`.
+- **Role:** Plan B (the risk-managed alternative) scales the dominant
+  platform down toward this share of the budget, then redistributes
+  the freed spend to the remaining platforms in proportion to
+  productivity. If a platform's own minimum-spend floor is higher than
+  this cap, the floor governs instead (see `test_plan_b_floor_above_cap_wins`).
+- **Source:** Author-chosen. 0.70 was picked as "no single channel
+  should be more than roughly two-thirds to three-quarters of spend"
+  in typical SME risk tolerance, not derived from data.
+- **Sensitivity:** Directly testable via `tests/test_plan_b_feasibility.py`
+  and `test_ACC_P_01`–`04` in `tests/test_accuracy.py`, which confirm
+  the cap is honoured exactly, the redistribution conserves budget, and
+  the reported trade-off percentage matches the formula. These tests
+  don't vary the cap value itself across a range, only confirm the
+  mechanism is exact at the default 0.70.
+- **Override:** pass `Module7Policy(plan_b_top_platform_cap=...)`.
+
+---
+
+## 9. Known limitations the constants don't address
 
 A reviewer who reads the audit alongside this doc will notice we have
 not calibrated against:
