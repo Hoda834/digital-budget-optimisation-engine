@@ -57,10 +57,13 @@ def load_platform_inputs(pmax_purchases_override: float = None) -> Dict[str, Dic
             continue
         if res.get("error"):
             raise RuntimeError(f"{code}: {res['error']}")
+        budget = res.get("budget")
+        if budget is None or float(budget) <= 0:
+            raise ValueError(f"{code}: invalid budget in workbook: {budget!r}")
         kpis = dict(res.get("kpis", {}))
         if code == "go_pmax" and pmax_purchases_override is not None:
             kpis["GO_PMAX_LG_PURCHASES"] = float(pmax_purchases_override)
-        out[code] = {"budget": res["budget"],
+        out[code] = {"budget": float(budget),
                      "historical_days": res.get("historical_days"),
                      "kpis": kpis}
     return out
