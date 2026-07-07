@@ -1,4 +1,4 @@
-cff-version: 1.2.1
+cff-version: 0.2.1
 message: "If you use this software, please cite it as below."
 title: "CLARO: Constrained Linear Allocation and Resource Optimiser — a Decision-Support Framework for Marketing Budget Allocation"
 abstract: "An open source decision support pipeline for constrained marketing budget allocation across digital platforms and competing business objectives. Integrates Linear Programming optimisation, policy constraints, multi-scenario evaluation, goal-aligned KPI forecasting, and a rule-based decision interpretation layer."
