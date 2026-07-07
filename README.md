@@ -343,7 +343,10 @@ This project demonstrates applied expertise in:
 
 If you use this software in academic work, please cite it using the metadata in `CITATION.cff`, or as follows:
 
-> Rezvanjoo, H. (2026). *CLARO: Constrained Linear Allocation and Resource Optimiser — a Decision-Support Framework for Marketing Budget Allocation* (Version 0.2.1). https://github.com/Hoda834/digital-budget-optimisation-engine
+> Rezvanjoo, H. (2026). *CLARO: Constrained Linear Allocation and Resource Optimiser — a Decision-Support Framework for Marketing Budget Allocation* (Version 0.2.1) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.20517534
+
+Version DOI (v0.2.1, the archived snapshot): [10.5281/zenodo.20517534](https://doi.org/10.5281/zenodo.20517534)
+Concept DOI (always resolves to the latest version): [10.5281/zenodo.20517492](https://doi.org/10.5281/zenodo.20517492)
 
 ---
 
