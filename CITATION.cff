@@ -1,4 +1,4 @@
-cff-version: 0.2.1
+cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: "CLARO: Constrained Linear Allocation and Resource Optimiser — a Decision-Support Framework for Marketing Budget Allocation"
 abstract: "An open source decision support pipeline for constrained marketing budget allocation across digital platforms and competing business objectives. Integrates Linear Programming optimisation, policy constraints, multi-scenario evaluation, goal-aligned KPI forecasting, and a rule-based decision interpretation layer."
@@ -7,8 +7,8 @@ authors:
     given-names: "Hoda"
     orcid: "https://orcid.org/0009-0006-3882-2669"
 version: 0.2.1
-doi: 10.5281/zenodo.20517534
-date-released: 2026-06-02
+doi: 10.5281/zenodo.21230206
+date-released: 2026-07-07
 license: MIT
 repository-code: "https://github.com/Hoda834/digital-budget-optimisation-engine"
 url: "https://hodarezvanjoo.com"
@@ -17,7 +17,7 @@ identifiers:
     value: 10.5281/zenodo.20517492
     description: "Concept DOI — always resolves to the latest version"
   - type: doi
-    value: 10.5281/zenodo.20517534
+    value: 10.5281/zenodo.21230206
     description: "Version DOI — v0.2.1 (the archived snapshot)"
 keywords:
   - linear programming
