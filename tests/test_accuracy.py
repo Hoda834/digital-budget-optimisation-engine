@@ -23,14 +23,14 @@ from typing import Dict
 
 import pytest
 
-from core.wizard_state import WizardState
-from modules.module1 import complete_module1_and_advance
-from modules.module2 import run_module2
-from modules.module3 import finalise_module3_from_inputs
-from modules.module4 import run_module4
-from modules.module5 import run_module5
-from modules.module6 import run_module6, compute_module6_forecast
-from modules.module7 import run_module7, Module7Policy
+from claro_engine.core.wizard_state import WizardState
+from claro_engine.modules.module1 import complete_module1_and_advance
+from claro_engine.modules.module2 import run_module2
+from claro_engine.modules.module3 import finalise_module3_from_inputs
+from claro_engine.modules.module4 import run_module4
+from claro_engine.modules.module5 import run_module5
+from claro_engine.modules.module6 import run_module6, compute_module6_forecast
+from claro_engine.modules.module7 import run_module7, Module7Policy
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1114,7 +1114,7 @@ def test_ACC_I_03_csv_scenario_06_hand_computable_round_trip():
     from SCENARIO.md.
     """
     import os
-    from core.csv_import import parse_platform_csv
+    from claro_engine.core.csv_import import parse_platform_csv
 
     here = os.path.dirname(os.path.abspath(__file__))
     folder = os.path.normpath(os.path.join(

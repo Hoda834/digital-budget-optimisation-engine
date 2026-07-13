@@ -17,7 +17,7 @@ Run from the repo root:
 from __future__ import annotations
 
 from run_case_study import run_configuration
-from modules.module5 import run_module5_montecarlo
+from claro_engine.modules.module5 import run_module5_montecarlo
 
 SEED = 42
 N_TRIALS = 200

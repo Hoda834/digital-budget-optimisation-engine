@@ -1,5 +1,5 @@
 """Put the src/ directory on sys.path so the package imports
-(`from core...`, `from modules...`) resolve when tests run from the
+(`from claro_engine.core...`, `from claro_engine.modules...`) resolve when tests run from the
 repository root, mirroring how `streamlit run src/app.py` adds src/ to
 the path at runtime.
 """

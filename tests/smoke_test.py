@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import pytest
 
-from core.wizard_state import WizardState
-from core.kpi_config import KPI_CONFIG
-from modules.module1 import complete_module1_and_advance
-from modules.module2 import run_module2
-from modules.module3 import finalise_module3_from_inputs
-from modules.module4 import run_module4
-from modules.module5 import run_module5, Module5ScenarioBundle, run_module5_lp_scenarios, build_module5_input_from_state
-from modules.module6 import run_module6, Module6ScenarioResult
-from modules.module7 import run_module7
+from claro_engine.core.wizard_state import WizardState
+from claro_engine.core.kpi_config import KPI_CONFIG
+from claro_engine.modules.module1 import complete_module1_and_advance
+from claro_engine.modules.module2 import run_module2
+from claro_engine.modules.module3 import finalise_module3_from_inputs
+from claro_engine.modules.module4 import run_module4
+from claro_engine.modules.module5 import run_module5, Module5ScenarioBundle, run_module5_lp_scenarios, build_module5_input_from_state
+from claro_engine.modules.module6 import run_module6, Module6ScenarioResult
+from claro_engine.modules.module7 import run_module7
 
 
 def _get_module5_bundle(state: WizardState) -> Module5ScenarioBundle:
@@ -235,7 +235,7 @@ def test_wizard_state_reset() -> None:
 
 
 def test_module1_rejects_absurd_budget() -> None:
-    from modules.module1 import MAX_REASONABLE_BUDGET, Module1ValidationError
+    from claro_engine.modules.module1 import MAX_REASONABLE_BUDGET, Module1ValidationError
 
     state = WizardState()
     with pytest.raises(Module1ValidationError, match="sanity ceiling"):
@@ -272,7 +272,7 @@ def test_module3_records_historical_days() -> None:
 
 
 def test_module3_falls_back_to_campaign_duration_for_historical_days() -> None:
-    from modules.module3 import finalise_module3_from_inputs as fin
+    from claro_engine.modules.module3 import finalise_module3_from_inputs as fin
 
     state = WizardState()
     complete_module1_and_advance(state, raw_objectives=["aw"], raw_budget=10000.0)
@@ -296,8 +296,8 @@ def test_module3_falls_back_to_campaign_duration_for_historical_days() -> None:
 
 
 def test_module4_drops_extreme_cpu_outliers() -> None:
-    from modules.module4 import run_module4, CPU_OUTLIER_MULTIPLE
-    from modules.module3 import finalise_module3_from_inputs
+    from claro_engine.modules.module4 import run_module4, CPU_OUTLIER_MULTIPLE
+    from claro_engine.modules.module3 import finalise_module3_from_inputs
 
     state = WizardState()
     complete_module1_and_advance(state, raw_objectives=["lg"], raw_budget=10000.0)
@@ -378,10 +378,10 @@ def test_multi_objective_goal_normalisation_prevents_scale_dominance() -> None:
     5% floor.  After normalisation the goal weights drive allocation, so LI (the
     only lead-gen platform) must receive more than its floor.
     """
-    from modules.module2 import run_module2
-    from modules.module3 import finalise_module3_from_inputs
-    from modules.module4 import run_module4
-    from modules.module5 import run_module5
+    from claro_engine.modules.module2 import run_module2
+    from claro_engine.modules.module3 import finalise_module3_from_inputs
+    from claro_engine.modules.module4 import run_module4
+    from claro_engine.modules.module5 import run_module5
 
     state = WizardState()
     complete_module1_and_advance(
@@ -425,10 +425,10 @@ def test_multi_objective_goal_normalisation_prevents_scale_dominance() -> None:
 def test_equal_productivity_gives_balanced_allocation() -> None:
     """When two platforms have identical KPI productivity the budget should be
     split roughly 50/50, not piled into one by LP solver tie-breaking."""
-    from modules.module2 import run_module2
-    from modules.module3 import finalise_module3_from_inputs
-    from modules.module4 import run_module4
-    from modules.module5 import run_module5
+    from claro_engine.modules.module2 import run_module2
+    from claro_engine.modules.module3 import finalise_module3_from_inputs
+    from claro_engine.modules.module4 import run_module4
+    from claro_engine.modules.module5 import run_module5
 
     state = WizardState()
     complete_module1_and_advance(state, raw_objectives=["lg"], raw_budget=10000.0, raw_duration_days=30)
@@ -467,10 +467,10 @@ def test_goal_value_weights_shift_allocation_toward_high_value_goal() -> None:
 
     Same inputs as the multi-objective regression test, plus explicit goal values.
     """
-    from modules.module2 import run_module2
-    from modules.module3 import finalise_module3_from_inputs
-    from modules.module4 import run_module4
-    from modules.module5 import run_module5
+    from claro_engine.modules.module2 import run_module2
+    from claro_engine.modules.module3 import finalise_module3_from_inputs
+    from claro_engine.modules.module4 import run_module4
+    from claro_engine.modules.module5 import run_module5
 
     def _alloc(goal_values=None) -> dict:
         s = WizardState()
@@ -515,10 +515,10 @@ def test_goal_value_weights_shift_allocation_toward_high_value_goal() -> None:
 
 
 def _run_carveout_pipeline(carve_out_pct=None) -> WizardState:
-    from modules.module2 import run_module2
-    from modules.module3 import finalise_module3_from_inputs
-    from modules.module4 import run_module4
-    from modules.module5 import run_module5
+    from claro_engine.modules.module2 import run_module2
+    from claro_engine.modules.module3 import finalise_module3_from_inputs
+    from claro_engine.modules.module4 import run_module4
+    from claro_engine.modules.module5 import run_module5
 
     s = WizardState()
     complete_module1_and_advance(
@@ -609,7 +609,7 @@ def test_zero_carveout_equivalent_to_no_carveout() -> None:
 def test_test_and_learn_carveout_rejects_out_of_range() -> None:
     """Carve-out >= 50% must be rejected; the LP would have nothing meaningful
     to allocate against."""
-    from modules.module1 import Module1ValidationError
+    from claro_engine.modules.module1 import Module1ValidationError
 
     state = WizardState()
     with pytest.raises(Module1ValidationError, match="below 50%"):
@@ -637,7 +637,7 @@ def test_test_and_learn_carveout_bare_string_treated_as_fraction() -> None:
     """A string '15' (no '%' suffix) must be treated as a fraction, not 15%,
     so the contract matches int/float behaviour. 15.0 is out of range so it
     must be rejected — proving the heuristic is gone."""
-    from modules.module1 import Module1ValidationError
+    from claro_engine.modules.module1 import Module1ValidationError
 
     state = WizardState()
     with pytest.raises(Module1ValidationError, match="below 50%"):
@@ -653,7 +653,7 @@ def test_module5_rejects_invalid_state_carveout() -> None:
     """If state.test_and_learn_pct somehow holds an out-of-range value
     (direct mutation, future bug), Module 5 must raise rather than silently
     optimise the full budget."""
-    from modules.module5 import build_module5_input_from_state, Module5ValidationError
+    from claro_engine.modules.module5 import build_module5_input_from_state, Module5ValidationError
 
     state = _run_carveout_pipeline(carve_out_pct=0.10)
     state.module5_finalised = False
@@ -665,7 +665,7 @@ def test_module5_rejects_invalid_state_carveout() -> None:
 def test_montecarlo_produces_per_platform_distribution() -> None:
     """Monte Carlo should produce a per-platform distribution with non-trivial
     spread reflecting the productivity noise."""
-    from modules.module5 import run_module5_montecarlo
+    from claro_engine.modules.module5 import run_module5_montecarlo
 
     state = _run_pipeline_to_module5()
     mc = run_module5_montecarlo(state, n_trials=50, seed=42)
@@ -683,7 +683,7 @@ def test_montecarlo_produces_per_platform_distribution() -> None:
 def test_montecarlo_seed_reproducibility() -> None:
     """Same seed → same distribution.  This is the floor for any honest
     Monte Carlo: results must be reproducible for audit."""
-    from modules.module5 import run_module5_montecarlo
+    from claro_engine.modules.module5 import run_module5_montecarlo
 
     state = _run_pipeline_to_module5()
     a = run_module5_montecarlo(state, n_trials=30, seed=123)
@@ -700,11 +700,11 @@ def test_montecarlo_flags_unstable_platform() -> None:
     """When productivity noise is high enough that the LP picks materially
     different winners across trials, the unstable platform list should
     surface those platforms."""
-    from modules.module5 import run_module5_montecarlo
-    from modules.module6 import _coefficient_of_variation
-    from modules.module2 import run_module2
-    from modules.module3 import finalise_module3_from_inputs
-    from modules.module4 import run_module4
+    from claro_engine.modules.module5 import run_module5_montecarlo
+    from claro_engine.modules.module6 import _coefficient_of_variation
+    from claro_engine.modules.module2 import run_module2
+    from claro_engine.modules.module3 import finalise_module3_from_inputs
+    from claro_engine.modules.module4 import run_module4
 
     state = WizardState()
     complete_module1_and_advance(
@@ -749,7 +749,7 @@ def test_montecarlo_flags_unstable_platform() -> None:
 
 
 def test_montecarlo_rejects_tiny_n_trials() -> None:
-    from modules.module5 import run_module5_montecarlo, Module5ValidationError
+    from claro_engine.modules.module5 import run_module5_montecarlo, Module5ValidationError
 
     state = _run_pipeline_to_module5()
     with pytest.raises(Module5ValidationError, match="too small"):
@@ -759,9 +759,9 @@ def test_montecarlo_rejects_tiny_n_trials() -> None:
 def test_using_economic_weights_logs_rank_skip(caplog) -> None:
     """When goal_value_per_unit is present, the rank-based fallback must be
     skipped — and that decision should be auditable in the logs."""
-    from modules.module2 import run_module2
-    from modules.module3 import finalise_module3_from_inputs
-    from modules.module4 import run_module4
+    from claro_engine.modules.module2 import run_module2
+    from claro_engine.modules.module3 import finalise_module3_from_inputs
+    from claro_engine.modules.module4 import run_module4
     import logging
 
     state = WizardState()
@@ -789,7 +789,7 @@ def test_using_economic_weights_logs_rank_skip(caplog) -> None:
     )
     run_module4(state)
 
-    with caplog.at_level(logging.INFO, logger="modules.module5"):
+    with caplog.at_level(logging.INFO, logger="claro_engine.modules.module5"):
         run_module5(state)
 
     text = " ".join(rec.message for rec in caplog.records)
@@ -803,10 +803,10 @@ def test_using_rank_weights_logs_recommendation(caplog) -> None:
     import logging
 
     state = _run_pipeline_to_module5()  # no goal values
-    with caplog.at_level(logging.INFO, logger="modules.module5"):
+    with caplog.at_level(logging.INFO, logger="claro_engine.modules.module5"):
         # Re-run M5 by bypassing the finalised guard.  Reset just enough state.
         state.module5_finalised = False
-        from modules.module5 import build_module5_input_from_state, run_module5_lp_scenarios
+        from claro_engine.modules.module5 import build_module5_input_from_state, run_module5_lp_scenarios
         bundle = run_module5_lp_scenarios(build_module5_input_from_state(state))
         assert bundle is not None  # use it
 
@@ -821,10 +821,10 @@ def test_data_quality_shrinkage_compresses_productivity_gap() -> None:
     window.  We assert on the r_pg values the LP actually sees, not on
     final allocations — shrinkage compresses ranking magnitudes but can't
     flip them within a goal, so the LP's *ordering* is unchanged."""
-    from modules.module2 import run_module2
-    from modules.module3 import finalise_module3_from_inputs
-    from modules.module4 import run_module4
-    from modules.module5 import build_module5_input_from_state
+    from claro_engine.modules.module2 import run_module2
+    from claro_engine.modules.module3 import finalise_module3_from_inputs
+    from claro_engine.modules.module4 import run_module4
+    from claro_engine.modules.module5 import build_module5_input_from_state
 
     def _r_pg(hist_days_li: int) -> dict:
         s = WizardState()
@@ -873,9 +873,9 @@ def test_iterative_resolve_after_policy_mutation() -> None:
     reset M4-M7 finalised flags, re-run the pipeline.  This is the
     library half of the Streamlit 'Re-solve with these changes' button —
     if it doesn't work in Python, it won't work in the UI either."""
-    from modules.module4 import run_module4
-    from modules.module5 import run_module5
-    from modules.module6 import run_module6
+    from claro_engine.modules.module4 import run_module4
+    from claro_engine.modules.module5 import run_module5
+    from claro_engine.modules.module6 import run_module6
 
     state = _run_pipeline_to_module5()
     run_module6(state)
@@ -916,7 +916,7 @@ def test_csv_import_parses_meta_export() -> None:
     """A Meta Ads Manager-style CSV should pre-fill Reach, Impressions,
     Engagement, Link Clicks, Leads, and Amount Spent without the user
     typing anything."""
-    from core.csv_import import parse_platform_csv
+    from claro_engine.core.csv_import import parse_platform_csv
 
     csv = (
         "Campaign name,Reach,Impressions,Post engagement,Link clicks,Leads,Amount spent (GBP)\n"
@@ -938,7 +938,7 @@ def test_csv_import_google_no_engagement_kpi() -> None:
     dropped — see KPI_CONFIG comment for rationale: CTR was a rate and
     'engaged clicks' would duplicate WT_CLICKS).  A CTR column in the
     upload is silently ignored; counts still parse normally."""
-    from core.csv_import import parse_platform_csv
+    from claro_engine.core.csv_import import parse_platform_csv
 
     csv_pct = (
         "Campaign,Impressions,Clicks,CTR,Conversions,Cost\n"
@@ -960,7 +960,7 @@ def test_csv_import_unsupported_platform_returns_error() -> None:
     platforms (fb/ig/li/yt/tt/pt/tw/sn/rd/go_search/go_display/go_pmax)
     are now supported, so use a made-up code to exercise the rejection
     path."""
-    from core.csv_import import parse_platform_csv
+    from claro_engine.core.csv_import import parse_platform_csv
 
     result = parse_platform_csv(b"x,y\n1,2\n", "made_up_platform")
     assert "error" in result and "not supported" in result["error"].lower()
@@ -969,7 +969,7 @@ def test_csv_import_unsupported_platform_returns_error() -> None:
 def test_csv_import_reports_missing_kpis() -> None:
     """A CSV that's missing a column we'd expect should be reported in
     missing_kpis so the UI can prompt the user to fill it in manually."""
-    from core.csv_import import parse_platform_csv
+    from claro_engine.core.csv_import import parse_platform_csv
 
     # Meta export missing Leads column
     csv = "Reach,Impressions,Amount spent\n100000,200000,1000\n"
@@ -983,16 +983,16 @@ def test_google_pipeline_end_to_end() -> None:
     marketers — should flow through M1 → M7 just like a Meta platform.
     Verifies that the three Google surfaces (Search / Display / PMax)
     each have their own catalogue, minimum, and platform code."""
-    from modules.module2 import run_module2
-    from modules.module3 import finalise_module3_from_inputs
-    from modules.module4 import run_module4
-    from modules.module5 import (
+    from claro_engine.modules.module2 import run_module2
+    from claro_engine.modules.module3 import finalise_module3_from_inputs
+    from claro_engine.modules.module4 import run_module4
+    from claro_engine.modules.module5 import (
         run_module5,
         PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH,
     )
-    from modules.module6 import run_module6
-    from modules.module7 import run_module7
-    from core.kpi_config import KPI_CONFIG
+    from claro_engine.modules.module6 import run_module6
+    from claro_engine.modules.module7 import run_module7
+    from claro_engine.core.kpi_config import KPI_CONFIG
 
     for code in ("go_search", "go_display", "go_pmax"):
         assert code in PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH, (
@@ -1046,15 +1046,15 @@ def test_google_pipeline_end_to_end() -> None:
 def test_tiktok_pipeline_end_to_end() -> None:
     """A new-catalog platform (TikTok) should flow through M1 → M5 → M6 → M7
     without special-casing, with its own KPI vars and effective minimum."""
-    from modules.module2 import run_module2
-    from modules.module3 import finalise_module3_from_inputs
-    from modules.module4 import run_module4
-    from modules.module5 import (
+    from claro_engine.modules.module2 import run_module2
+    from claro_engine.modules.module3 import finalise_module3_from_inputs
+    from claro_engine.modules.module4 import run_module4
+    from claro_engine.modules.module5 import (
         run_module5,
         PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH,
     )
-    from modules.module6 import run_module6
-    from modules.module7 import run_module7
+    from claro_engine.modules.module6 import run_module6
+    from claro_engine.modules.module7 import run_module7
 
     assert "tt" in PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH, "TikTok missing from catalog"
 
@@ -1095,10 +1095,10 @@ def test_tiktok_pipeline_end_to_end() -> None:
 def test_seasonality_shifts_allocation_toward_boosted_goal() -> None:
     """A seasonality boost for one goal should pull more LP budget toward
     the platform serving that goal."""
-    from modules.module2 import run_module2
-    from modules.module3 import finalise_module3_from_inputs
-    from modules.module4 import run_module4
-    from modules.module5 import run_module5
+    from claro_engine.modules.module2 import run_module2
+    from claro_engine.modules.module3 import finalise_module3_from_inputs
+    from claro_engine.modules.module4 import run_module4
+    from claro_engine.modules.module5 import run_module5
 
     def _alloc(seasonality=None) -> dict:
         s = WizardState()
@@ -1142,8 +1142,8 @@ def test_seasonality_shifts_allocation_toward_boosted_goal() -> None:
 def test_seasonality_scales_count_kpi_forecast() -> None:
     """A 0.4× seasonality multiplier on reach should produce a forecast
     that is 0.4× the un-seasoned forecast for the same allocation."""
-    from modules.module6 import compute_module6_forecast
-    from modules.module5 import Module5LPResult
+    from claro_engine.modules.module6 import compute_module6_forecast
+    from claro_engine.modules.module5 import Module5LPResult
 
     lp = Module5LPResult(
         budget_per_platform_goal={"fb": {"aw": 5000.0}},
@@ -1169,7 +1169,7 @@ def test_seasonality_scales_count_kpi_forecast() -> None:
 def test_seasonality_rejects_implausible_multiplier() -> None:
     """Values >10× or <0.1× should be rejected as likely typos (percentage
     entered instead of multiplier)."""
-    from modules.module1 import Module1ValidationError
+    from claro_engine.modules.module1 import Module1ValidationError
 
     state = WizardState()
     with pytest.raises(Module1ValidationError, match="implausible"):
@@ -1183,10 +1183,10 @@ def test_module5_warns_when_platform_below_effective_minimum() -> None:
     """LinkedIn's industry-typical learning-phase exit threshold is ~£2k/month.
     When the LP allocates LI below that — even because the user floor forces
     a small allocation — Module 5 should surface a warning."""
-    from modules.module2 import run_module2
-    from modules.module3 import finalise_module3_from_inputs
-    from modules.module4 import run_module4
-    from modules.module5 import run_module5, PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH
+    from claro_engine.modules.module2 import run_module2
+    from claro_engine.modules.module3 import finalise_module3_from_inputs
+    from claro_engine.modules.module4 import run_module4
+    from claro_engine.modules.module5 import run_module5, PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH
 
     state = WizardState()
     complete_module1_and_advance(
@@ -1237,7 +1237,7 @@ def test_module5_warns_when_platform_below_effective_minimum() -> None:
 def test_module5_effective_minimum_scales_with_campaign_duration() -> None:
     """A 60-day campaign should require twice the per-platform monthly
     threshold; a 15-day campaign half of it."""
-    from modules.module5 import (
+    from claro_engine.modules.module5 import (
         build_module5_input_from_state,
         PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH,
     )
@@ -1274,10 +1274,10 @@ def test_module5_reports_binding_budget_cap() -> None:
 def test_module5_reports_binding_platform_floor() -> None:
     """When a platform minimum forces the LP into a sub-optimal allocation,
     that floor must appear in binding_constraints with the right target."""
-    from modules.module2 import run_module2
-    from modules.module3 import finalise_module3_from_inputs
-    from modules.module4 import run_module4
-    from modules.module5 import run_module5
+    from claro_engine.modules.module2 import run_module2
+    from claro_engine.modules.module3 import finalise_module3_from_inputs
+    from claro_engine.modules.module4 import run_module4
+    from claro_engine.modules.module5 import run_module5
 
     state = WizardState()
     complete_module1_and_advance(
@@ -1316,10 +1316,10 @@ def test_module5_detects_near_degenerate_groups() -> None:
     """When two platforms have effectively identical productivity for a goal,
     the LP solution is ambiguous; the redistribution logic should fire AND
     surface the ambiguity in near_degenerate_groups."""
-    from modules.module2 import run_module2
-    from modules.module3 import finalise_module3_from_inputs
-    from modules.module4 import run_module4
-    from modules.module5 import run_module5
+    from claro_engine.modules.module2 import run_module2
+    from claro_engine.modules.module3 import finalise_module3_from_inputs
+    from claro_engine.modules.module4 import run_module4
+    from claro_engine.modules.module5 import run_module5
 
     state = WizardState()
     complete_module1_and_advance(
@@ -1357,10 +1357,10 @@ def test_module7_policy_thresholds_change_classification() -> None:
     """A custom Module7Policy should produce different classifications/
     confidence scores than the defaults, proving the thresholds are
     actually externalised (not just renamed)."""
-    from modules.module7 import run_module7, Module7Policy
+    from claro_engine.modules.module7 import run_module7, Module7Policy
 
     state = _run_pipeline_to_module5()
-    from modules.module6 import run_module6
+    from claro_engine.modules.module6 import run_module6
     run_module6(state)
     bundle = state.module5_scenario_bundle
     fc_by_scenario = _get_module6_by_scenario(state)
@@ -1394,10 +1394,10 @@ def test_module7_policy_thresholds_change_classification() -> None:
 def test_module7_default_policy_preserves_existing_behaviour() -> None:
     """Calling run_module7 with no policy must produce byte-identical output
     to passing Module7Policy() — the defaults are the contract."""
-    from modules.module7 import run_module7, Module7Policy
+    from claro_engine.modules.module7 import run_module7, Module7Policy
 
     state = _run_pipeline_to_module5()
-    from modules.module6 import run_module6
+    from claro_engine.modules.module6 import run_module6
     run_module6(state)
     bundle = state.module5_scenario_bundle
     fc_by_scenario = _get_module6_by_scenario(state)
@@ -1416,8 +1416,8 @@ def test_module7_default_policy_preserves_existing_behaviour() -> None:
 def test_module6_band_uses_observations_when_present() -> None:
     """With ≥3 historical observations, the band should equal the sample
     coefficient of variation, not the flat default."""
-    from modules.module6 import compute_module6_forecast, _coefficient_of_variation
-    from modules.module5 import Module5LPResult
+    from claro_engine.modules.module6 import compute_module6_forecast, _coefficient_of_variation
+    from claro_engine.modules.module5 import Module5LPResult
 
     lp = Module5LPResult(
         budget_per_platform_goal={"fb": {"lg": 5000.0}},
@@ -1448,8 +1448,8 @@ def test_module6_band_uses_observations_when_present() -> None:
 def test_module6_band_window_scaled_when_no_observations() -> None:
     """Without observations but with historical_days, the band should scale
     by sqrt(30 / days): more history → tighter band."""
-    from modules.module6 import compute_module6_forecast, DEFAULT_UNCERTAINTY_BAND
-    from modules.module5 import Module5LPResult
+    from claro_engine.modules.module6 import compute_module6_forecast, DEFAULT_UNCERTAINTY_BAND
+    from claro_engine.modules.module5 import Module5LPResult
     import math as _m
 
     lp = Module5LPResult(
@@ -1485,8 +1485,8 @@ def test_module6_band_window_scaled_when_no_observations() -> None:
 def test_module6_band_falls_back_to_default_without_module3_data() -> None:
     """Backwards-compatibility: callers that don't pass module3_data must still
     get the flat default band (no breaking change for existing call sites)."""
-    from modules.module6 import compute_module6_forecast, DEFAULT_UNCERTAINTY_BAND
-    from modules.module5 import Module5LPResult
+    from claro_engine.modules.module6 import compute_module6_forecast, DEFAULT_UNCERTAINTY_BAND
+    from claro_engine.modules.module5 import Module5LPResult
 
     lp = Module5LPResult(
         budget_per_platform_goal={"fb": {"lg": 5000.0}},
@@ -1509,9 +1509,9 @@ def test_module6_band_falls_back_to_default_without_module3_data() -> None:
 def test_module6_count_kpi_has_uncertainty_band() -> None:
     """Module 6 must surface a ±band on every count-KPI forecast so the
     output cannot be mistaken for a precise commitment."""
-    from modules.module6 import compute_module6_forecast, DEFAULT_UNCERTAINTY_BAND
-    from modules.module5 import Module5LPResult
-    from core.kpi_config import KIND_COUNT
+    from claro_engine.modules.module6 import compute_module6_forecast, DEFAULT_UNCERTAINTY_BAND
+    from claro_engine.modules.module5 import Module5LPResult
+    from claro_engine.core.kpi_config import KIND_COUNT
 
     lp = Module5LPResult(
         budget_per_platform_goal={"fb": {"lg": 5000.0}},
@@ -1537,8 +1537,8 @@ def test_module7_includes_forecast_caveat() -> None:
     missing, AND the attribution / incrementality disclosure that warns
     the user the LP is conditional on their attribution model."""
     state = _run_pipeline_to_module5()
-    from modules.module6 import run_module6
-    from modules.module7 import run_module7
+    from claro_engine.modules.module6 import run_module6
+    from claro_engine.modules.module7 import run_module7
 
     run_module6(state)
     bundle = state.module5_scenario_bundle
@@ -1560,10 +1560,10 @@ def test_module6_rate_kpi_math_path_still_safe(monkeypatch) -> None:
     engine's KIND_RATE machinery is retained for future use — this test
     monkeypatches a synthetic rate KPI to confirm the math path doesn't
     silently multiply by budget."""
-    from modules import module6 as m6
-    from modules.module6 import compute_module6_forecast
-    from modules.module5 import Module5LPResult
-    from core.kpi_config import KIND_RATE
+    from claro_engine.modules import module6 as m6
+    from claro_engine.modules.module6 import compute_module6_forecast
+    from claro_engine.modules.module5 import Module5LPResult
+    from claro_engine.core.kpi_config import KIND_RATE
 
     # Inject a fake rate KPI into the kind lookup the forecaster reads
     monkeypatch.setitem(m6._KPI_KIND, "SYNTH_EN_RATE", KIND_RATE)
@@ -1885,9 +1885,9 @@ def test_google_search_and_display_are_separate_platforms_in_catalogue() -> None
     (go_search / go_display / go_pmax) replace it.  Each has its own KPI
     catalogue rows and its own monthly effective minimum, since their
     auctions and learning phases behave very differently."""
-    from core.kpi_config import KPI_CONFIG
-    from modules.module5 import PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH
-    from core.wizard_state import ALLOWED_PLATFORMS
+    from claro_engine.core.kpi_config import KPI_CONFIG
+    from claro_engine.modules.module5 import PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH
+    from claro_engine.core.wizard_state import ALLOWED_PLATFORMS
 
     # No aggregate 'go' should leak through
     assert "go" not in ALLOWED_PLATFORMS
@@ -1923,10 +1923,10 @@ def test_google_search_outranks_google_display_on_lead_gen() -> None:
     more allocation.  This is the audit's headline justification for
     splitting them — lumped into one cell, the optimiser couldn't make
     this distinction."""
-    from modules.module2 import run_module2
-    from modules.module3 import finalise_module3_from_inputs
-    from modules.module4 import run_module4
-    from modules.module5 import run_module5
+    from claro_engine.modules.module2 import run_module2
+    from claro_engine.modules.module3 import finalise_module3_from_inputs
+    from claro_engine.modules.module4 import run_module4
+    from claro_engine.modules.module5 import run_module5
 
     s = WizardState()
     complete_module1_and_advance(
@@ -1975,11 +1975,11 @@ def test_google_pmax_independently_allocatable_alongside_search() -> None:
     each receive a separate allocation reflecting its own productivity.
     Lumping them into one 'go' cell would force the user to pre-decide
     the split themselves before the LP saw the numbers."""
-    from modules.module2 import run_module2
-    from modules.module3 import finalise_module3_from_inputs
-    from modules.module4 import run_module4
-    from modules.module5 import run_module5
-    from modules.module6 import run_module6
+    from claro_engine.modules.module2 import run_module2
+    from claro_engine.modules.module3 import finalise_module3_from_inputs
+    from claro_engine.modules.module4 import run_module4
+    from claro_engine.modules.module5 import run_module5
+    from claro_engine.modules.module6 import run_module6
 
     s = WizardState()
     complete_module1_and_advance(
@@ -2022,7 +2022,7 @@ def test_csv_export_works_for_each_google_surface() -> None:
     """Each Google surface needs its own CSV-template download so a user
     can populate Search numbers separately from Display from PMax,
     regardless of which surface their export was filtered to."""
-    from core.csv_import import generate_csv_template, SUPPORTED_PLATFORMS
+    from claro_engine.core.csv_import import generate_csv_template, SUPPORTED_PLATFORMS
 
     for code in ("go_search", "go_display", "go_pmax"):
         assert code in SUPPORTED_PLATFORMS, f"CSV not supported for {code}"

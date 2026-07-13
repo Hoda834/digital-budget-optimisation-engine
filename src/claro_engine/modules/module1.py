@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import math
 
-from core.wizard_state import (
+from claro_engine.core.wizard_state import (
     WizardState,
     GOAL_AW,
     GOAL_EN,

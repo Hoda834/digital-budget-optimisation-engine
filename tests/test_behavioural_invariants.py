@@ -27,14 +27,14 @@ import random
 
 import pytest
 
-from core.wizard_state import WizardState
-from modules.module1 import complete_module1_and_advance
-from modules.module2 import run_module2
-from modules.module3 import finalise_module3_from_inputs
-from modules.module4 import run_module4
-from modules.module5 import run_module5
-from modules.module6 import run_module6
-from modules.module7 import run_module7, _plan_b_risk_managed
+from claro_engine.core.wizard_state import WizardState
+from claro_engine.modules.module1 import complete_module1_and_advance
+from claro_engine.modules.module2 import run_module2
+from claro_engine.modules.module3 import finalise_module3_from_inputs
+from claro_engine.modules.module4 import run_module4
+from claro_engine.modules.module5 import run_module5
+from claro_engine.modules.module6 import run_module6
+from claro_engine.modules.module7 import run_module7, _plan_b_risk_managed
 
 
 def _pipeline(objectives, budget, duration, platforms, priorities,

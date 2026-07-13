@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from core.wizard_state import WizardState
-from core.kpi_config import KIND_RATE
-from modules.module5 import Module5LPResult, Module5ScenarioBundle, YIELD_BRACKETS
-from modules.module6 import Module6Result
+from claro_engine.core.wizard_state import WizardState
+from claro_engine.core.kpi_config import KIND_RATE
+from claro_engine.modules.module5 import Module5LPResult, Module5ScenarioBundle, YIELD_BRACKETS
+from claro_engine.modules.module6 import Module6Result
 
 
 PLATFORM_NAMES: Dict[str, str] = {
@@ -437,7 +437,7 @@ def _estimate_objective_value(allocation: Dict[str, Dict[str, float]], lp_ref: M
     bracket schedule scale down with the spend, producing a different
     yield distribution from the one the LP actually optimised.
     """
-    from modules.module5 import YIELD_BRACKETS
+    from claro_engine.modules.module5 import YIELD_BRACKETS
 
     scores = _score_pg(lp_ref)
     scale = _objective_scale(lp_ref)

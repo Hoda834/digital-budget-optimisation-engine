@@ -10,22 +10,22 @@ from reportlab.lib.pagesizes import letter  # type: ignore
 from reportlab.lib.styles import getSampleStyleSheet  # type: ignore
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle  # type: ignore
 
-from core.wizard_state import WizardState, GOAL_AW, GOAL_EN, GOAL_LG, GOAL_WT
-from modules.module1 import (
+from claro_engine.core.wizard_state import WizardState, GOAL_AW, GOAL_EN, GOAL_LG, GOAL_WT
+from claro_engine.modules.module1 import (
     complete_module1_and_advance as finalise_module1,
     Module1ValidationError,
 )
-from core.kpi_config import KPI_CONFIG, KIND_RATE
-from core.csv_import import (
+from claro_engine.core.kpi_config import KPI_CONFIG, KIND_RATE
+from claro_engine.core.csv_import import (
     parse_platform_csv,
     SUPPORTED_PLATFORMS as CSV_SUPPORTED,
     generate_unified_template_xlsx,
     parse_unified_template_xlsx,
 )
-from modules.module3 import finalise_module3_from_inputs
-from modules.module2 import run_module2
-from modules.module4 import run_module4
-from modules.module5 import (
+from claro_engine.modules.module3 import finalise_module3_from_inputs
+from claro_engine.modules.module2 import run_module2
+from claro_engine.modules.module4 import run_module4
+from claro_engine.modules.module5 import (
     Module5LPResult,
     Module5ScenarioBundle,
     run_module5,
@@ -33,9 +33,9 @@ from modules.module5 import (
     DEFAULT_MC_TRIALS,
     detect_missing_data_cells,
 )
-from modules.module6 import Module6Result, Module6ScenarioResult, run_module6
+from claro_engine.modules.module6 import Module6Result, Module6ScenarioResult, run_module6
 
-from modules.module7 import Module7BundleInsight, run_module7
+from claro_engine.modules.module7 import Module7BundleInsight, run_module7
 
 
 PLATFORM_NAMES: Dict[str, str] = {

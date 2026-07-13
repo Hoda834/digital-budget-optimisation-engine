@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from core.wizard_state import WizardState, ALLOWED_PLATFORMS
+from claro_engine.core.wizard_state import WizardState, ALLOWED_PLATFORMS
 
 
 PLATFORMS = (

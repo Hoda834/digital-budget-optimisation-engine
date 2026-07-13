@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from core.wizard_state import GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG
+from claro_engine.core.wizard_state import GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG
 
 
 KIND_COUNT = "count"
