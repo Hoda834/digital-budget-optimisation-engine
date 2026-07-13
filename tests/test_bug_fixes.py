@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import pytest
 
-from core.wizard_state import WizardState, GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG
-from modules.module1 import complete_module1_and_advance
-from modules.module2 import run_module2
-from modules.module3 import finalise_module3_from_inputs
-from modules.module4 import run_module4
-from modules.module5 import run_module5
-from modules.module7 import PLATFORM_NAMES, run_module7
+from claro_engine.core.wizard_state import WizardState, GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG
+from claro_engine.modules.module1 import complete_module1_and_advance
+from claro_engine.modules.module2 import run_module2
+from claro_engine.modules.module3 import finalise_module3_from_inputs
+from claro_engine.modules.module4 import run_module4
+from claro_engine.modules.module5 import run_module5
+from claro_engine.modules.module7 import PLATFORM_NAMES, run_module7
 
 
 def _run_pipeline(
@@ -233,7 +233,7 @@ def test_plan_b_objective_does_not_exceed_plan_a() -> None:
         total_budget=10_000.0,
     )
 
-    from modules.module7 import run_module7, Module7Policy
+    from claro_engine.modules.module7 import run_module7, Module7Policy
     # Force Plan B to be built by selecting "risk managed".
     insights = run_module7(
         state,
@@ -288,7 +288,7 @@ def test_bracket_aware_estimator_matches_lp_objective_on_plan_a() -> None:
         total_budget=10_000.0,
     )
 
-    from modules.module7 import _estimate_objective_value
+    from claro_engine.modules.module7 import _estimate_objective_value
     bundle = state.module5_scenario_bundle
     for name, lp in (bundle.results_by_scenario or {}).items():
         alloc = {

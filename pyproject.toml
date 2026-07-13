@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claro-engine"
+version = "0.2.1.post1"
+description = "CLARO: Constrained Linear Allocation and Resource Optimiser. A decision-support engine for constrained marketing budget allocation using Linear Programming."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE.txt" }
+authors = [
+    { name = "Hoda Rezvanjoo" },
+]
+keywords = [
+    "linear programming",
+    "decision support systems",
+    "marketing budget allocation",
+    "constrained optimisation",
+    "operations research",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Office/Business :: Financial",
+]
+dependencies = [
+    "numpy>=1.26,<3",
+    "pandas>=2.2,<3",
+    "PuLP>=3.3,<4",
+    "openpyxl>=3.1,<4",
+]
+
+[project.urls]
+Repository = "https://github.com/Hoda834/digital-budget-optimisation-engine"
+Demo = "https://claro-decision-support.streamlit.app"
+Homepage = "https://hodarezvanjoo.com"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["claro_engine*"]

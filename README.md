@@ -176,6 +176,19 @@ For the audiences this is designed for (strategists, agency planning leads, in-h
 
 ---
 
+## Installation
+
+The engine (modules M1 to M7, without the Streamlit UI) is available on PyPI:
+
+```bash
+pip install claro-engine
+```
+
+```python
+from claro_engine.modules.module5 import run_module5
+from claro_engine.core.wizard_state import WizardState
+```
+
 ## Running the App
 
 ```bash
@@ -248,12 +261,13 @@ PYTHONPATH=src python examples/benchmark/run_benchmark.py
 .
 ├── src/                         # Source code
 │   ├── app.py                   # Streamlit UI + wizard orchestration
-│   ├── core/
+│   └── claro_engine/            # Installable package (pip install claro-engine)
+│       ├── core/
 │   │   ├── wizard_state.py      # State machine, custom platforms, goal values,
 │   │   │                        #   carve-out, seasonality
 │   │   ├── kpi_config.py        # Built-in + custom platform KPI catalogue
 │   │   └── csv_import.py        # CSV parsing + composition layer
-│   └── modules/
+│       └── modules/
 │       ├── module1.py           # Objective, budget, currency, duration,
 │       │                        #   goal values, carve-out, seasonality
 │       ├── module2.py           # Platform selection + priority ranks

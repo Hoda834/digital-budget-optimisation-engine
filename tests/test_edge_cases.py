@@ -13,24 +13,24 @@ from __future__ import annotations
 
 import pytest
 
-from core.wizard_state import (
+from claro_engine.core.wizard_state import (
     WizardState, ALLOWED_PLATFORMS,
     GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG,
 )
-from core.kpi_config import KPI_CONFIG, get_kpi_rows
-from core.csv_import import parse_platform_csv, SUPPORTED_PLATFORMS
-from modules.module1 import (
+from claro_engine.core.kpi_config import KPI_CONFIG, get_kpi_rows
+from claro_engine.core.csv_import import parse_platform_csv, SUPPORTED_PLATFORMS
+from claro_engine.modules.module1 import (
     complete_module1_and_advance, Module1ValidationError,
 )
-from modules.module2 import run_module2
-from modules.module3 import finalise_module3_from_inputs
-from modules.module4 import run_module4
-from modules.module5 import (
+from claro_engine.modules.module2 import run_module2
+from claro_engine.modules.module3 import finalise_module3_from_inputs
+from claro_engine.modules.module4 import run_module4
+from claro_engine.modules.module5 import (
     run_module5, run_module5_montecarlo, build_module5_input_from_state,
     Module5ValidationError, PLATFORM_EFFECTIVE_MINIMUMS_PER_MONTH,
 )
-from modules.module6 import run_module6
-from modules.module7 import run_module7
+from claro_engine.modules.module6 import run_module6
+from claro_engine.modules.module7 import run_module7
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -127,7 +127,7 @@ def test_csv_google_no_engagement_canonical():
     keeps all KPIs on Google as counts (uniform-units invariant), and
     'engaged clicks' would duplicate WT_CLICKS.  Verify no GO_*_EN_*
     canonical exists in KPI_CONFIG."""
-    from core.kpi_config import KPI_CONFIG
+    from claro_engine.core.kpi_config import KPI_CONFIG
     for code in ("go_search", "go_display", "go_pmax"):
         en_kpis = [r for r in KPI_CONFIG
                    if r["platform"] == code and r["goal"] == "en"]
@@ -670,7 +670,7 @@ def test_composition_partial_components_produce_partial_sum():
 def test_missing_data_detector_flags_empty_platform():
     """A platform selected in M2 with no KPIs at all in M3 must be flagged
     with reason 'no_platform_data' so the results UI can surface it."""
-    from modules.module5 import detect_missing_data_cells
+    from claro_engine.modules.module5 import detect_missing_data_cells
 
     s = WizardState()
     complete_module1_and_advance(s, raw_objectives=["lg"], raw_budget=10000.0,
@@ -695,7 +695,7 @@ def test_missing_data_detector_flags_empty_platform():
 def test_missing_data_detector_flags_cell_gap():
     """A platform with some goals covered but not others should produce
     per-cell 'no_cell_data' entries for the gaps."""
-    from modules.module5 import detect_missing_data_cells
+    from claro_engine.modules.module5 import detect_missing_data_cells
 
     s = WizardState()
     complete_module1_and_advance(s, raw_objectives=["aw", "lg"], raw_budget=10000.0,
@@ -716,7 +716,7 @@ def test_missing_data_detector_flags_cell_gap():
 def test_missing_data_detector_silent_when_complete():
     """When every prioritised cell has data, the detector should return [].
     No false positives — happy-path users shouldn't see spurious warnings."""
-    from modules.module5 import detect_missing_data_cells
+    from claro_engine.modules.module5 import detect_missing_data_cells
     from tests.smoke_test import _run_pipeline_to_module5
 
     s = _run_pipeline_to_module5()
@@ -755,7 +755,7 @@ def test_csv_template_round_trips_through_parser():
     """The template a user downloads, fills in, and re-uploads should
     parse cleanly into the same canonical KPI structure — no off-by-one
     column-name mismatches between generator and parser."""
-    from core.csv_import import generate_csv_template, SUPPORTED_PLATFORMS
+    from claro_engine.core.csv_import import generate_csv_template, SUPPORTED_PLATFORMS
 
     for platform in SUPPORTED_PLATFORMS:
         template = generate_csv_template(platform)
@@ -776,7 +776,7 @@ def test_csv_template_for_meta_lists_engagement_components():
     """The FB template should expose Reactions, Comments, Shares, Saves
     as separate columns (not just one 'Engagement' bucket) so users see
     the broken-out atoms the composer wants."""
-    from core.csv_import import generate_csv_template
+    from claro_engine.core.csv_import import generate_csv_template
 
     template = generate_csv_template("fb").decode("utf-8")
     header = template.split("\n", 1)[0].lower()
@@ -789,7 +789,7 @@ def test_csv_template_for_meta_lists_engagement_components():
 def test_csv_template_rate_kpis_show_percent_example():
     """Rate KPI columns (CTR, engagement rate) should have a '%' example
     row value so users immediately see the expected format."""
-    from core.csv_import import generate_csv_template
+    from claro_engine.core.csv_import import generate_csv_template
 
     template = generate_csv_template("go_search").decode("utf-8")
     lines = template.split("\n")
@@ -868,7 +868,7 @@ def test_composition_recompose_with_user_weights():
 def test_composition_rationale_explains_dedup_choice():
     """The rationale text should explicitly mention why link clicks are
     excluded — that's the dedup the user needs to see."""
-    from core.csv_import import get_composition
+    from claro_engine.core.csv_import import get_composition
     comp = get_composition("fb", "FB_EN_ENGAGEMENT")
     assert comp is not None
     text = comp.rationale.lower()
@@ -946,7 +946,7 @@ def test_kpi_var_in_csv_for_unprioritised_goal_silently_dropped():
 def test_module7_runs_even_with_one_scenario():
     """If only the base scenario is feasible (conservative + optimistic skipped),
     Module 7 must still produce insights — not crash on missing scenarios."""
-    from modules.module5 import run_module5_lp_scenarios
+    from claro_engine.modules.module5 import run_module5_lp_scenarios
 
     s = WizardState()
     complete_module1_and_advance(s, raw_objectives=["lg"], raw_budget=10000.0,
@@ -1041,11 +1041,11 @@ def test_usd_plan_excel_and_pdf_outputs_contain_no_pound_symbol() -> None:
         create_excel_bytes,
         create_pdf_bytes,
     )
-    from modules.module2 import run_module2
-    from modules.module3 import finalise_module3_from_inputs
-    from modules.module4 import run_module4
-    from modules.module5 import run_module5
-    from modules.module6 import run_module6
+    from claro_engine.modules.module2 import run_module2
+    from claro_engine.modules.module3 import finalise_module3_from_inputs
+    from claro_engine.modules.module4 import run_module4
+    from claro_engine.modules.module5 import run_module5
+    from claro_engine.modules.module6 import run_module6
 
     s = WizardState()
     complete_module1_and_advance(
@@ -1154,11 +1154,11 @@ def test_eur_plan_excel_output_contains_no_pound_symbol() -> None:
     """
     import streamlit as st
     from app import money, create_excel_bytes
-    from modules.module2 import run_module2
-    from modules.module3 import finalise_module3_from_inputs
-    from modules.module4 import run_module4
-    from modules.module5 import run_module5
-    from modules.module6 import run_module6
+    from claro_engine.modules.module2 import run_module2
+    from claro_engine.modules.module3 import finalise_module3_from_inputs
+    from claro_engine.modules.module4 import run_module4
+    from claro_engine.modules.module5 import run_module5
+    from claro_engine.modules.module6 import run_module6
 
     s = WizardState()
     complete_module1_and_advance(
@@ -1219,7 +1219,7 @@ def test_module1_error_examples_dont_anchor_on_pound_symbol() -> None:
     'for example: 1200 or £1,200.50'; the new text lists all three
     accepted symbols so no currency is privileged.
     """
-    from modules.module1 import _parse_budget, Module1ValidationError
+    from claro_engine.modules.module1 import _parse_budget, Module1ValidationError
 
     with pytest.raises(Module1ValidationError) as excinfo:
         _parse_budget("not a number")
@@ -1260,7 +1260,7 @@ def test_unified_template_one_sheet_per_selected_platform():
     platforms (none of those exist today, but defend anyway) are skipped."""
     import io
     from openpyxl import load_workbook
-    from core.csv_import import generate_unified_template_xlsx
+    from claro_engine.core.csv_import import generate_unified_template_xlsx
 
     names = _platform_display_names_for_test()
     xlsx = generate_unified_template_xlsx(
@@ -1281,7 +1281,7 @@ def test_unified_template_each_sheet_has_only_headers():
     sheets unambiguously."""
     import io
     from openpyxl import load_workbook
-    from core.csv_import import generate_unified_template_xlsx
+    from claro_engine.core.csv_import import generate_unified_template_xlsx
 
     names = _platform_display_names_for_test()
     xlsx = generate_unified_template_xlsx(["fb", "li"], platform_display_names=names)
@@ -1305,7 +1305,7 @@ def test_unified_template_round_trip_with_partial_fill():
     filled platform and silently skip the unfilled ones."""
     import io
     from openpyxl import load_workbook
-    from core.csv_import import (
+    from claro_engine.core.csv_import import (
         generate_unified_template_xlsx,
         parse_unified_template_xlsx,
     )
@@ -1364,7 +1364,7 @@ def test_unified_template_reports_unknown_sheets():
     'looks like you renamed a sheet' to the user."""
     import io
     from openpyxl import Workbook
-    from core.csv_import import parse_unified_template_xlsx
+    from claro_engine.core.csv_import import parse_unified_template_xlsx
 
     names = _platform_display_names_for_test()
 
@@ -1393,7 +1393,7 @@ def test_unified_template_skips_supported_platforms_filter():
     silently rather than crashing or producing empty sheets."""
     import io
     from openpyxl import load_workbook
-    from core.csv_import import generate_unified_template_xlsx
+    from claro_engine.core.csv_import import generate_unified_template_xlsx
 
     names = _platform_display_names_for_test()
     xlsx = generate_unified_template_xlsx(
@@ -1407,7 +1407,7 @@ def test_unified_template_skips_supported_platforms_filter():
 def test_unified_template_corrupt_xlsx_returns_error():
     """A truncated or non-xlsx byte stream should produce a readable
     error rather than crashing the UI."""
-    from core.csv_import import parse_unified_template_xlsx
+    from claro_engine.core.csv_import import parse_unified_template_xlsx
     result = parse_unified_template_xlsx(b"not a valid xlsx file")
     assert "__error__" in result
     assert "error" in result["__error__"]
@@ -1418,7 +1418,7 @@ def test_fb_engagement_includes_follows_component():
     summed component — Reactions + Comments + Shares + Saves + Follows.
     Locks the schema extension so a future refactor doesn't silently
     drop Follows back out."""
-    from core.csv_import import parse_platform_csv
+    from claro_engine.core.csv_import import parse_platform_csv
     csv = (
         b"Reach,Impression,Post Reactions,Comments,Shares,Saves,Follows,"
         b"Link Click,On-facebook Lead,Amount Spent\n"
@@ -1438,7 +1438,7 @@ def test_fb_clicks_uses_first_not_sum_to_avoid_double_count():
     Page Views are a subset of Link Clicks (clicks that successfully
     loaded), so summing would double-count.  operator='first' picks the
     most-canonical Link Click value when more than one is filled."""
-    from core.csv_import import parse_platform_csv
+    from claro_engine.core.csv_import import parse_platform_csv
     csv = (
         b"Reach,Link Click,Landing Page View,Page View,Amount Spent\n"
         b"100000,4000,3500,2000,1000\n"
@@ -1456,7 +1456,7 @@ def test_fb_conversions_first_not_sum_to_avoid_triple_count():
     alternates.  Meta's 'Conversions' is usually a superset that
     already includes Leads and Purchases — summing would triple-count.
     Verify the parser picks one canonical value."""
-    from core.csv_import import parse_platform_csv
+    from claro_engine.core.csv_import import parse_platform_csv
     csv = (
         b"Reach,On-facebook Lead,Purchases,Conversions,Amount Spent\n"
         b"100000,80,40,150,1000\n"
@@ -1473,7 +1473,7 @@ def test_new_platforms_have_csv_patterns_pt_tw_sn_rd():
     """The four platforms that previously had KPI_CONFIG entries but no
     CSV-import patterns (Pinterest, X, Snapchat, Reddit) now have full
     parse support."""
-    from core.csv_import import SUPPORTED_PLATFORMS
+    from claro_engine.core.csv_import import SUPPORTED_PLATFORMS
     for p in ("pt", "tw", "sn", "rd"):
         assert p in SUPPORTED_PLATFORMS, f"{p!r} missing from CSV-import catalogue"
 
@@ -1482,7 +1482,7 @@ def test_pinterest_parses_full_native_schema():
     """Smoke-test Pinterest's new CSV patterns: Impression/Video View
     for awareness, Saves for engagement, Outbound/Pin Click for traffic,
     Leads/Checkouts for conversion."""
-    from core.csv_import import parse_platform_csv
+    from claro_engine.core.csv_import import parse_platform_csv
     csv = (
         b"Impression,Video View,Saves,Outbound Click,Pin Click,Leads,Checkouts,Cost\n"
         b"80000,30000,600,700,400,25,10,800\n"
@@ -1500,7 +1500,7 @@ def test_x_engagement_sums_count_components_not_rate():
     Bookmarks + Followers), not a rate.  An export with these columns
     filled should produce the summed count; the legacy Engagement Rate
     column is no longer a canonical input."""
-    from core.csv_import import parse_platform_csv
+    from claro_engine.core.csv_import import parse_platform_csv
     csv = (
         b"Impression,Likes,Replies,Reposts,Bookmarks,Followers,Link Click,Leads,Cost\n"
         b"100000,800,200,300,150,80,1200,50,1000\n"
@@ -1521,7 +1521,7 @@ def test_template_engagement_counts_now_feed_canonical():
     new behaviour and prevents a regression back to the dead-data trap."""
     import io
     from openpyxl import load_workbook
-    from core.csv_import import (
+    from claro_engine.core.csv_import import (
         generate_unified_template_xlsx,
         parse_unified_template_xlsx,
     )
@@ -1572,8 +1572,8 @@ def test_kpi_config_and_csv_patterns_agree_per_platform():
     platform.  A mismatch means either the parser returns KPIs the engine
     can't use, OR the engine expects KPIs the parser can't produce —
     both silent bugs.  This is the schema-drift trip-wire."""
-    from core.kpi_config import KPI_CONFIG
-    from core.csv_import import _CSV_PATTERNS, _BUDGET, _DAYS, SUPPORTED_PLATFORMS
+    from claro_engine.core.kpi_config import KPI_CONFIG
+    from claro_engine.core.csv_import import _CSV_PATTERNS, _BUDGET, _DAYS, SUPPORTED_PLATFORMS
 
     config_kpis_by_platform = {}
     for row in KPI_CONFIG:
@@ -1609,8 +1609,8 @@ def test_platform_kpis_have_uniform_units():
     KIND_COUNT — no exceptions.  If a future PR re-introduces a rate
     canonical it must do so on a per-platform basis (all 4 KPIs flip
     together) or this invariant breaks."""
-    from core.kpi_config import KPI_CONFIG
-    from core.csv_import import SUPPORTED_PLATFORMS
+    from claro_engine.core.kpi_config import KPI_CONFIG
+    from claro_engine.core.csv_import import SUPPORTED_PLATFORMS
 
     for platform in SUPPORTED_PLATFORMS:
         kinds = {
@@ -1635,7 +1635,7 @@ def test_lg_split_purchases_separate_from_leads():
     *_LG_PURCHASES canonical must exist alongside *_LG_LEADS (or
     *_LG_CONVERSIONS on Google) so the optimiser can reward purchases
     without conflating them with lead-gen volume."""
-    from core.kpi_config import KPI_CONFIG
+    from claro_engine.core.kpi_config import KPI_CONFIG
 
     platforms_with_purchase_split = (
         "fb", "ig", "yt", "tt", "pt", "sn",
@@ -1670,7 +1670,7 @@ def test_lg_split_purchases_separate_from_leads():
 def test_lg_split_purchases_parses_independently():
     """An upload with both Leads AND Purchases columns must populate
     BOTH canonical KPIs — not lose one to first-wins fallthrough."""
-    from core.csv_import import parse_platform_csv
+    from claro_engine.core.csv_import import parse_platform_csv
 
     csv = (
         b"Reach,Impression,Post Reactions,Comments,Shares,Saves,Follows,"

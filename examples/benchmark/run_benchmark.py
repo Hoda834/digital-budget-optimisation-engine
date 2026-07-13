@@ -42,7 +42,7 @@ import statistics
 import time
 from typing import Dict, List, Tuple
 
-from modules.module5 import Module5LPInput, run_module5_lp_scenarios
+from claro_engine.modules.module5 import Module5LPInput, run_module5_lp_scenarios
 
 # (platforms, objectives) pairs defining the benchmark sizes.
 SIZES: List[Tuple[int, int]] = [(2, 1), (5, 3), (10, 5), (20, 5), (30, 10)]

@@ -4,8 +4,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from core.wizard_state import WizardState, FlowStateError
-from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE
+from claro_engine.core.wizard_state import WizardState, FlowStateError
+from claro_engine.core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE
 
 
 # CPU values more than this multiple of the per-goal median are flagged as outliers

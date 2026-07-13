@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 from typing import Dict, List
 
-from core.csv_import import generate_csv_template
+from claro_engine.core.csv_import import generate_csv_template
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))

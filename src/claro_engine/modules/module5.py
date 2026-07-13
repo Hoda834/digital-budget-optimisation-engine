@@ -8,8 +8,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pulp
 
-from core.wizard_state import WizardState, FlowStateError
-from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE
+from claro_engine.core.wizard_state import WizardState, FlowStateError
+from claro_engine.core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE
 
 
 _LOG = logging.getLogger(__name__)
@@ -1305,7 +1305,7 @@ def _per_cell_sigma(state: WizardState) -> Dict[str, Dict[str, float]]:
     Final fallback: the flat default.
     """
     # Late import to avoid module-load cycle (module6 imports module5).
-    from modules.module6 import (
+    from claro_engine.modules.module6 import (
         _coefficient_of_variation,
         DEFAULT_UNCERTAINTY_BAND,
     )

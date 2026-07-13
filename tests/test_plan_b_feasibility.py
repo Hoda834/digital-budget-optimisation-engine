@@ -10,9 +10,9 @@ top platform's total never falls below its own minimum-spend floor.
 """
 from __future__ import annotations
 
-from core.wizard_state import WizardState
-from modules.module5 import Module5LPResult
-from modules.module7 import _plan_b_risk_managed
+from claro_engine.core.wizard_state import WizardState
+from claro_engine.modules.module5 import Module5LPResult
+from claro_engine.modules.module7 import _plan_b_risk_managed
 
 
 def _lp_with(alloc, total_used):

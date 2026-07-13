@@ -3,8 +3,8 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List
 
-from core.wizard_state import WizardState, GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG
-from core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE, get_kpi_rows
+from claro_engine.core.wizard_state import WizardState, GOAL_AW, GOAL_EN, GOAL_WT, GOAL_LG
+from claro_engine.core.kpi_config import KPI_CONFIG, KIND_COUNT, KIND_RATE, get_kpi_rows
 
 
 def get_platform_kpis(platform: str, active_goals_for_platform: List[str]) -> List[Dict[str, Any]]:
