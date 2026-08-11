@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
+
+import claro_telemetry as telemetry
 from reportlab.lib import colors  # type: ignore
 from reportlab.lib.pagesizes import letter  # type: ignore
 from reportlab.lib.styles import getSampleStyleSheet  # type: ignore
@@ -1333,6 +1335,8 @@ def module3_ui(state: WizardState) -> None:
     if st.button("Run optimisation", disabled=not can_run, type="primary"):
         try:
             finalise_module3_from_inputs(state, platform_inputs=m3_inputs)
+            telemetry.log_event("optimisation_started", telemetry.new_run_id())
+            st.session_state["claro_run_logged"] = False
             safe_rerun()
         except (ValueError, RuntimeError) as e:
             st.error(f"Could not finalise Module 3: {e}")
@@ -1378,6 +1382,10 @@ def results_ui(state: WizardState) -> None:
         run_module5(state)
     if state.module5_finalised and not state.module6_finalised:
         run_module6(state)
+
+    if state.module6_finalised and not st.session_state.get("claro_run_logged"):
+        st.session_state["claro_run_logged"] = True
+        telemetry.log_event("optimisation_completed", telemetry.current_run_id())
  
     if not state.module6_finalised:
         st.info("Results will appear after optimisation runs.")
@@ -2302,6 +2310,7 @@ def module2_ui(state: WizardState) -> None:
 
 def main() -> None:
     st.set_page_config(page_title="CLARO — Marketing Budget Optimisation", layout="wide")
+    telemetry.track_session()
     initialise_state()
 
     state: WizardState = st.session_state["wizard_state"]
