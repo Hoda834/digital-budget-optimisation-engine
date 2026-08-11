@@ -12,6 +12,8 @@ Instead of looking at channels separately, the system treats marketing as a cons
 
 The framework is designed to help managers make better decisions, not just to automate processes.
 
+CLARO records anonymous usage events (session start, optimisation started, optimisation completed) in a Supabase table to measure adoption. No user inputs, budget figures, uploaded data, results, IP addresses or cookies are stored.
+
 📖 Project wiki: https://github.com/Hoda834/digital-budget-optimisation-engine/wiki
 
 ---
