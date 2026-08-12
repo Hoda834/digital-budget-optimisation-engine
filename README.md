@@ -6,6 +6,8 @@
 
 *A decision-support framework for marketing budget allocation.*
 
+Published in SoftwareX (Elsevier): Rezvanjoo, H. (2026). CLARO: Constrained budget allocation with rule-based decision interpretation. SoftwareX, 35, 102935. https://doi.org/10.1016/j.softx.2026.102935
+
 ## Overview
 
 This project provides a complete decision support system that helps decision-makers allocate a limited marketing budget across platforms and objectives, accounting for real-world constraints.
