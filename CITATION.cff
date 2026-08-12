@@ -13,6 +13,11 @@ license: MIT
 repository-code: "https://github.com/Hoda834/digital-budget-optimisation-engine"
 url: "https://hodarezvanjoo.com"
 identifiers:
+title: "CLARO: Constrained budget allocation with rule-based decision interpretation"
+  journal: SoftwareX
+  volume: 35
+  year: 2026
+  doi: 10.1016/j.softx.2026.102935
   - type: doi
     value: 10.5281/zenodo.20517492
     description: "Concept DOI — always resolves to the latest version"
