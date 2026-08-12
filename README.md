@@ -2,6 +2,8 @@
 
 [![DOI](https://zenodo.org/badge/1114086677.svg)](https://doi.org/10.5281/zenodo.20517492)
 
+[![SoftwareX](https://img.shields.io/badge/SoftwareX-10.1016%2Fj.softx.2026.102935-E87722)](https://doi.org/10.1016/j.softx.2026.102935)
+
 *A decision-support framework for marketing budget allocation.*
 
 ## Overview
