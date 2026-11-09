@@ -3,6 +3,7 @@
 [![DOI](https://zenodo.org/badge/1114086677.svg)](https://doi.org/10.5281/zenodo.20517492)
 
 [![SoftwareX](https://img.shields.io/badge/SoftwareX-10.1016%2Fj.softx.2026.102935-E87722)](https://doi.org/10.1016/j.softx.2026.102935)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/claro-engine?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/claro-engine)
 
 *A decision-support framework for marketing budget allocation.*
 
